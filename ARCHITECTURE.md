@@ -69,26 +69,30 @@ This list is reference information only. It does not authorize implementation, d
 
 The following sections are intentionally reserved as placeholders. They contain no design and confer no implementation authority.
 
-### Phase 1 — Reserved
+### Phase 1 — Project Structure & Scaffolding
 
 To be documented only after explicit human approval.
 
-### Phase 2 — Reserved
+### Phase 2 — Data Ingestion Foundations
 
 To be documented only after explicit human approval.
 
-### Phase 3 — Reserved
+### Phase 3 — Feature Engineering
 
 To be documented only after explicit human approval.
 
-### Phase 4 — Reserved
+### Phase 4 — Validation Framework
 
 To be documented only after explicit human approval.
 
-### Phase 5 — Reserved
+### Phase 5 — API Layer
 
 To be documented only after explicit human approval.
 
-### Phase 6 — Reserved
+### Phase 6 — Presentation Layer
+
+To be documented only after explicit human approval.
+
+### Phase 7 — Reporting & Explainability
 
 To be documented only after explicit human approval.

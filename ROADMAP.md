@@ -12,28 +12,34 @@ Phase 0 establishes the repository's permanent engineering and quantitative gove
 
 ## Future Phase Placeholders
 
-The following entries are placeholders only. They do not define design or implementation scope and do not authorize work.
+The following entries do not authorize work. Except for the explicitly approved Phase 1 scope boundary below, they are placeholders only and do not define design or implementation scope.
 
-### Phase 1 — Data Ingestion Foundations
+### Phase 1 — Project Structure & Scaffolding
 
-Awaiting explicit human approval.
-
-### Phase 2 — Feature Engineering
+Scope is limited to repository organization, directory structure, engineering conventions, configuration strategy, logging strategy, testing strategy, and documentation organization. This phase does not include data ingestion or any application code.
 
 Awaiting explicit human approval.
 
-### Phase 3 — Validation Framework
+### Phase 2 — Data Ingestion Foundations
 
 Awaiting explicit human approval.
 
-### Phase 4 — API Layer
+### Phase 3 — Feature Engineering
 
 Awaiting explicit human approval.
 
-### Phase 5 — Presentation Layer
+### Phase 4 — Validation Framework
 
 Awaiting explicit human approval.
 
-### Phase 6 — Reporting & Explainability
+### Phase 5 — API Layer
+
+Awaiting explicit human approval.
+
+### Phase 6 — Presentation Layer
+
+Awaiting explicit human approval.
+
+### Phase 7 — Reporting & Explainability
 
 Awaiting explicit human approval.
