@@ -1653,3 +1653,513 @@ class ResidualDiagnosticPlotRecord(Base):
         nullable=False,
         server_default=func.now(),
     )
+
+
+class MarketRegimeAnalysisReportRecord(Base):
+    __tablename__ = "market_regime_analysis_reports"
+    __table_args__ = (
+        CheckConstraint(
+            (
+                "model_count = 4 "
+                "AND assignment_count > 0 "
+                "AND prediction_evidence_count = model_count * "
+                "assignment_count "
+                "AND evaluated_split_count > 0 "
+                "AND plot_count = 12 "
+                "AND char_length(regime_assignment_set_hash) = 64 "
+                "AND char_length(configuration_hash) = 64 "
+                "AND char_length(result_hash) = 64 "
+                "AND char_length(model_dataset_hash) = 64 "
+                "AND char_length(split_hash) = 64 "
+                "AND point_in_time_validated "
+                "AND NOT final_holdout_evaluated "
+                "AND NOT model_retraining_performed "
+                "AND NOT experiments_modified"
+            ),
+            name="ck_market_regime_analysis_reports_integrity",
+        ),
+        UniqueConstraint(
+            "configuration_hash",
+            "result_hash",
+            name="uq_market_regime_analysis_reports_result",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    report_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    report_configuration: Mapped[dict[str, Any]] = mapped_column(
+        JSONB,
+        nullable=False,
+    )
+    report_payload: Mapped[dict[str, Any]] = mapped_column(
+        JSONB,
+        nullable=False,
+    )
+    configuration_hash: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+    )
+    result_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    regime_assignment_set_hash: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+    )
+    statistical_validation_report_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey(
+            "statistical_validation_reports.id",
+            ondelete="RESTRICT",
+        ),
+        nullable=False,
+    )
+    residual_diagnostics_report_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey(
+            "residual_diagnostics_reports.id",
+            ondelete="RESTRICT",
+        ),
+        nullable=False,
+    )
+    model_dataset_hash: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+    )
+    feature_pipeline_version: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+    )
+    target_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    validation_run_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("validation_runs.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    split_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    model_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    assignment_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    prediction_evidence_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+    )
+    evaluated_split_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+    )
+    plot_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    point_in_time_validated: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+    )
+    final_holdout_evaluated: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+    )
+    model_retraining_performed: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+    )
+    experiments_modified: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+    )
+    generated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+
+class MarketRegimeReportExperimentRecord(Base):
+    __tablename__ = "market_regime_report_experiments"
+    __table_args__ = (
+        UniqueConstraint(
+            "report_id",
+            "model_family",
+            name="uq_market_regime_report_experiments_family",
+        ),
+    )
+
+    report_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey(
+            "market_regime_analysis_reports.id",
+            ondelete="RESTRICT",
+        ),
+        primary_key=True,
+    )
+    experiment_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("regression_experiments.id", ondelete="RESTRICT"),
+        primary_key=True,
+    )
+    model_family: Mapped[str] = mapped_column(String(32), nullable=False)
+
+
+class MarketRegimeReportExplainabilityRecord(Base):
+    __tablename__ = "market_regime_report_explainability"
+    __table_args__ = (
+        UniqueConstraint(
+            "report_id",
+            "model_family",
+            name="uq_market_regime_report_explainability_family",
+        ),
+    )
+
+    report_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey(
+            "market_regime_analysis_reports.id",
+            ondelete="RESTRICT",
+        ),
+        primary_key=True,
+    )
+    artifact_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey(
+            "model_explainability_artifacts.id",
+            ondelete="RESTRICT",
+        ),
+        primary_key=True,
+    )
+    model_family: Mapped[str] = mapped_column(String(32), nullable=False)
+
+
+class MarketRegimeAssignmentRecord(Base):
+    __tablename__ = "market_regime_assignments"
+    __table_args__ = (
+        CheckConstraint(
+            (
+                "trend_regime IN "
+                "('bull_trend', 'bear_trend', 'sideways_market') "
+                "AND volatility_regime IN "
+                "('high_volatility_regime', 'low_volatility_regime') "
+                "AND char_length(trend_spread) > 0 "
+                "AND char_length(bollinger_relative_width) > 0 "
+                "AND char_length(expanding_width_median) > 0 "
+                "AND char_length(assignment_hash) = 64"
+            ),
+            name="ck_market_regime_assignments_integrity",
+        ),
+        UniqueConstraint(
+            "report_id",
+            "prediction_timestamp",
+            name="uq_market_regime_assignments_timestamp",
+        ),
+        UniqueConstraint(
+            "report_id",
+            "assignment_hash",
+            name="uq_market_regime_assignments_hash",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(
+        BigInteger,
+        Identity(),
+        primary_key=True,
+    )
+    report_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey(
+            "market_regime_analysis_reports.id",
+            ondelete="RESTRICT",
+        ),
+        nullable=False,
+    )
+    prediction_timestamp: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+    )
+    trend_regime: Mapped[str] = mapped_column(String(32), nullable=False)
+    volatility_regime: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+    )
+    trend_spread: Mapped[str] = mapped_column(String(96), nullable=False)
+    bollinger_relative_width: Mapped[str] = mapped_column(
+        String(96),
+        nullable=False,
+    )
+    expanding_width_median: Mapped[str] = mapped_column(
+        String(96),
+        nullable=False,
+    )
+    assignment_hash: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+    )
+
+
+class MarketRegimePlotRecord(Base):
+    __tablename__ = "market_regime_plots"
+    __table_args__ = (
+        CheckConstraint(
+            (
+                "plot_type IN "
+                "('performance_by_regime', 'error_by_regime', "
+                "'residual_distribution_by_regime') "
+                "AND mime_type = 'image/svg+xml' "
+                "AND char_length(content_hash) = 64 "
+                "AND char_length(content) > 0"
+            ),
+            name="ck_market_regime_plots_integrity",
+        ),
+        UniqueConstraint(
+            "report_id",
+            "model_family",
+            "plot_type",
+            name="uq_market_regime_plots_report_model_type",
+        ),
+        UniqueConstraint(
+            "content_hash",
+            name="uq_market_regime_plots_content_hash",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    report_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey(
+            "market_regime_analysis_reports.id",
+            ondelete="RESTRICT",
+        ),
+        nullable=False,
+    )
+    experiment_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("regression_experiments.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    model_family: Mapped[str] = mapped_column(String(32), nullable=False)
+    plot_type: Mapped[str] = mapped_column(String(48), nullable=False)
+    mime_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    generated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+
+class FinalModelSelectionReportRecord(Base):
+    __tablename__ = "final_model_selection_reports"
+    __table_args__ = (
+        CheckConstraint(
+            (
+                "model_count = 4 "
+                "AND selected_model_family IN "
+                "('linear_regression', 'ridge_regression', "
+                "'random_forest_regression', 'xgboost_regression') "
+                "AND selected_model_rank = 1 "
+                "AND source_artifact_count = 6 "
+                "AND source_plot_hash_count = 28 "
+                "AND prediction_evidence_count > 0 "
+                "AND prediction_hashes_verified > 0 "
+                "AND automated_test_count > 0 "
+                "AND char_length(configuration_hash) = 64 "
+                "AND char_length(result_hash) = 64 "
+                "AND char_length(model_dataset_hash) = 64 "
+                "AND char_length(split_hash) = 64 "
+                "AND artifact_hashes_verified "
+                "AND repeatability_verified "
+                "AND automated_tests_passed "
+                "AND point_in_time_validated "
+                "AND NOT final_holdout_evaluated "
+                "AND NOT model_retraining_performed "
+                "AND NOT experiments_modified "
+                "AND NOT new_experimental_evidence_created"
+            ),
+            name="ck_final_model_selection_reports_integrity",
+        ),
+        UniqueConstraint(
+            "configuration_hash",
+            "result_hash",
+            name="uq_final_model_selection_reports_result",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    report_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    report_configuration: Mapped[dict[str, Any]] = mapped_column(
+        JSONB,
+        nullable=False,
+    )
+    report_payload: Mapped[dict[str, Any]] = mapped_column(
+        JSONB,
+        nullable=False,
+    )
+    configuration_hash: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+    )
+    result_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    model_comparison_report_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("model_comparison_reports.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    statistical_validation_report_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey(
+            "statistical_validation_reports.id",
+            ondelete="RESTRICT",
+        ),
+        nullable=False,
+    )
+    residual_diagnostics_report_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey(
+            "residual_diagnostics_reports.id",
+            ondelete="RESTRICT",
+        ),
+        nullable=False,
+    )
+    market_regime_analysis_report_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey(
+            "market_regime_analysis_reports.id",
+            ondelete="RESTRICT",
+        ),
+        nullable=False,
+    )
+    selected_experiment_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("regression_experiments.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    selected_model_family: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+    )
+    selected_model_rank: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+    )
+    model_dataset_hash: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+    )
+    feature_pipeline_version: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+    )
+    target_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    validation_run_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("validation_runs.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    split_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    model_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    source_artifact_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+    )
+    source_plot_hash_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+    )
+    prediction_evidence_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+    )
+    prediction_hashes_verified: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+    )
+    automated_test_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+    )
+    artifact_hashes_verified: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+    )
+    repeatability_verified: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+    )
+    automated_tests_passed: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+    )
+    point_in_time_validated: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+    )
+    final_holdout_evaluated: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+    )
+    model_retraining_performed: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+    )
+    experiments_modified: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+    )
+    new_experimental_evidence_created: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+    )
+    generated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+
+class FinalModelSelectionReportExperimentRecord(Base):
+    __tablename__ = "final_model_selection_report_experiments"
+    __table_args__ = (
+        UniqueConstraint(
+            "report_id",
+            "model_family",
+            name="uq_final_model_selection_report_experiments_family",
+        ),
+    )
+
+    report_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey(
+            "final_model_selection_reports.id",
+            ondelete="RESTRICT",
+        ),
+        primary_key=True,
+    )
+    experiment_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("regression_experiments.id", ondelete="RESTRICT"),
+        primary_key=True,
+    )
+    model_family: Mapped[str] = mapped_column(String(32), nullable=False)
+
+
+class FinalModelSelectionReportExplainabilityRecord(Base):
+    __tablename__ = "final_model_selection_report_explainability"
+    __table_args__ = (
+        UniqueConstraint(
+            "report_id",
+            "model_family",
+            name="uq_final_model_selection_report_explainability_family",
+        ),
+    )
+
+    report_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey(
+            "final_model_selection_reports.id",
+            ondelete="RESTRICT",
+        ),
+        primary_key=True,
+    )
+    artifact_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey(
+            "model_explainability_artifacts.id",
+            ondelete="RESTRICT",
+        ),
+        primary_key=True,
+    )
+    model_family: Mapped[str] = mapped_column(String(32), nullable=False)
