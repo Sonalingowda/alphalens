@@ -64,11 +64,32 @@ class FeatureRegistryTests(unittest.TestCase):
             payload["definitions"][1]["dependencies"],
             ["price_state"],
         )
+        self.assertEqual(
+            payload["definitions"][0]["implementation_reference"],
+            "tests.test_feature_registry.price_state",
+        )
         self.assertFalse(hasattr(definitions[0], "compute"))
 
-    def test_production_registry_contains_no_unapproved_features(self) -> None:
-        self.assertEqual(INTRADAY_FEATURE_REGISTRY.definitions, ())
-        self.assertEqual(INTRADAY_FEATURE_REGISTRY.output_names, ())
+    def test_production_registry_contains_only_approved_tier_a_features(
+        self,
+    ) -> None:
+        self.assertEqual(
+            tuple(
+                definition.identifier
+                for definition in INTRADAY_FEATURE_REGISTRY.definitions
+            ),
+            ("candle_geometry", "true_range"),
+        )
+        self.assertEqual(
+            INTRADAY_FEATURE_REGISTRY.output_names,
+            (
+                "candle_body_fraction",
+                "candle_range_fraction",
+                "upper_wick_fraction",
+                "lower_wick_fraction",
+                "true_range",
+            ),
+        )
         self.assertEqual(len(INTRADAY_FEATURE_REGISTRY.configuration_hash), 64)
 
     def test_duplicate_definitions_and_outputs_are_rejected(self) -> None:
@@ -118,6 +139,7 @@ class FeatureRegistryTests(unittest.TestCase):
             lambda: replace(valid, outputs=()),
             lambda: replace(valid, maximum_lookback_observations=0),
             lambda: replace(valid, requires_continuity=False),
+            lambda: replace(valid, implementation_reference="not_dotted"),
             lambda: replace(valid, decimal_quantum=Decimal("0")),
         )
         for invalid_factory in invalid_cases:
@@ -258,6 +280,9 @@ def _definition(
         maximum_lookback_observations=maximum_lookback,
         requires_continuity=True,
         availability_rule=FeatureAvailabilityRule.CANDLE_CLOSE,
+        implementation_reference=(
+            f"tests.test_feature_registry.{identifier}"
+        ),
         dependencies=dependencies,
     )
 

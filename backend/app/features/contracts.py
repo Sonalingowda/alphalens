@@ -17,6 +17,9 @@ from app.market_data.validation import (
 FEATURE_VALUE_QUANTUM = Decimal("0.000000000000000001")
 FEATURE_AVAILABILITY_CONTRACT_VERSION = "1.0.0"
 _FEATURE_IDENTIFIER_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
+_IMPLEMENTATION_REFERENCE_PATTERN = re.compile(
+    r"^[a-zA-Z_][a-zA-Z0-9_]*(\.[a-zA-Z_][a-zA-Z0-9_]*)+$"
+)
 _SEMANTIC_VERSION_PATTERN = re.compile(
     r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$"
 )
@@ -85,6 +88,7 @@ class FeatureDefinitionMetadata:
     maximum_lookback_observations: int | None
     requires_continuity: bool
     availability_rule: FeatureAvailabilityRule
+    implementation_reference: str
     dependencies: tuple[str, ...] = ()
     decimal_quantum: Decimal = FEATURE_VALUE_QUANTUM
 
@@ -165,6 +169,12 @@ class FeatureDefinitionMetadata:
         if self.availability_rule is not FeatureAvailabilityRule.CANDLE_CLOSE:
             raise FeatureMetadataError(
                 "Phase 3 features must use candle-close availability."
+            )
+        if not _IMPLEMENTATION_REFERENCE_PATTERN.fullmatch(
+            self.implementation_reference
+        ):
+            raise FeatureMetadataError(
+                "Feature implementation reference must be a dotted symbol."
             )
         if len(set(self.dependencies)) != len(self.dependencies):
             raise FeatureMetadataError(

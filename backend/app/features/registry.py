@@ -11,6 +11,7 @@ from app.features.contracts import (
     FeatureDefinitionMetadata,
     FeatureMetadataError,
 )
+from app.features.tier_a import TIER_A_FEATURE_METADATA
 
 
 REGISTRY_SCHEMA_VERSION = "1.0.0"
@@ -79,6 +80,9 @@ class FeatureRegistry:
                     "availability_rule": (
                         definition.availability_rule.value
                     ),
+                    "implementation_reference": (
+                        definition.implementation_reference
+                    ),
                     "dependencies": list(definition.dependencies),
                     "decimal_quantum": _canonical_decimal(
                         definition.decimal_quantum
@@ -129,4 +133,4 @@ def _canonical_decimal(value: Decimal) -> str:
     return format(value, "f")
 
 
-INTRADAY_FEATURE_REGISTRY = FeatureRegistry(())
+INTRADAY_FEATURE_REGISTRY = FeatureRegistry(TIER_A_FEATURE_METADATA)

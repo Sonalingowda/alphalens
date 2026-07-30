@@ -286,6 +286,14 @@ class FeaturePipelineRunRecord(Base):
             ),
             name="ck_feature_pipeline_runs_registry_metadata",
         ),
+        CheckConstraint(
+            (
+                "(source_provenance_hash IS NULL AND result_hash IS NULL) "
+                "OR (char_length(source_provenance_hash) = 64 "
+                "AND char_length(result_hash) = 64)"
+            ),
+            name="ck_feature_pipeline_runs_result_hashes",
+        ),
         Index(
             "ix_feature_pipeline_runs_source_ingestion_batch_id",
             "source_ingestion_batch_id",
@@ -312,6 +320,14 @@ class FeaturePipelineRunRecord(Base):
         nullable=False,
     )
     source_data_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_provenance_hash: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+    )
+    result_hash: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+    )
     registry_hash: Mapped[str | None] = mapped_column(
         String(64),
         nullable=True,
@@ -3527,3 +3543,287 @@ class PredictionAPIAuditRecord(Base):
         nullable=False,
     )
     immutable: Mapped[bool] = mapped_column(Boolean, nullable=False)
+
+
+class V2LabelPolicyRecord(Base):
+    """Immutable metadata for an explicitly approved v2 label policy."""
+
+    __tablename__ = "v2_label_policies"
+    __table_args__ = (
+        UniqueConstraint(
+            "policy_identifier",
+            "policy_version",
+            "asset_identifier",
+            "quote_currency",
+            "timeframe",
+            name="uq_v2_label_policies_identity",
+        ),
+        CheckConstraint(
+            "strategy = 'first_touch_barrier'",
+            name="ck_v2_label_policies_strategy",
+        ),
+        CheckConstraint(
+            "timeframe IN ('5m', '10m', '15m')",
+            name="ck_v2_label_policies_timeframe",
+        ),
+        CheckConstraint(
+            (
+                "char_length(configuration_hash) = 64 "
+                "AND char_length(registry_hash) = 64"
+            ),
+            name="ck_v2_label_policies_hashes",
+        ),
+        CheckConstraint(
+            "immutable",
+            name="ck_v2_label_policies_immutable",
+        ),
+        Index(
+            "ix_v2_label_policies_configuration_hash",
+            "configuration_hash",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    policy_identifier: Mapped[str] = mapped_column(String(96), nullable=False)
+    policy_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    strategy: Mapped[str] = mapped_column(String(64), nullable=False)
+    asset_identifier: Mapped[str] = mapped_column(String(32), nullable=False)
+    quote_currency: Mapped[str] = mapped_column(String(16), nullable=False)
+    timeframe: Mapped[str] = mapped_column(String(16), nullable=False)
+    approval_reference: Mapped[str] = mapped_column(Text, nullable=False)
+    configuration: Mapped[dict[str, Any]] = mapped_column(
+        JSONB,
+        nullable=False,
+    )
+    configuration_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    registry_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    infrastructure_schema_version: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+    )
+    immutable: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        server_default="true",
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+
+class V2LabelGenerationRunRecord(Base):
+    """Immutable provenance envelope for a completed label run."""
+
+    __tablename__ = "v2_label_generation_runs"
+    __table_args__ = (
+        CheckConstraint(
+            (
+                "source_observation_count > 0 "
+                "AND generated_label_count >= 0 "
+                "AND excluded_observation_count >= 0 "
+                "AND source_observation_count = generated_label_count "
+                "+ excluded_observation_count"
+            ),
+            name="ck_v2_label_runs_counts",
+        ),
+        CheckConstraint(
+            "source_range_start <= source_range_end",
+            name="ck_v2_label_runs_range",
+        ),
+        CheckConstraint(
+            (
+                "char_length(configuration_hash) = 64 "
+                "AND char_length(source_snapshot_hash) = 64 "
+                "AND char_length(source_provenance_hash) = 64 "
+                "AND char_length(result_hash) = 64"
+            ),
+            name="ck_v2_label_runs_hashes",
+        ),
+        CheckConstraint(
+            "point_in_time_validated AND immutable",
+            name="ck_v2_label_runs_integrity",
+        ),
+        Index("ix_v2_label_runs_policy_id", "policy_id"),
+        Index(
+            "ix_v2_label_runs_feature_run_id",
+            "source_feature_run_id",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    policy_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("v2_label_policies.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    source_feature_run_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("feature_pipeline_runs.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    feature_pipeline_version: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+    )
+    registry_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    configuration_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_snapshot_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_provenance_hash: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+    )
+    result_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_observation_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+    )
+    generated_label_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+    )
+    excluded_observation_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+    )
+    source_range_start: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+    )
+    source_range_end: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+    )
+    point_in_time_validated: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+    )
+    immutable: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        server_default="true",
+    )
+    generated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+
+class V2LabelObservationRecord(Base):
+    """One immutable valid label or auditable exclusion."""
+
+    __tablename__ = "v2_label_observations"
+    __table_args__ = (
+        UniqueConstraint(
+            "generation_run_id",
+            "prediction_timestamp",
+            name="uq_v2_label_observations_run_timestamp",
+        ),
+        CheckConstraint(
+            (
+                "(label_class IN ('BUY', 'SELL', 'WAIT') "
+                "AND exclusion_reason IS NULL) "
+                "OR (label_class IS NULL "
+                "AND exclusion_reason IS NOT NULL)"
+            ),
+            name="ck_v2_label_observations_outcome",
+        ),
+        CheckConstraint(
+            (
+                "prediction_timestamp < label_available_at "
+                "AND outcome_interval_start <= outcome_interval_end "
+                "AND outcome_interval_end <= label_available_at"
+            ),
+            name="ck_v2_label_observations_chronology",
+        ),
+        CheckConstraint(
+            "char_length(result_hash) = 64",
+            name="ck_v2_label_observations_result_hash",
+        ),
+        Index(
+            "ix_v2_label_observations_prediction_timestamp",
+            "prediction_timestamp",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(
+        BigInteger,
+        Identity(),
+        primary_key=True,
+    )
+    generation_run_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("v2_label_generation_runs.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    prediction_timestamp: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+    )
+    evidence_cutoff: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+    )
+    outcome_interval_start: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+    )
+    outcome_interval_end: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+    )
+    label_available_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+    )
+    label_class: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    exclusion_reason: Mapped[str | None] = mapped_column(
+        String(96),
+        nullable=True,
+    )
+    result_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    recorded_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+
+class V2LabelRunSourceRecord(Base):
+    """Many-to-many candle provenance for one label generation run."""
+
+    __tablename__ = "v2_label_run_sources"
+    __table_args__ = (
+        CheckConstraint(
+            "char_length(source_role) > 0",
+            name="ck_v2_label_run_sources_role",
+        ),
+        CheckConstraint(
+            "char_length(source_subset_hash) = 64",
+            name="ck_v2_label_run_sources_hash",
+        ),
+        Index("ix_v2_label_run_sources_candle_id", "candle_id"),
+    )
+
+    generation_run_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("v2_label_generation_runs.id", ondelete="RESTRICT"),
+        primary_key=True,
+    )
+    candle_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("market_data_candles.id", ondelete="RESTRICT"),
+        primary_key=True,
+    )
+    source_role: Mapped[str] = mapped_column(String(32), primary_key=True)
+    source_subset_hash: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+    )
+    recorded_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
