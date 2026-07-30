@@ -250,6 +250,202 @@ class CandleRecord(Base):
     )
 
 
+class HistoricalCoverageSnapshotRecord(Base):
+    """Immutable identity and quality summary for canonical candle coverage."""
+
+    __tablename__ = "historical_coverage_snapshots"
+    __table_args__ = (
+        CheckConstraint(
+            "requested_range_start < requested_range_end_exclusive",
+            name="ck_coverage_snapshots_requested_range",
+        ),
+        CheckConstraint(
+            "coverage_range_start <= coverage_range_end",
+            name="ck_coverage_snapshots_coverage_range",
+        ),
+        CheckConstraint(
+            "timeframe IN ('5m', '10m', '15m')",
+            name="ck_coverage_snapshots_timeframe",
+        ),
+        CheckConstraint(
+            (
+                "expected_candle_count > 0 "
+                "AND observed_candle_count > 0 "
+                "AND gap_count >= 0 "
+                "AND expected_candle_count = observed_candle_count + gap_count "
+                "AND source_batch_count > 0"
+            ),
+            name="ck_coverage_snapshots_counts",
+        ),
+        CheckConstraint(
+            (
+                "char_length(validation_hash) = 64 "
+                "AND char_length(source_data_hash) = 64 "
+                "AND char_length(source_provenance_hash) = 64 "
+                "AND char_length(result_hash) = 64"
+            ),
+            name="ck_coverage_snapshots_hashes",
+        ),
+        CheckConstraint(
+            "immutable",
+            name="ck_coverage_snapshots_immutable",
+        ),
+        UniqueConstraint(
+            "result_hash",
+            name="uq_coverage_snapshots_result_hash",
+        ),
+        Index(
+            "ix_coverage_snapshots_scope",
+            "asset_identifier",
+            "quote_currency",
+            "timeframe",
+            "coverage_range_end",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    schema_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    hash_schema_version: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+    )
+    acquisition_policy_identifier: Mapped[str] = mapped_column(
+        String(96),
+        nullable=False,
+    )
+    acquisition_policy_version: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+    )
+    asset_identifier: Mapped[str] = mapped_column(String(32), nullable=False)
+    quote_currency: Mapped[str] = mapped_column(String(16), nullable=False)
+    timeframe: Mapped[str] = mapped_column(String(16), nullable=False)
+    requested_range_start: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+    )
+    requested_range_end_exclusive: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+    )
+    coverage_range_start: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+    )
+    coverage_range_end: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+    )
+    expected_candle_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+    )
+    observed_candle_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+    )
+    gap_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    gap_timestamps: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+    source_batch_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+    )
+    validation_summary: Mapped[dict[str, Any]] = mapped_column(
+        JSONB,
+        nullable=False,
+    )
+    derivation_summary: Mapped[list[dict[str, str]]] = mapped_column(
+        JSONB,
+        nullable=False,
+    )
+    validation_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_data_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_provenance_hash: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+    )
+    result_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    immutable: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        server_default="true",
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+
+class HistoricalCoverageSnapshotCandleRecord(Base):
+    """Ordered candle membership for one immutable coverage snapshot."""
+
+    __tablename__ = "historical_coverage_snapshot_candles"
+    __table_args__ = (
+        CheckConstraint(
+            "ordinal >= 0",
+            name="ck_coverage_snapshot_candles_ordinal",
+        ),
+        UniqueConstraint(
+            "snapshot_id",
+            "ordinal",
+            name="uq_coverage_snapshot_candles_ordinal",
+        ),
+        Index(
+            "ix_coverage_snapshot_candles_candle_id",
+            "candle_id",
+        ),
+    )
+
+    snapshot_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("historical_coverage_snapshots.id", ondelete="RESTRICT"),
+        primary_key=True,
+    )
+    candle_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("market_data_candles.id", ondelete="RESTRICT"),
+        primary_key=True,
+    )
+    ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
+class HistoricalCoverageSnapshotBatchRecord(Base):
+    """Source-batch membership and subset identity for a snapshot."""
+
+    __tablename__ = "historical_coverage_snapshot_batches"
+    __table_args__ = (
+        CheckConstraint(
+            "candle_count > 0",
+            name="ck_coverage_snapshot_batches_count",
+        ),
+        CheckConstraint(
+            "char_length(source_subset_hash) = 64",
+            name="ck_coverage_snapshot_batches_hash",
+        ),
+        Index(
+            "ix_coverage_snapshot_batches_batch_id",
+            "ingestion_batch_id",
+        ),
+    )
+
+    snapshot_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("historical_coverage_snapshots.id", ondelete="RESTRICT"),
+        primary_key=True,
+    )
+    ingestion_batch_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("market_data_ingestion_batches.id", ondelete="RESTRICT"),
+        primary_key=True,
+    )
+    candle_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    source_subset_hash: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+    )
+
+
 class FeaturePipelineRunRecord(Base):
     __tablename__ = "feature_pipeline_runs"
     __table_args__ = (
