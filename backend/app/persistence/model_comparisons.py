@@ -17,7 +17,6 @@ from app.research.model_comparison import (
     APPROVED_EVALUATION_POLICY_VERSION,
     MODEL_COMPARISON_REPORT_VERSION,
     RUNTIME_EVIDENCE_STATUS,
-    BuiltModelComparison,
     ComparisonSource,
     build_model_comparison,
 )

@@ -1,0 +1,95 @@
+name: alphalens
+
+services:
+  postgres:
+    image: postgres:16.8-alpine3.21@sha256:3b057e1c2c6dfee60a30950096f3fab33be141dbb0fdd7af3d477083de94166c
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-alphalens}
+      POSTGRES_USER: ${POSTGRES_USER:-alphalens_app}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+
+  backend:
+    image: alphalens-backend:1.0.0
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    environment:
+      ALPHALENS_ENVIRONMENT: production
+      ALPHALENS_API_NAME: AlphaLens Live Prediction API
+      ALPHALENS_API_HOST: 0.0.0.0
+      ALPHALENS_API_PORT: 8000
+      ALPHALENS_API_WORKERS: ${ALPHALENS_API_WORKERS:-2}
+      ALPHALENS_LOG_LEVEL: ${ALPHALENS_LOG_LEVEL:-INFO}
+      ALPHALENS_CORS_ALLOWED_ORIGINS: ${ALPHALENS_CORS_ALLOWED_ORIGINS:?Set ALPHALENS_CORS_ALLOWED_ORIGINS in .env}
+      ALPHALENS_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-alphalens_app}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-alphalens}
+      ALPHALENS_PREDICTION_API_MAX_REQUEST_BYTES: 32768
+    ports:
+      - "${ALPHALENS_BIND_ADDRESS:-127.0.0.1}:8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=3)"
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      retries: 6
+    restart: unless-stopped
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+  frontend:
+    image: alphalens-frontend:1.0.0
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    environment:
+      ALPHALENS_API_BASE_URL: http://backend:8000
+      NODE_ENV: production
+    ports:
+      - "${ALPHALENS_BIND_ADDRESS:-127.0.0.1}:3000:3000"
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - wget --quiet --tries=1 --spider http://127.0.0.1:3000/system-health
+      interval: 10s
+      timeout: 5s
+      start_period: 20s
+      retries: 6
+    restart: unless-stopped
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  postgres_data:

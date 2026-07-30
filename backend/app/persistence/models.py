@@ -2163,3 +2163,1204 @@ class FinalModelSelectionReportExplainabilityRecord(Base):
         primary_key=True,
     )
     model_family: Mapped[str] = mapped_column(String(32), nullable=False)
+
+
+class HoldoutEvaluationReportRecord(Base):
+    __tablename__ = "holdout_evaluation_reports"
+    __table_args__ = (
+        CheckConstraint(
+            (
+                "selected_model_family = 'ridge_regression' "
+                "AND registered_holdout_observation_count = 10 "
+                "AND eligible_holdout_observation_count > 0 "
+                "AND excluded_missing_target_count = "
+                "registered_holdout_observation_count "
+                "- eligible_holdout_observation_count "
+                "AND final_training_observation_count >= 100 "
+                "AND purged_observation_count = 50 "
+                "AND development_prediction_hashes_verified > 0 "
+                "AND development_prediction_evidence_count > 0 "
+                "AND holdout_prediction_evidence_count = "
+                "eligible_holdout_observation_count "
+                "AND source_artifact_count = 7 "
+                "AND char_length(configuration_hash) = 64 "
+                "AND char_length(result_hash) = 64 "
+                "AND char_length(model_dataset_hash) = 64 "
+                "AND char_length(holdout_dataset_hash) = 64 "
+                "AND char_length(training_dataset_hash) = 64 "
+                "AND char_length(split_hash) = 64 "
+                "AND char_length(development_prediction_evidence_set_hash) "
+                "= 64 "
+                "AND char_length(holdout_prediction_hash) = 64 "
+                "AND char_length(holdout_prediction_evidence_set_hash) "
+                "= 64 "
+                "AND official_holdout_evaluation "
+                "AND holdout_evaluated "
+                "AND holdout_consumed "
+                "AND development_prediction_hashes_match "
+                "AND artifact_hashes_verified "
+                "AND NOT model_parameters_modified "
+                "AND NOT feature_engineering_performed "
+                "AND NOT hyperparameter_tuning_performed "
+                "AND NOT experiments_modified"
+            ),
+            name="ck_holdout_evaluation_reports_integrity",
+        ),
+        UniqueConstraint(
+            "validation_run_id",
+            name="uq_holdout_evaluation_reports_validation_run",
+        ),
+        UniqueConstraint(
+            "configuration_hash",
+            "result_hash",
+            name="uq_holdout_evaluation_reports_result",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    report_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    report_configuration: Mapped[dict[str, Any]] = mapped_column(
+        JSONB,
+        nullable=False,
+    )
+    report_payload: Mapped[dict[str, Any]] = mapped_column(
+        JSONB,
+        nullable=False,
+    )
+    configuration_hash: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+    )
+    result_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    selected_experiment_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("regression_experiments.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    final_model_selection_report_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey(
+            "final_model_selection_reports.id",
+            ondelete="RESTRICT",
+        ),
+        nullable=False,
+    )
+    model_comparison_report_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("model_comparison_reports.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    statistical_validation_report_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey(
+            "statistical_validation_reports.id",
+            ondelete="RESTRICT",
+        ),
+        nullable=False,
+    )
+    residual_diagnostics_report_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey(
+            "residual_diagnostics_reports.id",
+            ondelete="RESTRICT",
+        ),
+        nullable=False,
+    )
+    market_regime_analysis_report_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey(
+            "market_regime_analysis_reports.id",
+            ondelete="RESTRICT",
+        ),
+        nullable=False,
+    )
+    selected_model_family: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+    )
+    model_dataset_hash: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+    )
+    holdout_dataset_hash: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+    )
+    training_dataset_hash: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+    )
+    feature_pipeline_version: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+    )
+    target_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    validation_run_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("validation_runs.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    split_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    registered_holdout_start: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+    )
+    registered_holdout_end: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+    )
+    first_evaluated_timestamp: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+    )
+    last_evaluated_timestamp: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+    )
+    registered_holdout_observation_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+    )
+    eligible_holdout_observation_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+    )
+    excluded_missing_target_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+    )
+    final_training_observation_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+    )
+    purged_observation_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+    )
+    development_prediction_hashes_verified: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+    )
+    development_prediction_evidence_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+    )
+    development_prediction_evidence_set_hash: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+    )
+    holdout_prediction_hash: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+    )
+    holdout_prediction_evidence_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+    )
+    holdout_prediction_evidence_set_hash: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+    )
+    source_artifact_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+    )
+    official_holdout_evaluation: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+    )
+    holdout_evaluated: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+    )
+    holdout_consumed: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+    )
+    development_prediction_hashes_match: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+    )
+    artifact_hashes_verified: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+    )
+    model_parameters_modified: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+    )
+    feature_engineering_performed: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+    )
+    hyperparameter_tuning_performed: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+    )
+    experiments_modified: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+    )
+    generated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+
+class HoldoutPredictionEvidenceRecord(Base):
+    __tablename__ = "holdout_prediction_evidence"
+    __table_args__ = (
+        CheckConstraint(
+            (
+                "observation_index > 0 "
+                "AND label_available_at > prediction_timestamp "
+                "AND char_length(actual_float_hex) > 0 "
+                "AND char_length(predicted_float_hex) > 0 "
+                "AND char_length(residual_float_hex) > 0 "
+                "AND char_length(evidence_hash) = 64"
+            ),
+            name="ck_holdout_prediction_evidence_integrity",
+        ),
+        UniqueConstraint(
+            "report_id",
+            "prediction_timestamp",
+            name="uq_holdout_prediction_evidence_timestamp",
+        ),
+        UniqueConstraint(
+            "evidence_hash",
+            name="uq_holdout_prediction_evidence_hash",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(
+        BigInteger,
+        Identity(),
+        primary_key=True,
+    )
+    report_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey(
+            "holdout_evaluation_reports.id",
+            ondelete="RESTRICT",
+        ),
+        nullable=False,
+    )
+    observation_index: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+    )
+    prediction_timestamp: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+    )
+    label_available_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+    )
+    actual_value: Mapped[Decimal] = mapped_column(
+        Numeric(38, 18),
+        nullable=False,
+    )
+    predicted_value: Mapped[Decimal] = mapped_column(
+        Numeric(38, 18),
+        nullable=False,
+    )
+    residual_value: Mapped[Decimal] = mapped_column(
+        Numeric(38, 18),
+        nullable=False,
+    )
+    actual_float_hex: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+    )
+    predicted_float_hex: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+    )
+    residual_float_hex: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+    )
+    evidence_hash: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+
+class HoldoutConsumptionRecord(Base):
+    __tablename__ = "holdout_consumptions"
+    __table_args__ = (
+        CheckConstraint(
+            (
+                "purpose = 'official_final_evaluation' "
+                "AND official "
+                "AND irreversible"
+            ),
+            name="ck_holdout_consumptions_official",
+        ),
+        UniqueConstraint(
+            "holdout_evaluation_report_id",
+            name="uq_holdout_consumptions_report",
+        ),
+    )
+
+    validation_run_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("validation_runs.id", ondelete="RESTRICT"),
+        primary_key=True,
+    )
+    holdout_evaluation_report_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey(
+            "holdout_evaluation_reports.id",
+            ondelete="RESTRICT",
+        ),
+        nullable=False,
+    )
+    selected_experiment_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("regression_experiments.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    purpose: Mapped[str] = mapped_column(String(48), nullable=False)
+    official: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    irreversible: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    consumed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+
+class BacktestReportRecord(Base):
+    __tablename__ = "backtest_reports"
+    __table_args__ = (
+        CheckConstraint(
+            (
+                "report_version = '1.0.0' "
+                "AND engine_version = '1.0.0' "
+                "AND strategy_name = 'ridge_threshold_long_only' "
+                "AND strategy_version = '1.0.0' "
+                "AND initial_capital > 0 "
+                "AND final_portfolio_value >= 0 "
+                "AND signal_count > 0 "
+                "AND fill_count >= 0 "
+                "AND trade_count >= 0 "
+                "AND daily_observation_count > 1 "
+                "AND char_length(configuration_hash) = 64 "
+                "AND char_length(result_hash) = 64 "
+                "AND char_length(input_evidence_hash) = 64 "
+                "AND char_length(signal_hash) = 64 "
+                "AND char_length(trade_log_hash) = 64 "
+                "AND char_length(equity_curve_hash) = 64 "
+                "AND char_length(daily_history_hash) = 64 "
+                "AND char_length(model_dataset_hash) = 64 "
+                "AND char_length(split_hash) = 64 "
+                "AND char_length(prediction_evidence_set_hash) = 64 "
+                "AND research_artifacts_modified = false "
+                "AND deterministic "
+                "AND artifact_hashes_verified"
+            ),
+            name="ck_backtest_reports_integrity",
+        ),
+        UniqueConstraint(
+            "configuration_hash",
+            name="uq_backtest_reports_configuration_hash",
+        ),
+        UniqueConstraint(
+            "result_hash",
+            name="uq_backtest_reports_result_hash",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    report_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    engine_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    report_configuration: Mapped[dict[str, Any]] = mapped_column(
+        JSONB,
+        nullable=False,
+    )
+    report_payload: Mapped[dict[str, Any]] = mapped_column(
+        JSONB,
+        nullable=False,
+    )
+    configuration_hash: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+    )
+    result_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_holdout_report_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey(
+            "holdout_evaluation_reports.id",
+            ondelete="RESTRICT",
+        ),
+        nullable=False,
+    )
+    selected_experiment_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("regression_experiments.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    model_dataset_hash: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+    )
+    feature_pipeline_version: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+    )
+    target_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    validation_run_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("validation_runs.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    split_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    prediction_evidence_set_hash: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+    )
+    strategy_name: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+    )
+    strategy_version: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+    )
+    period_start: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+    )
+    period_end: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+    )
+    initial_capital: Mapped[Decimal] = mapped_column(
+        Numeric(38, 18),
+        nullable=False,
+    )
+    final_portfolio_value: Mapped[Decimal] = mapped_column(
+        Numeric(38, 18),
+        nullable=False,
+    )
+    signal_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    fill_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    trade_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    daily_observation_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+    )
+    input_evidence_hash: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+    )
+    signal_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    trade_log_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    equity_curve_hash: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+    )
+    daily_history_hash: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+    )
+    research_artifacts_modified: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+    )
+    deterministic: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    artifact_hashes_verified: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+    )
+    generated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+
+class RiskManagementReportRecord(Base):
+    __tablename__ = "risk_management_reports"
+    __table_args__ = (
+        CheckConstraint(
+            (
+                "report_version = '1.0.0' "
+                "AND framework_version = '1.0.0' "
+                "AND initial_capital > 0 "
+                "AND final_portfolio_value >= 0 "
+                "AND risk_event_count > 0 "
+                "AND accepted_trade_count >= 0 "
+                "AND rejected_trade_count >= 0 "
+                "AND forced_exit_count >= 0 "
+                "AND protection_event_count >= 0 "
+                "AND char_length(configuration_hash) = 64 "
+                "AND char_length(result_hash) = 64 "
+                "AND char_length(model_dataset_hash) = 64 "
+                "AND char_length(split_hash) = 64 "
+                "AND char_length(risk_event_hash) = 64 "
+                "AND char_length(accepted_trade_hash) = 64 "
+                "AND char_length(rejected_trade_hash) = 64 "
+                "AND char_length(forced_exit_hash) = 64 "
+                "AND char_length(protection_event_hash) = 64 "
+                "AND research_artifacts_modified = false "
+                "AND deterministic "
+                "AND artifact_hashes_verified"
+            ),
+            name="ck_risk_management_reports_integrity",
+        ),
+        UniqueConstraint(
+            "configuration_hash",
+            name="uq_risk_management_reports_configuration_hash",
+        ),
+        UniqueConstraint(
+            "result_hash",
+            name="uq_risk_management_reports_result_hash",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    report_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    framework_version: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+    )
+    report_configuration: Mapped[dict[str, Any]] = mapped_column(
+        JSONB,
+        nullable=False,
+    )
+    report_payload: Mapped[dict[str, Any]] = mapped_column(
+        JSONB,
+        nullable=False,
+    )
+    configuration_hash: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+    )
+    result_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_backtest_report_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("backtest_reports.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    source_holdout_report_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey(
+            "holdout_evaluation_reports.id",
+            ondelete="RESTRICT",
+        ),
+        nullable=False,
+    )
+    selected_experiment_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("regression_experiments.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    model_dataset_hash: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+    )
+    feature_pipeline_version: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+    )
+    target_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    validation_run_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("validation_runs.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    split_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    period_start: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+    )
+    period_end: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+    )
+    initial_capital: Mapped[Decimal] = mapped_column(
+        Numeric(38, 18),
+        nullable=False,
+    )
+    final_portfolio_value: Mapped[Decimal] = mapped_column(
+        Numeric(38, 18),
+        nullable=False,
+    )
+    risk_event_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    accepted_trade_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+    )
+    rejected_trade_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+    )
+    forced_exit_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+    )
+    protection_event_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+    )
+    risk_event_hash: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+    )
+    accepted_trade_hash: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+    )
+    rejected_trade_hash: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+    )
+    forced_exit_hash: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+    )
+    protection_event_hash: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+    )
+    research_artifacts_modified: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+    )
+    deterministic: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    artifact_hashes_verified: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+    )
+    generated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+
+class ModelInferenceArtifactRecord(Base):
+    __tablename__ = "model_inference_artifacts"
+    __table_args__ = (
+        CheckConstraint(
+            (
+                "artifact_version = '1.0.0' "
+                "AND model_family = 'ridge_regression' "
+                "AND feature_pipeline_version = '1.1.0' "
+                "AND target_version = '1.0.0' "
+                "AND final_training_observation_count = 611 "
+                "AND purged_observation_count = 50 "
+                "AND feature_count = 12 "
+                "AND coefficient_count = feature_count "
+                "AND scaler_mean_count = feature_count "
+                "AND scaler_scale_count = feature_count "
+                "AND verification_prediction_count = 5 "
+                "AND char_length(configuration_hash) = 64 "
+                "AND char_length(artifact_sha256) = 64 "
+                "AND char_length(state_sha256) = 64 "
+                "AND char_length(model_dataset_hash) = 64 "
+                "AND char_length(training_dataset_hash) = 64 "
+                "AND char_length(split_hash) = 64 "
+                "AND char_length(official_prediction_hash) = 64 "
+                "AND char_length(verification_evidence_hash) = 64 "
+                "AND deterministic_replay "
+                "AND official_prediction_hash_verified "
+                "AND artifact_only_inference_verified "
+                "AND NOT model_tuned "
+                "AND NOT experiment_modified "
+                "AND NOT research_artifacts_modified"
+            ),
+            name="ck_model_inference_artifacts_integrity",
+        ),
+        UniqueConstraint(
+            "selected_experiment_id",
+            name="uq_model_inference_artifacts_experiment",
+        ),
+        UniqueConstraint(
+            "configuration_hash",
+            name="uq_model_inference_artifacts_configuration",
+        ),
+        UniqueConstraint(
+            "artifact_sha256",
+            name="uq_model_inference_artifacts_sha256",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    artifact_version: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+    )
+    model_family: Mapped[str] = mapped_column(String(32), nullable=False)
+    artifact_payload: Mapped[dict[str, Any]] = mapped_column(
+        JSONB,
+        nullable=False,
+    )
+    verification_evidence: Mapped[dict[str, Any]] = mapped_column(
+        JSONB,
+        nullable=False,
+    )
+    configuration_hash: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+    )
+    artifact_sha256: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+    )
+    state_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    verification_evidence_hash: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+    )
+    selected_experiment_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("regression_experiments.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    holdout_evaluation_report_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey(
+            "holdout_evaluation_reports.id",
+            ondelete="RESTRICT",
+        ),
+        nullable=False,
+    )
+    model_dataset_hash: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+    )
+    training_dataset_hash: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+    )
+    feature_pipeline_version: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+    )
+    target_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    validation_run_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("validation_runs.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    split_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    final_training_observation_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+    )
+    purged_observation_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+    )
+    feature_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    coefficient_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+    )
+    scaler_mean_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+    )
+    scaler_scale_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+    )
+    verification_prediction_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+    )
+    official_prediction_hash: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+    )
+    deterministic_replay: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+    )
+    official_prediction_hash_verified: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+    )
+    artifact_only_inference_verified: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+    )
+    model_tuned: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    experiment_modified: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+    )
+    research_artifacts_modified: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+
+class PaperTradingReportRecord(Base):
+    __tablename__ = "paper_trading_reports"
+    __table_args__ = (
+        CheckConstraint(
+            (
+                "report_version = '1.0.0' "
+                "AND engine_version = '2.0.0' "
+                "AND cycle_sequence > 0 "
+                "AND cycle_start <= cycle_end "
+                "AND processed_observation_count > 0 "
+                "AND current_cash >= 0 "
+                "AND current_equity >= 0 "
+                "AND open_position_count BETWEEN 0 AND 1 "
+                "AND prediction_count = portfolio_observation_count "
+                "AND signal_count = prediction_count "
+                "AND order_count >= 0 "
+                "AND trade_count >= 0 "
+                "AND risk_event_count >= 0 "
+                "AND audit_event_count >= prediction_count * 8 "
+                "AND char_length(configuration_hash) = 64 "
+                "AND char_length(result_hash) = 64 "
+                "AND char_length(market_data_hash) = 64 "
+                "AND char_length(feature_set_hash) = 64 "
+                "AND char_length(prediction_hash) = 64 "
+                "AND char_length(signal_hash) = 64 "
+                "AND char_length(order_hash) = 64 "
+                "AND char_length(trade_hash) = 64 "
+                "AND char_length(risk_event_hash) = 64 "
+                "AND char_length(portfolio_history_hash) = 64 "
+                "AND char_length(audit_log_hash) = 64 "
+                "AND char_length(inference_artifact_sha256) = 64 "
+                "AND char_length(model_dataset_hash) = 64 "
+                "AND char_length(training_dataset_hash) = 64 "
+                "AND char_length(split_hash) = 64 "
+                "AND artifact_only_inference "
+                "AND NOT fit_invoked "
+                "AND NOT live_orders_placed "
+                "AND NOT research_artifacts_modified "
+                "AND deterministic "
+                "AND artifact_hashes_verified"
+            ),
+            name="ck_paper_trading_reports_integrity",
+        ),
+        UniqueConstraint(
+            "configuration_hash",
+            "cycle_end",
+            name="uq_paper_trading_reports_cycle",
+        ),
+        UniqueConstraint(
+            "result_hash",
+            name="uq_paper_trading_reports_result_hash",
+        ),
+        Index(
+            "ix_paper_trading_reports_session_cycle",
+            "session_name",
+            "cycle_end",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    report_version: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+    )
+    engine_version: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+    )
+    report_configuration: Mapped[dict[str, Any]] = mapped_column(
+        JSONB,
+        nullable=False,
+    )
+    report_payload: Mapped[dict[str, Any]] = mapped_column(
+        JSONB,
+        nullable=False,
+    )
+    configuration_hash: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+    )
+    result_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    previous_report_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("paper_trading_reports.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    inference_artifact_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("model_inference_artifacts.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    selected_experiment_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("regression_experiments.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    holdout_evaluation_report_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey(
+            "holdout_evaluation_reports.id",
+            ondelete="RESTRICT",
+        ),
+        nullable=False,
+    )
+    validation_run_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("validation_runs.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    session_name: Mapped[str] = mapped_column(String(96), nullable=False)
+    cycle_sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    cycle_start: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+    )
+    cycle_end: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+    )
+    processed_observation_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+    )
+    model_dataset_hash: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+    )
+    training_dataset_hash: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+    )
+    feature_pipeline_version: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+    )
+    target_version: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+    )
+    split_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    inference_artifact_sha256: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+    )
+    current_cash: Mapped[Decimal] = mapped_column(
+        Numeric(38, 18),
+        nullable=False,
+    )
+    current_equity: Mapped[Decimal] = mapped_column(
+        Numeric(38, 18),
+        nullable=False,
+    )
+    open_position_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+    )
+    prediction_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+    )
+    signal_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    order_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    trade_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    risk_event_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+    )
+    portfolio_observation_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+    )
+    audit_event_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+    )
+    market_data_hash: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+    )
+    feature_set_hash: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+    )
+    prediction_hash: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+    )
+    signal_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    order_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    trade_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    risk_event_hash: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+    )
+    portfolio_history_hash: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+    )
+    audit_log_hash: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+    )
+    artifact_only_inference: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+    )
+    fit_invoked: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    live_orders_placed: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+    )
+    research_artifacts_modified: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+    )
+    deterministic: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    artifact_hashes_verified: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+    )
+    generated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+
+class PredictionAPIAuditRecord(Base):
+    __tablename__ = "prediction_api_audits"
+    __table_args__ = (
+        CheckConstraint(
+            (
+                "api_version = '1.0.0' "
+                "AND http_method IN ('GET', 'POST') "
+                "AND request_size_bytes >= 0 "
+                "AND response_status BETWEEN 100 AND 599 "
+                "AND outcome IN ('success', 'error') "
+                "AND latency_microseconds >= 0 "
+                "AND received_at <= completed_at "
+                "AND char_length(request_hash) = 64 "
+                "AND char_length(response_hash) = 64 "
+                "AND char_length(audit_hash) = 64 "
+                "AND (schema_hash IS NULL "
+                "OR char_length(schema_hash) = 64) "
+                "AND (prediction_hash IS NULL "
+                "OR char_length(prediction_hash) = 64) "
+                "AND (artifact_sha256 IS NULL "
+                "OR char_length(artifact_sha256) = 64) "
+                "AND artifact_verified "
+                "AND NOT fit_invoked "
+                "AND read_only_inference "
+                "AND immutable"
+            ),
+            name="ck_prediction_api_audits_integrity",
+        ),
+        UniqueConstraint(
+            "audit_hash",
+            name="uq_prediction_api_audits_hash",
+        ),
+        Index(
+            "ix_prediction_api_audits_received_at",
+            "received_at",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    api_version: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+    )
+    http_method: Mapped[str] = mapped_column(
+        String(8),
+        nullable=False,
+    )
+    request_path: Mapped[str] = mapped_column(
+        String(128),
+        nullable=False,
+    )
+    request_size_bytes: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+    )
+    request_hash: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+    )
+    response_status: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+    )
+    response_hash: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+    )
+    outcome: Mapped[str] = mapped_column(
+        String(16),
+        nullable=False,
+    )
+    error_code: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+    )
+    artifact_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("model_inference_artifacts.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    artifact_sha256: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+    )
+    configuration_hash: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+    )
+    schema_hash: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+    )
+    prediction_hash: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+    )
+    latency_microseconds: Mapped[int] = mapped_column(
+        BigInteger,
+        nullable=False,
+    )
+    received_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+    )
+    completed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+    )
+    audit_payload: Mapped[dict[str, Any]] = mapped_column(
+        JSONB,
+        nullable=False,
+    )
+    audit_hash: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+    )
+    artifact_verified: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+    )
+    fit_invoked: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    read_only_inference: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+    )
+    immutable: Mapped[bool] = mapped_column(Boolean, nullable=False)

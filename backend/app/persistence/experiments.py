@@ -7,6 +7,7 @@ from uuid import UUID, uuid4
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.persistence.models import (
+    HoldoutConsumptionRecord,
     RegressionExperimentRecord,
     RegressionExperimentSplitRecord,
 )
@@ -35,6 +36,16 @@ async def run_and_persist_baseline_experiment(
 ) -> PersistedBaselineExperiment:
     async with session.begin():
         dataset = await build_model_ready_dataset(session)
+        if (
+            await session.get(
+                HoldoutConsumptionRecord,
+                dataset.validation_run_id,
+            )
+            is not None
+        ):
+            raise ValueError(
+                "Official holdout is consumed; model development is closed."
+            )
         evaluation = run_baseline_evaluation(dataset, model_family)
         experiment_id = uuid4()
         completed_at = datetime.now(timezone.utc)

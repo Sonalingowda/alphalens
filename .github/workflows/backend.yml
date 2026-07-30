@@ -1,0 +1,33 @@
+name: Backend
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install locked dependencies
+        run: uv sync --frozen --dev
+      - name: Lint
+        run: uv run ruff check app tests
+      - name: Compile
+        run: uv run python -m compileall -q app
+      - name: Test
+        run: uv run python -m unittest discover -s tests -p "test_*.py"
