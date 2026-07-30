@@ -7,6 +7,9 @@ from enum import Enum
 
 
 class CandleTimeframe(str, Enum):
+    MINUTE_5 = "5m"
+    MINUTE_10 = "10m"
+    MINUTE_15 = "15m"
     DAY_1 = "1d"
 
 

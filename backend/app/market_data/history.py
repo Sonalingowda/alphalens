@@ -2,16 +2,24 @@
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 import logging
 from typing import Callable
+from uuid import UUID
 
 from app.market_data.models import Candle, CandleTimeframe
 from app.market_data.provider import MarketDataProvider, MarketDataProviderError
-from app.market_data.validation import CandleValidationReport, validate_candles
+from app.market_data.validation import (
+    CandleValidationReport,
+    floor_timeframe_boundary,
+    timeframe_duration,
+    validate_candles,
+)
 
 
 logger = logging.getLogger("uvicorn.error")
 KRAKEN_OHLC_PAGE_LIMIT = 720
+TEN_MINUTE_DERIVATION = "utc_5m_pair_v1"
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,6 +53,9 @@ class HistoricalSample:
     provider_limit_reached: bool = False
     pagination_exhausted: bool = True
     progress: tuple[BackfillProgress, ...] = ()
+    source_timeframe: CandleTimeframe | None = None
+    derivation_method: str | None = None
+    source_ingestion_batch_id: UUID | None = None
 
 
 async def fetch_btc_usd_daily_sample(
@@ -256,3 +267,230 @@ async def fetch_btc_usd_daily_backfill(
         pagination_exhausted=pagination_exhausted,
         progress=tuple(progress_events),
     )
+
+
+async def fetch_btc_usd_intraday_native(
+    provider: MarketDataProvider,
+    timeframe: CandleTimeframe,
+    now: datetime | None = None,
+) -> HistoricalSample:
+    if timeframe not in {
+        CandleTimeframe.MINUTE_5,
+        CandleTimeframe.MINUTE_15,
+    }:
+        raise MarketDataProviderError(
+            "Native intraday ingestion supports only Kraken 5m and 15m candles."
+        )
+
+    retrieved_at = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    requested_end = floor_timeframe_boundary(retrieved_at, timeframe)
+    duration = timeframe_duration(timeframe)
+    requested_start = requested_end - (duration * KRAKEN_OHLC_PAGE_LIMIT)
+    page = await provider.get_historical_candle_page(
+        asset_identifier="BTC",
+        quote_currency="USD",
+        timeframe=timeframe,
+        since=requested_start,
+    )
+
+    completed: list[Candle] = []
+    incomplete_count = 0
+    for candle in page.candles:
+        if candle.timestamp is not None and candle.timestamp >= requested_end:
+            incomplete_count += 1
+            continue
+        completed.append(candle)
+
+    available_timestamps = tuple(
+        candle.timestamp
+        for candle in completed
+        if candle.timestamp is not None
+    )
+    if not available_timestamps:
+        raise MarketDataProviderError(
+            f"Kraken returned no completed {timeframe.value} BTC/USD candles."
+        )
+    available_start = available_timestamps[0]
+    validation_report = validate_candles(
+        candles=tuple(completed),
+        timeframe=timeframe,
+        expected_start=available_start,
+        expected_end=requested_end,
+    )
+    progress = BackfillProgress(
+        page_number=1,
+        requested_since=requested_start,
+        provider_row_count=len(page.candles),
+        accepted_completed_count=len(completed),
+        new_unique_completed_count=len(completed),
+        excluded_incomplete_count=incomplete_count,
+        excluded_pagination_overlap_count=0,
+        cumulative_completed_count=len(completed),
+        next_since=datetime.fromtimestamp(page.next_since, tz=timezone.utc),
+    )
+    logger.info(
+        (
+            "Intraday fetch timeframe=%s rows=%s completed=%s incomplete=%s "
+            "available_start=%s available_end=%s"
+        ),
+        timeframe.value,
+        len(page.candles),
+        len(completed),
+        incomplete_count,
+        available_start.isoformat(),
+        available_timestamps[-1].isoformat(),
+    )
+    return HistoricalSample(
+        provider="kraken",
+        asset_identifier="BTC",
+        quote_currency="USD",
+        timeframe=timeframe,
+        requested_start=requested_start,
+        requested_end_exclusive=requested_end,
+        retrieved_at=retrieved_at,
+        candles=tuple(completed),
+        validation_report=validation_report,
+        pages_fetched=1,
+        excluded_incomplete_candle_count=incomplete_count,
+        provider_page_limit=KRAKEN_OHLC_PAGE_LIMIT,
+        provider_limit_reached=(
+            len(page.candles) >= KRAKEN_OHLC_PAGE_LIMIT
+        ),
+        pagination_exhausted=True,
+        progress=(progress,),
+    )
+
+
+def derive_btc_usd_10m_sample(
+    source: HistoricalSample,
+    source_ingestion_batch_id: UUID,
+) -> HistoricalSample:
+    if source.timeframe is not CandleTimeframe.MINUTE_5:
+        raise MarketDataProviderError(
+            "10m candles must be derived from a 5m source sample."
+        )
+    if not source.validation_report.passed:
+        raise MarketDataProviderError(
+            "10m candles cannot be derived from a failed 5m validation batch."
+        )
+
+    source_by_timestamp = {
+        candle.timestamp: candle
+        for candle in source.candles
+        if candle.timestamp is not None
+    }
+    first_source = min(source_by_timestamp, default=None)
+    if first_source is None:
+        raise MarketDataProviderError(
+            "10m derivation requires completed 5m source candles."
+        )
+
+    derived_start = floor_timeframe_boundary(
+        first_source,
+        CandleTimeframe.MINUTE_10,
+    )
+    if derived_start < first_source:
+        derived_start += timeframe_duration(CandleTimeframe.MINUTE_10)
+    derived_end = floor_timeframe_boundary(
+        source.requested_end_exclusive,
+        CandleTimeframe.MINUTE_10,
+    )
+
+    derived: list[Candle] = []
+    bucket = derived_start
+    five_minutes = timeframe_duration(CandleTimeframe.MINUTE_5)
+    ten_minutes = timeframe_duration(CandleTimeframe.MINUTE_10)
+    while bucket < derived_end:
+        first = source_by_timestamp.get(bucket)
+        second = source_by_timestamp.get(bucket + five_minutes)
+        if first is not None and second is not None:
+            derived.append(_aggregate_10m_candle(first, second, bucket))
+        bucket += ten_minutes
+
+    validation_report = validate_candles(
+        candles=tuple(derived),
+        timeframe=CandleTimeframe.MINUTE_10,
+        expected_start=derived_start,
+        expected_end=derived_end,
+    )
+    progress = BackfillProgress(
+        page_number=1,
+        requested_since=source.requested_start,
+        provider_row_count=len(source.candles),
+        accepted_completed_count=len(derived),
+        new_unique_completed_count=len(derived),
+        excluded_incomplete_count=source.excluded_incomplete_candle_count,
+        excluded_pagination_overlap_count=0,
+        cumulative_completed_count=len(derived),
+        next_since=derived_end,
+    )
+    return HistoricalSample(
+        provider=source.provider,
+        asset_identifier=source.asset_identifier,
+        quote_currency=source.quote_currency,
+        timeframe=CandleTimeframe.MINUTE_10,
+        requested_start=derived_start,
+        requested_end_exclusive=derived_end,
+        retrieved_at=source.retrieved_at,
+        candles=tuple(derived),
+        validation_report=validation_report,
+        pages_fetched=source.pages_fetched,
+        excluded_incomplete_candle_count=(
+            source.excluded_incomplete_candle_count
+        ),
+        provider_page_limit=source.provider_page_limit,
+        provider_limit_reached=source.provider_limit_reached,
+        pagination_exhausted=source.pagination_exhausted,
+        progress=(progress,),
+        source_timeframe=CandleTimeframe.MINUTE_5,
+        derivation_method=TEN_MINUTE_DERIVATION,
+        source_ingestion_batch_id=source_ingestion_batch_id,
+    )
+
+
+def _aggregate_10m_candle(
+    first: Candle,
+    second: Candle,
+    timestamp: datetime,
+) -> Candle:
+    values = (
+        first.open,
+        first.high,
+        first.low,
+        first.close,
+        first.volume,
+        second.open,
+        second.high,
+        second.low,
+        second.close,
+        second.volume,
+    )
+    if any(value is None for value in values):
+        raise MarketDataProviderError(
+            "Validated 5m source candle contains a missing value."
+        )
+
+    first_open = _required_decimal(first.open)
+    first_high = _required_decimal(first.high)
+    first_low = _required_decimal(first.low)
+    first_volume = _required_decimal(first.volume)
+    second_high = _required_decimal(second.high)
+    second_low = _required_decimal(second.low)
+    second_close = _required_decimal(second.close)
+    second_volume = _required_decimal(second.volume)
+    return Candle(
+        timestamp=timestamp,
+        open=first_open,
+        high=max(first_high, second_high),
+        low=min(first_low, second_low),
+        close=second_close,
+        volume=first_volume + second_volume,
+    )
+
+
+def _required_decimal(value: object) -> Decimal:
+    if not isinstance(value, Decimal):
+        raise MarketDataProviderError(
+            "Validated source candle contains a non-decimal value."
+        )
+    return value

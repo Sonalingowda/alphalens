@@ -53,6 +53,21 @@ class IngestionBatchRecord(Base):
             "insertion_mode IN ('upsert', 'insert_only')",
             name="ck_ingestion_batches_insertion_mode",
         ),
+        CheckConstraint(
+            (
+                "(source_timeframe IS NULL "
+                "AND derivation_method IS NULL "
+                "AND source_ingestion_batch_id IS NULL) "
+                "OR (source_timeframe IS NOT NULL "
+                "AND derivation_method IS NOT NULL "
+                "AND source_ingestion_batch_id IS NOT NULL)"
+            ),
+            name="ck_ingestion_batches_complete_derivation_provenance",
+        ),
+        Index(
+            "ix_ingestion_batches_source_ingestion_batch_id",
+            "source_ingestion_batch_id",
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
@@ -127,6 +142,19 @@ class IngestionBatchRecord(Base):
         nullable=False,
         server_default="[]",
     )
+    source_timeframe: Mapped[str | None] = mapped_column(
+        String(16),
+        nullable=True,
+    )
+    derivation_method: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+    )
+    source_ingestion_batch_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("market_data_ingestion_batches.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
     is_active: Mapped[bool] = mapped_column(
         Boolean,
         nullable=False,
@@ -175,6 +203,18 @@ class CandleRecord(Base):
                 "AT TIME ZONE 'UTC')"
             ),
             name="ck_market_candles_daily_utc_alignment",
+        ),
+        CheckConstraint(
+            (
+                "(timeframe = '5m' AND "
+                "EXTRACT(EPOCH FROM candle_timestamp)::bigint % 300 = 0) "
+                "OR (timeframe = '10m' AND "
+                "EXTRACT(EPOCH FROM candle_timestamp)::bigint % 600 = 0) "
+                "OR (timeframe = '15m' AND "
+                "EXTRACT(EPOCH FROM candle_timestamp)::bigint % 900 = 0) "
+                "OR timeframe NOT IN ('5m', '10m', '15m')"
+            ),
+            name="ck_market_candles_intraday_utc_alignment",
         ),
         Index("ix_market_candles_ingestion_batch_id", "ingestion_batch_id"),
     )
@@ -233,6 +273,19 @@ class FeaturePipelineRunRecord(Base):
             "point_in_time_validated",
             name="ck_feature_pipeline_runs_point_in_time_validated",
         ),
+        CheckConstraint(
+            (
+                "(registry_hash IS NULL "
+                "AND registry_schema_version IS NULL "
+                "AND availability_contract_version IS NULL "
+                "AND registry_snapshot IS NULL) "
+                "OR (char_length(registry_hash) = 64 "
+                "AND registry_schema_version IS NOT NULL "
+                "AND availability_contract_version IS NOT NULL "
+                "AND registry_snapshot IS NOT NULL)"
+            ),
+            name="ck_feature_pipeline_runs_registry_metadata",
+        ),
         Index(
             "ix_feature_pipeline_runs_source_ingestion_batch_id",
             "source_ingestion_batch_id",
@@ -259,6 +312,22 @@ class FeaturePipelineRunRecord(Base):
         nullable=False,
     )
     source_data_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    registry_hash: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+    )
+    registry_schema_version: Mapped[str | None] = mapped_column(
+        String(32),
+        nullable=True,
+    )
+    availability_contract_version: Mapped[str | None] = mapped_column(
+        String(32),
+        nullable=True,
+    )
+    registry_snapshot: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB,
+        nullable=True,
+    )
     point_in_time_validated: Mapped[bool] = mapped_column(
         Boolean,
         nullable=False,
@@ -301,6 +370,22 @@ class EngineeredFeatureRecord(Base):
             ),
             name="ck_engineered_features_daily_utc_alignment",
         ),
+        CheckConstraint(
+            (
+                "(timeframe = '5m' AND available_at = "
+                "candle_timestamp + INTERVAL '5 minutes') "
+                "OR (timeframe = '10m' AND available_at = "
+                "candle_timestamp + INTERVAL '10 minutes') "
+                "OR (timeframe = '15m' AND available_at = "
+                "candle_timestamp + INTERVAL '15 minutes') "
+                "OR (timeframe = '1d' AND "
+                "(available_at IS NULL OR available_at = "
+                "candle_timestamp + INTERVAL '1 day')) "
+                "OR (timeframe NOT IN ('1d', '5m', '10m', '15m') "
+                "AND available_at IS NULL)"
+            ),
+            name="ck_engineered_features_availability",
+        ),
         Index(
             "ix_engineered_features_computation_run_id",
             "computation_run_id",
@@ -323,6 +408,10 @@ class EngineeredFeatureRecord(Base):
         DateTime(timezone=True),
         nullable=False,
     )
+    available_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
     feature_name: Mapped[str] = mapped_column(String(96), nullable=False)
     feature_value: Mapped[Decimal] = mapped_column(
         Numeric(38, 18),
@@ -340,6 +429,80 @@ class EngineeredFeatureRecord(Base):
         nullable=False,
     )
     computed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+
+class FeaturePipelineRunSourceRecord(Base):
+    __tablename__ = "feature_pipeline_run_sources"
+    __table_args__ = (
+        CheckConstraint(
+            "source_candle_count > 0",
+            name="ck_feature_run_sources_positive_count",
+        ),
+        CheckConstraint(
+            "source_range_start <= source_range_end",
+            name="ck_feature_run_sources_valid_range",
+        ),
+        CheckConstraint(
+            "char_length(source_subset_hash) = 64",
+            name="ck_feature_run_sources_hash_length",
+        ),
+        Index(
+            "ix_feature_run_sources_ingestion_batch_id",
+            "ingestion_batch_id",
+        ),
+    )
+
+    feature_run_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("feature_pipeline_runs.id", ondelete="RESTRICT"),
+        primary_key=True,
+    )
+    ingestion_batch_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("market_data_ingestion_batches.id", ondelete="RESTRICT"),
+        primary_key=True,
+    )
+    source_candle_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+    )
+    source_range_start: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+    )
+    source_range_end: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+    )
+    source_subset_hash: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+    )
+    recorded_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+
+class FeaturePipelineRunValueRecord(Base):
+    __tablename__ = "feature_pipeline_run_values"
+
+    feature_run_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("feature_pipeline_runs.id", ondelete="RESTRICT"),
+        primary_key=True,
+    )
+    feature_value_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("engineered_features.id", ondelete="RESTRICT"),
+        primary_key=True,
+    )
+    recorded_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
         server_default=func.now(),

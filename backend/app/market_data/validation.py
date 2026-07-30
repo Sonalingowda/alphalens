@@ -1,7 +1,7 @@
 """Non-mutating validation for normalized candle series."""
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 from app.market_data.models import Candle, CandleTimeframe
@@ -20,7 +20,12 @@ class CandleValidationReport:
     issues: tuple[ValidationIssue, ...]
 
 
-_TIMEFRAME_DURATION = {CandleTimeframe.DAY_1: timedelta(days=1)}
+_TIMEFRAME_DURATION = {
+    CandleTimeframe.MINUTE_5: timedelta(minutes=5),
+    CandleTimeframe.MINUTE_10: timedelta(minutes=10),
+    CandleTimeframe.MINUTE_15: timedelta(minutes=15),
+    CandleTimeframe.DAY_1: timedelta(days=1),
+}
 _REQUIRED_DECIMAL_FIELDS = ("open", "high", "low", "close", "volume")
 
 
@@ -45,6 +50,43 @@ def validate_candles(
                 )
             )
         else:
+            timestamp_is_aware = (
+                timestamp.tzinfo is not None
+                and timestamp.utcoffset() is not None
+            )
+            if not timestamp_is_aware or timestamp.utcoffset() != timedelta(0):
+                issues.append(
+                    ValidationIssue(
+                        code="non_utc_timestamp",
+                        message="Candle timestamp is not canonical UTC.",
+                        timestamp=timestamp,
+                    )
+                )
+            if timestamp_is_aware and not _is_timeframe_aligned(
+                timestamp,
+                timeframe,
+            ):
+                issues.append(
+                    ValidationIssue(
+                        code="misaligned_timestamp",
+                        message=(
+                            "Candle timestamp is not aligned to the "
+                            f"{timeframe.value} UTC boundary."
+                        ),
+                        timestamp=timestamp,
+                    )
+                )
+            if (
+                timestamp_is_aware
+                and timestamp + _TIMEFRAME_DURATION[timeframe] > expected_end
+            ):
+                issues.append(
+                    ValidationIssue(
+                        code="incomplete_candle",
+                        message="Candle interval extends beyond the completed range.",
+                        timestamp=timestamp,
+                    )
+                )
             if timestamp in seen_timestamps:
                 issues.append(
                     ValidationIssue(
@@ -53,7 +95,11 @@ def validate_candles(
                         timestamp=timestamp,
                     )
                 )
-            if previous_timestamp is not None and timestamp <= previous_timestamp:
+            if (
+                timestamp_is_aware
+                and previous_timestamp is not None
+                and timestamp <= previous_timestamp
+            ):
                 issues.append(
                     ValidationIssue(
                         code="non_chronological_timestamp",
@@ -62,7 +108,8 @@ def validate_candles(
                     )
                 )
             seen_timestamps.add(timestamp)
-            previous_timestamp = timestamp
+            if timestamp_is_aware:
+                previous_timestamp = timestamp
 
         missing_fields = [
             field_name
@@ -153,3 +200,31 @@ def _required_decimal(value: Decimal | None) -> Decimal:
     if value is None:
         raise ValueError("Validated candle field is unexpectedly missing.")
     return value
+
+
+def timeframe_duration(timeframe: CandleTimeframe) -> timedelta:
+    return _TIMEFRAME_DURATION[timeframe]
+
+
+def floor_timeframe_boundary(
+    timestamp: datetime,
+    timeframe: CandleTimeframe,
+) -> datetime:
+    if timestamp.tzinfo is None or timestamp.utcoffset() is None:
+        raise ValueError("Timeframe boundaries require a timezone-aware timestamp.")
+    utc_timestamp = timestamp.astimezone(timezone.utc)
+    duration_seconds = int(_TIMEFRAME_DURATION[timeframe].total_seconds())
+    floored_seconds = int(utc_timestamp.timestamp()) // duration_seconds
+    return datetime.fromtimestamp(
+        floored_seconds * duration_seconds,
+        tz=timezone.utc,
+    )
+
+
+def _is_timeframe_aligned(
+    timestamp: datetime,
+    timeframe: CandleTimeframe,
+) -> bool:
+    if timestamp.tzinfo is None or timestamp.utcoffset() is None:
+        return False
+    return timestamp == floor_timeframe_boundary(timestamp, timeframe)

@@ -28,6 +28,7 @@ from app.persistence.features import (
     get_stored_feature_summary,
 )
 from app.persistence.experiments import run_and_persist_baseline_experiment
+from app.persistence.intraday import ingest_btc_usd_intraday
 from app.persistence.targets import generate_and_persist_forward_log_returns
 from app.persistence.validation import (
     ValidationRunAudit,
@@ -197,6 +198,138 @@ async def read_stored_market_data_history() -> dict[str, object]:
         ),
         "latest_validation_issues": summary.latest_validation_issues,
         "ingestion_batch_count": summary.ingestion_batch_count,
+    }
+
+
+@app.post("/market-data/intraday/ingest")
+async def ingest_intraday_market_data() -> dict[str, object]:
+    try:
+        result = await ingest_btc_usd_intraday(
+            market_data_provider,
+            session_factory,
+        )
+    except MarketDataProviderError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except SQLAlchemyError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Intraday market data persistence is unavailable.",
+        ) from exc
+
+    return {
+        "provider": "kraken",
+        "asset_identifier": "BTC",
+        "quote_currency": "USD",
+        "timeframes": [
+            {
+                "timeframe": item.sample.timeframe.value,
+                "ingestion_batch_id": item.persistence.ingestion_batch_id,
+                "source_timeframe": (
+                    item.sample.source_timeframe.value
+                    if item.sample.source_timeframe is not None
+                    else None
+                ),
+                "source_ingestion_batch_id": (
+                    item.sample.source_ingestion_batch_id
+                ),
+                "derivation_method": item.sample.derivation_method,
+                "validation_passed": (
+                    item.persistence.validation_passed
+                ),
+                "validation_issues": [
+                    {
+                        "code": issue.code,
+                        "message": issue.message,
+                        "timestamp": issue.timestamp,
+                    }
+                    for issue in item.sample.validation_report.issues
+                ],
+                "provider_row_count": (
+                    item.sample.progress[0].provider_row_count
+                    if item.sample.progress
+                    else len(item.sample.candles)
+                ),
+                "completed_candle_count": len(item.sample.candles),
+                "excluded_incomplete_candle_count": (
+                    item.sample.excluded_incomplete_candle_count
+                ),
+                "inserted_candle_count": (
+                    item.persistence.persisted_candle_count
+                ),
+                "stored_candle_count": (
+                    item.persistence.stored_candle_count
+                ),
+                "ingestion_batch_count": (
+                    item.persistence.ingestion_batch_count
+                ),
+                "available_range": {
+                    "start": (
+                        item.sample.candles[0].timestamp
+                        if item.sample.candles
+                        else None
+                    ),
+                    "end": (
+                        item.sample.candles[-1].timestamp
+                        if item.sample.candles
+                        else None
+                    ),
+                },
+                "provider_page_limit": item.sample.provider_page_limit,
+                "provider_limit_reached": (
+                    item.sample.provider_limit_reached
+                ),
+            }
+            for item in result.items
+        ],
+    }
+
+
+@app.get("/market-data/intraday/stored")
+async def read_stored_intraday_market_data() -> dict[str, object]:
+    try:
+        async with session_factory() as session:
+            summaries = [
+                (
+                    timeframe,
+                    await get_stored_candle_summary(
+                        session,
+                        timeframe=timeframe,
+                    ),
+                )
+                for timeframe in ("5m", "10m", "15m")
+            ]
+    except SQLAlchemyError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Stored intraday market data is unavailable.",
+        ) from exc
+
+    return {
+        "asset_identifier": "BTC",
+        "quote_currency": "USD",
+        "timeframes": [
+            {
+                "timeframe": timeframe,
+                "row_count": summary.row_count,
+                "date_range": {
+                    "start": summary.date_range_start,
+                    "end": summary.date_range_end,
+                },
+                "latest_ingestion_batch_id": (
+                    summary.latest_ingestion_batch_id
+                ),
+                "latest_validation_passed": (
+                    summary.latest_validation_passed
+                ),
+                "latest_validation_issues": (
+                    summary.latest_validation_issues
+                ),
+                "ingestion_batch_count": (
+                    summary.ingestion_batch_count
+                ),
+            }
+            for timeframe, summary in summaries
+        ],
     }
 
 

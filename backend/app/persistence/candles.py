@@ -40,6 +40,16 @@ async def persist_historical_sample(
     session: AsyncSession,
     sample: HistoricalSample,
 ) -> CandlePersistenceResult:
+    derivation_metadata = (
+        sample.source_timeframe,
+        sample.derivation_method,
+        sample.source_ingestion_batch_id,
+    )
+    if any(value is not None for value in derivation_metadata) and not all(
+        value is not None for value in derivation_metadata
+    ):
+        raise ValueError("Derived candle provenance must be complete.")
+
     batch_id = uuid4()
     validation_issues = [
         {
@@ -117,6 +127,15 @@ async def persist_historical_sample(
                 ),
                 insertion_mode="insert_only",
                 progress_events=progress_events,
+                source_timeframe=(
+                    sample.source_timeframe.value
+                    if sample.source_timeframe is not None
+                    else None
+                ),
+                derivation_method=sample.derivation_method,
+                source_ingestion_batch_id=(
+                    sample.source_ingestion_batch_id
+                ),
             )
         )
         await session.flush()
@@ -166,11 +185,14 @@ async def persist_historical_sample(
 
 async def get_stored_candle_summary(
     session: AsyncSession,
+    asset_identifier: str = "BTC",
+    quote_currency: str = "USD",
+    timeframe: str = "1d",
 ) -> StoredCandleSummary:
     market_filters = (
-        CandleRecord.asset_identifier == "BTC",
-        CandleRecord.quote_currency == "USD",
-        CandleRecord.timeframe == "1d",
+        CandleRecord.asset_identifier == asset_identifier,
+        CandleRecord.quote_currency == quote_currency,
+        CandleRecord.timeframe == timeframe,
     )
     row_count, date_range_start, date_range_end = (
         await session.execute(
@@ -185,9 +207,9 @@ async def get_stored_candle_summary(
         await session.execute(
             select(IngestionBatchRecord)
             .where(
-                IngestionBatchRecord.asset_identifier == "BTC",
-                IngestionBatchRecord.quote_currency == "USD",
-                IngestionBatchRecord.timeframe == "1d",
+                IngestionBatchRecord.asset_identifier == asset_identifier,
+                IngestionBatchRecord.quote_currency == quote_currency,
+                IngestionBatchRecord.timeframe == timeframe,
             )
             .order_by(
                 IngestionBatchRecord.retrieved_at.desc(),
@@ -198,9 +220,9 @@ async def get_stored_candle_summary(
     ).scalar_one_or_none()
     batch_count = await session.scalar(
         select(func.count(IngestionBatchRecord.id)).where(
-            IngestionBatchRecord.asset_identifier == "BTC",
-            IngestionBatchRecord.quote_currency == "USD",
-            IngestionBatchRecord.timeframe == "1d",
+            IngestionBatchRecord.asset_identifier == asset_identifier,
+            IngestionBatchRecord.quote_currency == quote_currency,
+            IngestionBatchRecord.timeframe == timeframe,
         )
     )
 

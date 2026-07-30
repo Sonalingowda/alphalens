@@ -17,7 +17,11 @@ from app.market_data.provider import MarketDataProviderError
 
 class KrakenMarketDataProvider:
     provider_name = "kraken"
-    _interval_minutes = {CandleTimeframe.DAY_1: 1440}
+    _interval_minutes = {
+        CandleTimeframe.MINUTE_5: 5,
+        CandleTimeframe.MINUTE_15: 15,
+        CandleTimeframe.DAY_1: 1440,
+    }
 
     def __init__(self, base_url: str, timeout_seconds: float) -> None:
         self._base_url = base_url.rstrip("/")
