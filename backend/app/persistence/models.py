@@ -68,6 +68,10 @@ class IngestionBatchRecord(Base):
             "ix_ingestion_batches_source_ingestion_batch_id",
             "source_ingestion_batch_id",
         ),
+        Index(
+            "ix_ingestion_batches_acquisition_attempt_id",
+            "acquisition_attempt_id",
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
@@ -153,6 +157,11 @@ class IngestionBatchRecord(Base):
     source_ingestion_batch_id: Mapped[UUID | None] = mapped_column(
         Uuid(as_uuid=True),
         ForeignKey("market_data_ingestion_batches.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    acquisition_attempt_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("historical_acquisition_attempts.id", ondelete="RESTRICT"),
         nullable=True,
     )
     is_active: Mapped[bool] = mapped_column(
@@ -444,6 +453,167 @@ class HistoricalCoverageSnapshotBatchRecord(Base):
         String(64),
         nullable=False,
     )
+
+
+class HistoricalAcquisitionAttemptRecord(Base):
+    """Immutable declaration of one bounded native acquisition attempt."""
+
+    __tablename__ = "historical_acquisition_attempts"
+    __table_args__ = (
+        CheckConstraint(
+            "timeframe IN ('5m', '15m')",
+            name="ck_historical_acquisition_attempts_timeframe",
+        ),
+        CheckConstraint(
+            "requested_start < requested_end_exclusive",
+            name="ck_historical_acquisition_attempts_range",
+        ),
+        CheckConstraint(
+            "char_length(policy_hash) = 64 AND "
+            "char_length(configuration_hash) = 64 AND "
+            "char_length(attempt_hash) = 64",
+            name="ck_historical_acquisition_attempts_hashes",
+        ),
+        CheckConstraint("immutable", name="ck_historical_acquisition_attempts_immutable"),
+        Index(
+            "ix_historical_acquisition_attempts_scope",
+            "asset_identifier",
+            "quote_currency",
+            "timeframe",
+            "started_at",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    endpoint_identity: Mapped[str] = mapped_column(String(96), nullable=False)
+    asset_identifier: Mapped[str] = mapped_column(String(32), nullable=False)
+    quote_currency: Mapped[str] = mapped_column(String(16), nullable=False)
+    timeframe: Mapped[str] = mapped_column(String(16), nullable=False)
+    requested_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    requested_end_exclusive: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    policy_identifier: Mapped[str] = mapped_column(String(96), nullable=False)
+    policy_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    policy_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    code_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    configuration_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    attempt_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    immutable: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class HistoricalAcquisitionOutcomeRecord(Base):
+    """Append-only terminal outcome for an acquisition attempt."""
+
+    __tablename__ = "historical_acquisition_outcomes"
+    __table_args__ = (
+        CheckConstraint(
+            "terminal_reason IN ('SUCCESS_NEW_INSERTS', 'SUCCESS_REUSE_ONLY', "
+            "'PROVIDER_HISTORY_EXHAUSTED', 'PROVIDER_FAILED', "
+            "'VALIDATION_FAILED', 'PERSISTENCE_FAILED', "
+            "'INTERRUPTED_BEFORE_PERSISTENCE')",
+            name="ck_historical_acquisition_outcomes_reason",
+        ),
+        CheckConstraint(
+            "((terminal_reason IN ('SUCCESS_NEW_INSERTS', "
+            "'SUCCESS_REUSE_ONLY', 'PROVIDER_HISTORY_EXHAUSTED') "
+            "AND ingestion_batch_id IS NOT NULL AND failure_class IS NULL "
+            "AND failure_summary IS NULL) OR "
+            "(terminal_reason IN ('PROVIDER_FAILED', 'VALIDATION_FAILED', "
+            "'PERSISTENCE_FAILED', 'INTERRUPTED_BEFORE_PERSISTENCE') "
+            "AND ingestion_batch_id IS NULL AND failure_class IS NOT NULL))",
+            name="ck_historical_acquisition_outcomes_evidence",
+        ),
+        CheckConstraint("immutable", name="ck_historical_acquisition_outcomes_immutable"),
+    )
+
+    attempt_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("historical_acquisition_attempts.id", ondelete="RESTRICT"),
+        primary_key=True,
+    )
+    ingestion_batch_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("market_data_ingestion_batches.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    terminal_reason: Mapped[str] = mapped_column(String(64), nullable=False)
+    failure_class: Mapped[str | None] = mapped_column(String(96), nullable=True)
+    failure_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    completed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    immutable: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
+
+
+class HistoricalAcquisitionCheckpointRecord(Base):
+    """Immutable verified progress for one committed provider window."""
+
+    __tablename__ = "historical_acquisition_checkpoints"
+    __table_args__ = (
+        CheckConstraint("timeframe IN ('5m', '15m')", name="ck_historical_acquisition_checkpoints_timeframe"),
+        CheckConstraint(
+            "provider_row_count >= 0 AND accepted_count > 0 AND "
+            "excluded_incomplete_count >= 0 AND reused_count >= 0 AND "
+            "inserted_count >= 0 AND conflict_count = 0 AND "
+            "accepted_count = reused_count + inserted_count",
+            name="ck_historical_acquisition_checkpoints_counts",
+        ),
+        CheckConstraint(
+            "char_length(configuration_hash) = 64 AND "
+            "char_length(source_data_hash) = 64 AND "
+            "char_length(progress_hash) = 64 AND char_length(checkpoint_hash) = 64",
+            name="ck_historical_acquisition_checkpoints_hashes",
+        ),
+        CheckConstraint(
+            "terminal_reason IN ('SUCCESS_NEW_INSERTS', "
+            "'SUCCESS_REUSE_ONLY', 'PROVIDER_HISTORY_EXHAUSTED')",
+            name="ck_historical_acquisition_checkpoints_reason",
+        ),
+        CheckConstraint("validation_passed", name="ck_historical_acquisition_checkpoints_validation"),
+        CheckConstraint("immutable", name="ck_historical_acquisition_checkpoints_immutable"),
+        UniqueConstraint("attempt_id", name="uq_historical_acquisition_checkpoints_attempt"),
+        Index("ix_historical_acquisition_checkpoints_scope", "timeframe", "created_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    attempt_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("historical_acquisition_attempts.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    predecessor_checkpoint_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("historical_acquisition_checkpoints.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    ingestion_batch_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("market_data_ingestion_batches.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    schema_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    hash_schema_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    timeframe: Mapped[str] = mapped_column(String(16), nullable=False)
+    requested_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    requested_end_exclusive: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    provider_available_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    provider_available_end: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    provider_cursor: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    provider_row_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    accepted_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    excluded_incomplete_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    reused_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    inserted_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    conflict_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    validation_passed: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    provider_limit_reached: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    terminal_reason: Mapped[str] = mapped_column(String(64), nullable=False)
+    configuration_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_data_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    progress_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    checkpoint_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    immutable: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 
 class FeaturePipelineRunRecord(Base):

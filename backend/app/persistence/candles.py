@@ -39,6 +39,7 @@ class StoredCandleSummary:
 async def persist_historical_sample(
     session: AsyncSession,
     sample: HistoricalSample,
+    acquisition_attempt_id: UUID | None = None,
 ) -> CandlePersistenceResult:
     derivation_metadata = (
         sample.source_timeframe,
@@ -136,6 +137,7 @@ async def persist_historical_sample(
                 source_ingestion_batch_id=(
                     sample.source_ingestion_batch_id
                 ),
+                acquisition_attempt_id=acquisition_attempt_id,
             )
         )
         await session.flush()
