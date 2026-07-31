@@ -784,6 +784,74 @@ class HistoricalQualityTimeframeRecord(Base):
     result_hash: Mapped[str] = mapped_column(String(64), nullable=False)
 
 
+class HistoricalExpansionReadinessReportRecord(Base):
+    """Immutable Phase-1 historical expansion readiness baseline."""
+
+    __tablename__ = "historical_expansion_readiness_reports"
+    __table_args__ = (
+        CheckConstraint(
+            "asset_identifier = 'BTC' AND quote_currency = 'USD'",
+            name="ck_historical_readiness_scope",
+        ),
+        CheckConstraint(
+            "readiness_status IN ("
+            "'READY_FOR_DOWNSTREAM_ADEQUACY_EVALUATION', 'BLOCKED')",
+            name="ck_historical_readiness_status",
+        ),
+        CheckConstraint(
+            "(readiness_status = 'READY_FOR_DOWNSTREAM_ADEQUACY_EVALUATION' "
+            "AND acquisition_level_eligible AND blocker_count = 0) OR "
+            "(readiness_status = 'BLOCKED' AND NOT acquisition_level_eligible "
+            "AND blocker_count > 0)",
+            name="ck_historical_readiness_status_consistency",
+        ),
+        CheckConstraint(
+            "char_length(source_inspection_hash) = 64 AND "
+            "(source_synchronization_hash IS NULL OR "
+            "char_length(source_synchronization_hash) = 64) AND "
+            "(source_quality_hash IS NULL OR "
+            "char_length(source_quality_hash) = 64) AND "
+            "char_length(source_provenance_hash) = 64 AND "
+            "char_length(result_hash) = 64",
+            name="ck_historical_readiness_hashes",
+        ),
+        CheckConstraint("immutable", name="ck_historical_readiness_immutable"),
+        UniqueConstraint(
+            "result_hash",
+            name="uq_historical_readiness_result_hash",
+        ),
+        Index("ix_historical_readiness_as_of", "as_of"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    schema_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    hash_schema_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    asset_identifier: Mapped[str] = mapped_column(String(32), nullable=False)
+    quote_currency: Mapped[str] = mapped_column(String(16), nullable=False)
+    as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    readiness_status: Mapped[str] = mapped_column(String(64), nullable=False)
+    acquisition_level_eligible: Mapped[bool] = mapped_column(
+        Boolean, nullable=False
+    )
+    blocker_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    source_inspection_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_synchronization_hash: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
+    source_quality_hash: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
+    source_provenance_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    canonical_json: Mapped[str] = mapped_column(Text, nullable=False)
+    result_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    immutable: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="true"
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
 class HistoricalAcquisitionAttemptRecord(Base):
     """Immutable declaration of one bounded native acquisition attempt."""
 

@@ -451,6 +451,11 @@ def _policy_hash(policy: AcquisitionAdequacyPolicy) -> str:
     )
 
 
+def approved_acquisition_adequacy_policy_hash() -> str:
+    """Return the canonical hash of the approved acquisition-level policy."""
+    return _policy_hash(APPROVED_ACQUISITION_ADEQUACY_POLICY)
+
+
 def _ratio(observed: int, expected: int) -> Decimal:
     if observed < 0 or expected <= 0 or observed > expected:
         raise HistoricalQualityError("Coverage counts are invalid.")
