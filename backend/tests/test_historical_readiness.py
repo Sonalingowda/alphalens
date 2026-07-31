@@ -2,6 +2,7 @@
 
 from dataclasses import replace
 from datetime import datetime, timezone
+from hashlib import sha256
 import importlib.util
 import inspect
 import json
@@ -174,6 +175,50 @@ class HistoricalReadinessTests(unittest.TestCase):
 
         with self.assertRaises(HistoricalReadinessError):
             verify_historical_expansion_readiness_report(tampered)
+
+    def test_internally_rehashed_manifest_divergence_is_detected(self) -> None:
+        report = build_historical_expansion_readiness_report(_inspection())
+        payload = json.loads(report.canonical_json)
+        payload["source_evidence"]["source_membership_manifest_hash"] = "f" * 64
+        payload["source_provenance_hash"] = _canonical_hash(
+            {
+                "hash_schema_version": payload["hash_schema_version"],
+                "source_evidence": payload["source_evidence"],
+            }
+        )
+        canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        tampered = replace(
+            report,
+            canonical_json=canonical,
+            result_hash=sha256(canonical.encode("utf-8")).hexdigest(),
+        )
+
+        with self.assertRaisesRegex(HistoricalReadinessError, "membership manifest"):
+            verify_historical_expansion_readiness_report(tampered)
+
+    def test_internally_rehashed_check_divergence_is_detected(self) -> None:
+        report = build_historical_expansion_readiness_report(_inspection())
+        payload = json.loads(report.canonical_json)
+        payload["checks"][0]["status"] = "BLOCKED"
+        canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        tampered = replace(
+            report,
+            canonical_json=canonical,
+            result_hash=sha256(canonical.encode("utf-8")).hexdigest(),
+        )
+
+        with self.assertRaisesRegex(HistoricalReadinessError, "check evidence"):
+            verify_historical_expansion_readiness_report(tampered)
+
+    def test_reversed_provider_availability_range_is_rejected(self) -> None:
+        source = _inspection().response()
+        source.pop("result_hash")
+        source["acquisition"][0]["checkpoint"]["provider_available_start"] = (
+            "2026-08-02T12:00:00.000000Z"
+        )
+
+        with self.assertRaisesRegex(HistoricalReadinessError, "provider range"):
+            build_historical_expansion_readiness_report(_rebuild(source))
 
 
 class HistoricalReadinessPersistenceTests(unittest.IsolatedAsyncioTestCase):
@@ -501,3 +546,8 @@ def _derivation(candle_id: int, index: int) -> dict:
             {"ordinal": 1, "candle_hash": _HASHES[4 + index]},
         ],
     }
+
+
+def _canonical_hash(value: object) -> str:
+    canonical = json.dumps(value, sort_keys=True, separators=(",", ":"))
+    return sha256(canonical.encode("utf-8")).hexdigest()

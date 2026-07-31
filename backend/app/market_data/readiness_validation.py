@@ -82,13 +82,17 @@ def _validate_acquisition(value: Any, blockers: list[str]) -> list[dict[str, Any
                 and checkpoint.get("validation_passed") is True,
                 "Checkpoint acquisition counts do not verify.",
             )
-            _parse_timestamp(
+            provider_start = _parse_timestamp(
                 checkpoint.get("provider_available_start"),
                 "Checkpoint provider start",
             )
-            _parse_timestamp(
+            provider_end = _parse_timestamp(
                 checkpoint.get("provider_available_end"),
                 "Checkpoint provider end",
+            )
+            _require(
+                provider_start <= provider_end,
+                "Checkpoint provider range is invalid.",
             )
         result.append(
             {

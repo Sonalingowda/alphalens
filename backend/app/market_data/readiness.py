@@ -36,6 +36,17 @@ READINESS_SCHEMA_VERSION = "1.0.0"
 READINESS_HASH_SCHEMA_VERSION = "1.0.0"
 READY_STATUS = "READY_FOR_DOWNSTREAM_ADEQUACY_EVALUATION"
 BLOCKED_STATUS = "BLOCKED"
+_CHECK_CONTRACT = (
+    ("acquisition_evidence", "ACQUISITION_"),
+    ("source_conflict_state", "UNRESOLVED_SOURCE_"),
+    ("synchronization_evidence", "SYNCHRONIZATION_"),
+    ("historical_quality_evidence", "QUALITY_"),
+    ("policy_compatibility", "POLICY_"),
+    ("coverage_completeness", "COVERAGE_"),
+    ("provenance_traversal", "PROVENANCE_"),
+)
+
+
 @dataclass(frozen=True, slots=True)
 class HistoricalExpansionReadinessReport:
     """Content-addressed immutable Phase-1 readiness report."""
@@ -97,19 +108,16 @@ def build_historical_expansion_readiness_report(
 
     membership_manifest = _membership_manifest(synchronization)
     checks = [
-        _check("acquisition_evidence", blockers, "ACQUISITION_"),
-        _check("source_conflict_state", blockers, "UNRESOLVED_SOURCE_"),
-        _check("synchronization_evidence", blockers, "SYNCHRONIZATION_"),
-        _check("historical_quality_evidence", blockers, "QUALITY_"),
-        _check("policy_compatibility", blockers, "POLICY_"),
-        _check("coverage_completeness", blockers, "COVERAGE_"),
-        _check("provenance_traversal", blockers, "PROVENANCE_"),
+        _check(identifier, blockers, prefix)
+        for identifier, prefix in _CHECK_CONTRACT
+    ]
+    checks.append(
         {
             "identifier": "deterministic_reproducibility",
             "status": "VERIFIED",
             "blockers": [],
-        },
-    ]
+        }
+    )
     ordered_blockers = tuple(dict.fromkeys(blockers))
     status = READY_STATUS if not ordered_blockers else BLOCKED_STATUS
     source_evidence = {
@@ -182,6 +190,8 @@ def verify_historical_expansion_readiness_report(
         isinstance(item, str) for item in blockers
     ):
         raise HistoricalReadinessError("Readiness blockers are invalid.")
+    if blockers != list(dict.fromkeys(blockers)):
+        raise HistoricalReadinessError("Readiness blockers are duplicated.")
     expected_status = READY_STATUS if not blockers else BLOCKED_STATUS
     if (
         status != expected_status
@@ -244,6 +254,37 @@ def verify_historical_expansion_readiness_report(
         or manifest.get("result_hash") != expected_manifest_hash
     ):
         raise HistoricalReadinessError("Source-membership manifest does not verify.")
+    if source.get("source_membership_manifest_hash") != manifest.get("result_hash"):
+        raise HistoricalReadinessError(
+            "Source evidence does not reference the verified membership manifest."
+        )
+    checks = payload.get("checks")
+    _require(
+        isinstance(checks, list) and len(checks) == len(_CHECK_CONTRACT) + 1,
+        "Readiness checks are invalid.",
+    )
+    for check, (identifier, prefix) in zip(
+        checks[: len(_CHECK_CONTRACT)],
+        _CHECK_CONTRACT,
+        strict=True,
+    ):
+        related = [item for item in blockers if item.startswith(prefix)]
+        _require(
+            isinstance(check, dict)
+            and check.get("identifier") == identifier
+            and check.get("blockers") == related
+            and check.get("status") == ("BLOCKED" if related else "VERIFIED"),
+            "Readiness check evidence is inconsistent.",
+        )
+    _require(
+        checks[-1]
+        == {
+            "identifier": "deterministic_reproducibility",
+            "status": "VERIFIED",
+            "blockers": [],
+        },
+        "Readiness reproducibility check is invalid.",
+    )
     _require(
         [item.get("timeframe") for item in payload["timeframes"]]
         in ([], list(_TIMEFRAMES)),
@@ -254,6 +295,6 @@ def verify_historical_expansion_readiness_report(
             source.get("synchronization_result_hash") is not None
             and source.get("quality_result_hash") is not None
             and len(payload["timeframes"]) == 3
-            and all(item.get("status") == "VERIFIED" for item in payload["checks"]),
+            and all(item.get("status") == "VERIFIED" for item in checks),
             "Eligible readiness evidence is incomplete.",
         )
