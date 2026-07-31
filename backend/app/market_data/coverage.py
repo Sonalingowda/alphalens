@@ -58,6 +58,9 @@ class CoverageBatchEvidence:
     source_timeframe: CandleTimeframe | None = None
     derivation_method: str | None = None
     source_ingestion_batch_id: UUID | None = None
+    provider_limit_reached: bool = False
+    available_range_start: datetime | None = None
+    available_range_end: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)

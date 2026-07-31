@@ -43,6 +43,7 @@ async def load_historical_coverage_snapshot(
     timeframe: CandleTimeframe,
     *,
     as_of: datetime | None = None,
+    report_unresolved_conflicts: bool = False,
 ) -> HistoricalCoverageSnapshot:
     """Load canonical BTC/USD evidence and construct its coverage snapshot."""
     if timeframe not in {
@@ -60,7 +61,7 @@ async def load_historical_coverage_snapshot(
         timeframe,
         available_by=cutoff,
     )
-    if conflicts:
+    if conflicts and not report_unresolved_conflicts:
         raise HistoricalCoverageError(
             "Unresolved source conflicts block a new coverage snapshot."
         )
@@ -230,6 +231,17 @@ def _batch_evidence(record: IngestionBatchRecord) -> CoverageBatchEvidence:
         source_timeframe=source_timeframe,
         derivation_method=record.derivation_method,
         source_ingestion_batch_id=record.source_ingestion_batch_id,
+        provider_limit_reached=record.provider_limit_reached,
+        available_range_start=(
+            _utc(record.available_range_start)
+            if record.available_range_start is not None
+            else None
+        ),
+        available_range_end=(
+            _utc(record.available_range_end)
+            if record.available_range_end is not None
+            else None
+        ),
     )
 
 

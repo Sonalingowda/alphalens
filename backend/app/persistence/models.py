@@ -627,6 +627,163 @@ class SynchronizedCoverageSnapshotRecord(Base):
     )
 
 
+class HistoricalQualityReportRecord(Base):
+    """Immutable three-timeframe freshness and acquisition adequacy report."""
+
+    __tablename__ = "historical_quality_reports"
+    __table_args__ = (
+        CheckConstraint(
+            "freshness_policy_status = 'POLICY_UNAVAILABLE'",
+            name="ck_historical_quality_freshness_policy",
+        ),
+        CheckConstraint(
+            "NOT publication_allowed",
+            name="ck_historical_quality_publication_disabled",
+        ),
+        CheckConstraint(
+            "char_length(acquisition_policy_hash) = 64 AND "
+            "char_length(source_provenance_hash) = 64 AND "
+            "char_length(result_hash) = 64",
+            name="ck_historical_quality_hashes",
+        ),
+        CheckConstraint("immutable", name="ck_historical_quality_immutable"),
+        UniqueConstraint(
+            "result_hash",
+            name="uq_historical_quality_result_hash",
+        ),
+        Index("ix_historical_quality_as_of", "as_of"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    schema_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    hash_schema_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    acquisition_policy_identifier: Mapped[str] = mapped_column(
+        String(96), nullable=False
+    )
+    acquisition_policy_version: Mapped[str] = mapped_column(
+        String(32), nullable=False
+    )
+    acquisition_policy_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_policy_identifier: Mapped[str] = mapped_column(String(96), nullable=False)
+    source_policy_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    freshness_policy_status: Mapped[str] = mapped_column(String(32), nullable=False)
+    publication_allowed: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    source_provenance_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    result_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    immutable: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="true"
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class HistoricalQualityTimeframeRecord(Base):
+    """Independent immutable quality evidence for one report timeframe."""
+
+    __tablename__ = "historical_quality_timeframes"
+    __table_args__ = (
+        CheckConstraint(
+            "timeframe IN ('5m', '10m', '15m')",
+            name="ck_historical_quality_timeframes_scope",
+        ),
+        CheckConstraint(
+            "adequacy_status IN ('ADEQUATE', 'INADEQUATE', "
+            "'SOURCE_UNAVAILABLE', 'UNAVAILABLE')",
+            name="ck_historical_quality_timeframes_status",
+        ),
+        CheckConstraint(
+            "acquisition_outcome IN ("
+            "'ADEQUATE_FOR_DOWNSTREAM_ADEQUACY_EVALUATION', "
+            "'INADEQUATE_COVERAGE', 'INADEQUATE_CONTINUITY', "
+            "'UNRESOLVED_CONFLICT', 'INTEGRITY_FAILURE', "
+            "'SOURCE_UNAVAILABLE')",
+            name="ck_historical_quality_timeframes_outcome",
+        ),
+        CheckConstraint(
+            "freshness_status = 'POLICY_UNAVAILABLE'",
+            name="ck_historical_quality_timeframes_freshness",
+        ),
+        CheckConstraint(
+            "elapsed_history_seconds >= 0 AND expected_candle_count >= 0 "
+            "AND observed_candle_count >= 0 AND gap_count >= 0 "
+            "AND unresolved_conflict_count >= 0 "
+            "AND coverage_ratio >= 0 AND coverage_ratio <= 1",
+            name="ck_historical_quality_timeframes_measurements",
+        ),
+        CheckConstraint(
+            "char_length(result_hash) = 64 AND "
+            "(source_snapshot_result_hash IS NULL OR "
+            "char_length(source_snapshot_result_hash) = 64) AND "
+            "(source_provenance_hash IS NULL OR "
+            "char_length(source_provenance_hash) = 64)",
+            name="ck_historical_quality_timeframes_hashes",
+        ),
+        Index(
+            "ix_historical_quality_timeframes_snapshot_id",
+            "source_snapshot_id",
+        ),
+    )
+
+    report_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("historical_quality_reports.id", ondelete="RESTRICT"),
+        primary_key=True,
+    )
+    timeframe: Mapped[str] = mapped_column(String(16), primary_key=True)
+    adequacy_status: Mapped[str] = mapped_column(String(32), nullable=False)
+    acquisition_outcome: Mapped[str] = mapped_column(String(64), nullable=False)
+    freshness_status: Mapped[str] = mapped_column(String(32), nullable=False)
+    source_snapshot_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("historical_coverage_snapshots.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    source_snapshot_result_hash: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
+    source_provenance_hash: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
+    first_completed_timestamp: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_completed_timestamp: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    elapsed_history_seconds: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    expected_candle_count: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    observed_candle_count: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    gap_count: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    gap_timestamps: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+    coverage_ratio: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
+    provider_limited_start: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    expected_latest_completed_timestamp: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    latest_canonical_completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    canonical_lag_seconds: Mapped[int | None] = mapped_column(
+        BigInteger, nullable=True
+    )
+    latest_retrieved_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    retrieval_age_seconds: Mapped[int | None] = mapped_column(
+        BigInteger, nullable=True
+    )
+    unresolved_conflict_count: Mapped[int] = mapped_column(
+        Integer, nullable=False
+    )
+    validation_verified: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    provenance_verified: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    result_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+
+
 class HistoricalAcquisitionAttemptRecord(Base):
     """Immutable declaration of one bounded native acquisition attempt."""
 
