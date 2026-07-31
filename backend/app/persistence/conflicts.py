@@ -111,6 +111,7 @@ async def unresolved_source_conflicts(
     *,
     range_start: datetime | None = None,
     range_end: datetime | None = None,
+    available_by: datetime | None = None,
 ) -> tuple[SourceConflictEvidence, ...]:
     statement = select(SourceConflictRecord).where(
         SourceConflictRecord.asset_identifier == "BTC",
@@ -123,6 +124,8 @@ async def unresolved_source_conflicts(
         )
     if range_end is not None:
         statement = statement.where(SourceConflictRecord.candle_timestamp <= range_end)
+    if available_by is not None:
+        statement = statement.where(SourceConflictRecord.available_at <= available_by)
     records = tuple(
         (
             await session.scalars(

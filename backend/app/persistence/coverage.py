@@ -17,6 +17,7 @@ from app.market_data.coverage import (
     verify_historical_coverage_snapshot,
 )
 from app.market_data.models import Candle, CandleTimeframe
+from app.market_data.validation import timeframe_duration
 from app.persistence.models import (
     CandleRecord,
     HistoricalCoverageSnapshotBatchRecord,
@@ -40,6 +41,8 @@ class HistoricalCoveragePersistenceResult:
 async def load_historical_coverage_snapshot(
     session: AsyncSession,
     timeframe: CandleTimeframe,
+    *,
+    as_of: datetime | None = None,
 ) -> HistoricalCoverageSnapshot:
     """Load canonical BTC/USD evidence and construct its coverage snapshot."""
     if timeframe not in {
@@ -51,25 +54,39 @@ async def load_historical_coverage_snapshot(
             "Historical coverage supports only 5m, 10m, and 15m."
         )
 
-    conflicts = await unresolved_source_conflicts(session, timeframe)
+    cutoff = _utc(as_of) if as_of is not None else None
+    conflicts = await unresolved_source_conflicts(
+        session,
+        timeframe,
+        available_by=cutoff,
+    )
     if conflicts:
         raise HistoricalCoverageError(
             "Unresolved source conflicts block a new coverage snapshot."
         )
 
+    statement = (
+        select(CandleRecord, IngestionBatchRecord)
+        .join(
+            IngestionBatchRecord,
+            IngestionBatchRecord.id == CandleRecord.ingestion_batch_id,
+        )
+        .where(
+            CandleRecord.asset_identifier == "BTC",
+            CandleRecord.quote_currency == "USD",
+            CandleRecord.timeframe == timeframe.value,
+        )
+    )
+    if cutoff is not None:
+        statement = statement.where(
+            CandleRecord.ingested_at <= cutoff,
+            IngestionBatchRecord.retrieved_at <= cutoff,
+            CandleRecord.candle_timestamp
+            <= cutoff - timeframe_duration(timeframe),
+        )
     rows = (
         await session.execute(
-            select(CandleRecord, IngestionBatchRecord)
-            .join(
-                IngestionBatchRecord,
-                IngestionBatchRecord.id == CandleRecord.ingestion_batch_id,
-            )
-            .where(
-                CandleRecord.asset_identifier == "BTC",
-                CandleRecord.quote_currency == "USD",
-                CandleRecord.timeframe == timeframe.value,
-            )
-            .order_by(CandleRecord.candle_timestamp, CandleRecord.id)
+            statement.order_by(CandleRecord.candle_timestamp, CandleRecord.id)
         )
     ).all()
 
@@ -150,6 +167,7 @@ async def persist_historical_coverage_snapshot(
 
         snapshot_id = uuid4()
         session.add(_snapshot_record(snapshot_id, snapshot))
+        await session.flush()
         session.add_all(
             [
                 HistoricalCoverageSnapshotCandleRecord(
@@ -171,7 +189,6 @@ async def persist_historical_coverage_snapshot(
                 for item in snapshot.batch_memberships
             ]
         )
-        await session.flush()
 
     return _persistence_result(snapshot_id, snapshot, reused=False)
 

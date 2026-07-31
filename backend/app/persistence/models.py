@@ -475,6 +475,158 @@ class HistoricalCoverageSnapshotBatchRecord(Base):
     )
 
 
+class TenMinuteDerivationRecord(Base):
+    """Immutable exact-source provenance for one canonical 10m candle."""
+
+    __tablename__ = "ten_minute_derivations"
+    __table_args__ = (
+        CheckConstraint(
+            "derivation_method = 'utc_5m_pair_v1'",
+            name="ck_ten_minute_derivations_method",
+        ),
+        CheckConstraint(
+            "char_length(derived_candle_hash) = 64 AND "
+            "char_length(source_membership_hash) = 64 AND "
+            "char_length(result_hash) = 64",
+            name="ck_ten_minute_derivations_hashes",
+        ),
+        CheckConstraint("immutable", name="ck_ten_minute_derivations_immutable"),
+        UniqueConstraint(
+            "result_hash",
+            name="uq_ten_minute_derivations_result_hash",
+        ),
+    )
+
+    derived_candle_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("market_data_candles.id", ondelete="RESTRICT"),
+        primary_key=True,
+    )
+    derived_ingestion_batch_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("market_data_ingestion_batches.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    derivation_method: Mapped[str] = mapped_column(String(64), nullable=False)
+    available_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    derived_candle_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_membership_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    result_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    immutable: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="true"
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class TenMinuteDerivationSourceRecord(Base):
+    """One ordered canonical 5m member of a derived 10m candle."""
+
+    __tablename__ = "ten_minute_derivation_sources"
+    __table_args__ = (
+        CheckConstraint(
+            "ordinal IN (0, 1)",
+            name="ck_ten_minute_derivation_sources_ordinal",
+        ),
+        CheckConstraint(
+            "char_length(source_candle_hash) = 64",
+            name="ck_ten_minute_derivation_sources_hash",
+        ),
+        UniqueConstraint(
+            "derived_candle_id",
+            "source_candle_id",
+            name="uq_ten_minute_derivation_sources_member",
+        ),
+        Index(
+            "ix_ten_minute_derivation_sources_source_candle_id",
+            "source_candle_id",
+        ),
+    )
+
+    derived_candle_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("ten_minute_derivations.derived_candle_id", ondelete="RESTRICT"),
+        primary_key=True,
+    )
+    ordinal: Mapped[int] = mapped_column(Integer, primary_key=True)
+    source_candle_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("market_data_candles.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    source_ingestion_batch_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("market_data_ingestion_batches.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    source_available_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    source_candle_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+
+
+class SynchronizedCoverageSnapshotRecord(Base):
+    """Immutable identity for compatible 5m/10m/15m coverage evidence."""
+
+    __tablename__ = "synchronized_coverage_snapshots"
+    __table_args__ = (
+        CheckConstraint(
+            "asset_identifier = 'BTC' AND quote_currency = 'USD'",
+            name="ck_synchronized_coverage_scope",
+        ),
+        CheckConstraint(
+            "derivation_count > 0",
+            name="ck_synchronized_coverage_derivation_count",
+        ),
+        CheckConstraint(
+            "char_length(source_provenance_hash) = 64 AND "
+            "char_length(result_hash) = 64",
+            name="ck_synchronized_coverage_hashes",
+        ),
+        CheckConstraint("immutable", name="ck_synchronized_coverage_immutable"),
+        UniqueConstraint(
+            "result_hash",
+            name="uq_synchronized_coverage_result_hash",
+        ),
+        Index("ix_synchronized_coverage_as_of", "as_of"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    schema_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    hash_schema_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    asset_identifier: Mapped[str] = mapped_column(String(32), nullable=False)
+    quote_currency: Mapped[str] = mapped_column(String(16), nullable=False)
+    as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    five_minute_snapshot_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("historical_coverage_snapshots.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    ten_minute_snapshot_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("historical_coverage_snapshots.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    fifteen_minute_snapshot_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("historical_coverage_snapshots.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    derivation_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    differences: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    source_provenance_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    result_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    immutable: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="true"
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
 class HistoricalAcquisitionAttemptRecord(Base):
     """Immutable declaration of one bounded native acquisition attempt."""
 

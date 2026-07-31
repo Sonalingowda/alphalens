@@ -312,6 +312,10 @@ class HistoricalCoveragePersistenceTests(
             (4, 2),
         )
         self.assertEqual(new_session.flush_count, 1)
+        self.assertEqual(
+            new_session.events,
+            ["add", "flush", "add_all", "add_all"],
+        )
 
         existing = _snapshot_record(created.snapshot_id, snapshot)
         candle_memberships = [
@@ -419,6 +423,7 @@ class _FakeSession:
         self.added: list[object] = []
         self.added_groups: list[list[object]] = []
         self.flush_count = 0
+        self.events: list[str] = []
 
     def begin(self) -> _FakeTransaction:
         return _FakeTransaction()
@@ -433,12 +438,15 @@ class _FakeSession:
 
     def add(self, value: object) -> None:
         self.added.append(value)
+        self.events.append("add")
 
     def add_all(self, values) -> None:
         self.added_groups.append(list(values))
+        self.events.append("add_all")
 
     async def flush(self) -> None:
         self.flush_count += 1
+        self.events.append("flush")
 
 
 class _FakeScalarResult:

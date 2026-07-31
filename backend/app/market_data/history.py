@@ -404,7 +404,7 @@ def derive_btc_usd_10m_sample(
         first = source_by_timestamp.get(bucket)
         second = source_by_timestamp.get(bucket + five_minutes)
         if first is not None and second is not None:
-            derived.append(_aggregate_10m_candle(first, second, bucket))
+            derived.append(aggregate_btc_usd_10m_candle(first, second, bucket))
         bucket += ten_minutes
 
     validation_report = validate_candles(
@@ -448,11 +448,12 @@ def derive_btc_usd_10m_sample(
     )
 
 
-def _aggregate_10m_candle(
+def aggregate_btc_usd_10m_candle(
     first: Candle,
     second: Candle,
     timestamp: datetime,
 ) -> Candle:
+    """Apply the frozen exact two-candle 10m aggregation formula."""
     values = (
         first.open,
         first.high,
