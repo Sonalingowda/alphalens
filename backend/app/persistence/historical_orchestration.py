@@ -356,6 +356,15 @@ def _attempt(value: HistoricalAcquisitionAttemptRecord) -> AcquisitionAttempt:
     )
 
 
+def acquisition_attempt_from_record(
+    value: HistoricalAcquisitionAttemptRecord,
+) -> AcquisitionAttempt:
+    """Reconstruct and verify immutable acquisition-attempt evidence."""
+    attempt = _attempt(value)
+    verify_acquisition_attempt(attempt)
+    return attempt
+
+
 def _checkpoint_record(
     value: AcquisitionCheckpoint,
 ) -> HistoricalAcquisitionCheckpointRecord:
@@ -419,6 +428,17 @@ def _checkpoint(
         progress_hash=value.progress_hash,
         checkpoint_hash=value.checkpoint_hash,
     )
+
+
+def acquisition_checkpoint_from_record(
+    value: HistoricalAcquisitionCheckpointRecord,
+) -> AcquisitionCheckpoint:
+    """Reconstruct and verify immutable acquisition-checkpoint evidence."""
+    if not value.immutable:
+        raise CheckpointIntegrityError("Stored acquisition checkpoint is mutable.")
+    checkpoint = _checkpoint(value)
+    verify_acquisition_checkpoint(checkpoint)
+    return checkpoint
 
 
 def _utc(value: datetime) -> datetime:

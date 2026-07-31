@@ -12,14 +12,17 @@ from app.market_data.coverage import HistoricalCoverageSnapshot
 from app.market_data.history import TEN_MINUTE_DERIVATION
 from app.market_data.models import CandleTimeframe
 from app.market_data.synchronization import (
+    CoverageSnapshotReference,
     HistoricalSynchronizationError,
     SynchronizedCoverageSnapshot,
     SynchronizationDifferences,
     TenMinuteDerivationEvidence,
+    build_synchronized_coverage_snapshot,
     build_ten_minute_derivation_evidence,
     verify_synchronized_coverage_snapshot,
     verify_ten_minute_derivation_evidence,
 )
+from app.persistence.coverage import load_persisted_historical_coverage_snapshot
 from app.persistence.models import (
     SynchronizedCoverageSnapshotRecord,
     TenMinuteDerivationRecord,
@@ -171,6 +174,74 @@ async def persist_synchronized_coverage_snapshot(
         session.add(_synchronization_record(synchronization_id, snapshot))
         await session.flush()
     return _result(synchronization_id, snapshot, reused=False)
+
+
+async def load_persisted_synchronized_coverage_snapshot(
+    session: AsyncSession,
+    synchronization_id: UUID,
+) -> SynchronizedCoverageSnapshot:
+    """Reconstruct and verify one immutable synchronized coverage snapshot."""
+    record = await session.get(
+        SynchronizedCoverageSnapshotRecord,
+        synchronization_id,
+    )
+    if record is None:
+        raise HistoricalSynchronizationError(
+            "Synchronized coverage evidence is missing."
+        )
+    five_snapshot = await load_persisted_historical_coverage_snapshot(
+        session,
+        record.five_minute_snapshot_id,
+    )
+    ten_snapshot = await load_persisted_historical_coverage_snapshot(
+        session,
+        record.ten_minute_snapshot_id,
+    )
+    fifteen_snapshot = await load_persisted_historical_coverage_snapshot(
+        session,
+        record.fifteen_minute_snapshot_id,
+    )
+    derivations = build_derivations_from_coverage(five_snapshot, ten_snapshot)
+    for evidence in derivations:
+        stored = await session.get(
+            TenMinuteDerivationRecord,
+            evidence.derived_candle_id,
+        )
+        if stored is None:
+            raise HistoricalSynchronizationError(
+                "Stored 10m derivation evidence is missing."
+            )
+        sources = tuple(
+            (
+                await session.scalars(
+                    select(TenMinuteDerivationSourceRecord)
+                    .where(
+                        TenMinuteDerivationSourceRecord.derived_candle_id
+                        == evidence.derived_candle_id
+                    )
+                    .order_by(TenMinuteDerivationSourceRecord.ordinal)
+                )
+            ).all()
+        )
+        _verify_stored_derivation(stored, sources, evidence)
+    snapshot = build_synchronized_coverage_snapshot(
+        as_of=record.as_of,
+        five_minute=CoverageSnapshotReference(
+            record.five_minute_snapshot_id,
+            five_snapshot,
+        ),
+        ten_minute=CoverageSnapshotReference(
+            record.ten_minute_snapshot_id,
+            ten_snapshot,
+        ),
+        fifteen_minute=CoverageSnapshotReference(
+            record.fifteen_minute_snapshot_id,
+            fifteen_snapshot,
+        ),
+        derivations=derivations,
+    )
+    _verify_stored_synchronization(record, snapshot)
+    return snapshot
 
 
 def _derivation_record(

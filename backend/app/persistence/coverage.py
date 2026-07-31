@@ -194,6 +194,82 @@ async def persist_historical_coverage_snapshot(
     return _persistence_result(snapshot_id, snapshot, reused=False)
 
 
+async def load_persisted_historical_coverage_snapshot(
+    session: AsyncSession,
+    snapshot_id: UUID,
+) -> HistoricalCoverageSnapshot:
+    """Reconstruct one immutable snapshot from its exact stored membership."""
+    record = await session.get(HistoricalCoverageSnapshotRecord, snapshot_id)
+    if record is None:
+        raise HistoricalCoverageError("Coverage snapshot evidence is missing.")
+    candle_rows = (
+        await session.execute(
+            select(
+                HistoricalCoverageSnapshotCandleRecord,
+                CandleRecord,
+                IngestionBatchRecord,
+            )
+            .join(
+                CandleRecord,
+                CandleRecord.id
+                == HistoricalCoverageSnapshotCandleRecord.candle_id,
+            )
+            .join(
+                IngestionBatchRecord,
+                IngestionBatchRecord.id == CandleRecord.ingestion_batch_id,
+            )
+            .where(
+                HistoricalCoverageSnapshotCandleRecord.snapshot_id
+                == snapshot_id
+            )
+            .order_by(HistoricalCoverageSnapshotCandleRecord.ordinal)
+        )
+    ).all()
+    stored_batch_memberships = tuple(
+        (
+            await session.scalars(
+                select(HistoricalCoverageSnapshotBatchRecord)
+                .where(
+                    HistoricalCoverageSnapshotBatchRecord.snapshot_id
+                    == snapshot_id
+                )
+                .order_by(
+                    HistoricalCoverageSnapshotBatchRecord.ingestion_batch_id
+                )
+            )
+        ).all()
+    )
+    observations: list[CoverageObservation] = []
+    batches: dict[UUID, CoverageBatchEvidence] = {}
+    stored_candle_memberships: list[
+        HistoricalCoverageSnapshotCandleRecord
+    ] = []
+    for membership, candle_record, batch_record in candle_rows:
+        stored_candle_memberships.append(membership)
+        observations.append(_observation(candle_record))
+        evidence = _batch_evidence(batch_record)
+        existing = batches.get(evidence.ingestion_batch_id)
+        if existing is not None and existing != evidence:
+            raise HistoricalCoverageError(
+                "Stored coverage batch provenance is inconsistent."
+            )
+        batches[evidence.ingestion_batch_id] = evidence
+    snapshot = build_historical_coverage_snapshot(
+        asset_identifier=record.asset_identifier,
+        quote_currency=record.quote_currency,
+        timeframe=CandleTimeframe(record.timeframe),
+        observations=tuple(observations),
+        batches=tuple(batches.values()),
+    )
+    _verify_existing_record(record, snapshot)
+    _verify_existing_memberships(
+        tuple(stored_candle_memberships),
+        stored_batch_memberships,
+        snapshot,
+    )
+    return snapshot
+
+
 def _observation(record: CandleRecord) -> CoverageObservation:
     return CoverageObservation(
         candle_id=record.id,
@@ -323,6 +399,13 @@ def _verify_existing_record(
         "observed_candle_count": snapshot.observed_candle_count,
         "gap_count": snapshot.gap_count,
         "source_batch_count": snapshot.source_batch_count,
+        "gap_timestamps": [
+            value.isoformat() for value in snapshot.gap_timestamps
+        ],
+        "validation_summary": _snapshot_record(record.id, snapshot).validation_summary,
+        "derivation_summary": [
+            dict(value) for value in snapshot.derivation_summary
+        ],
         "validation_hash": snapshot.validation_hash,
         "source_data_hash": snapshot.source_data_hash,
         "source_provenance_hash": snapshot.source_provenance_hash,

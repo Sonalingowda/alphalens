@@ -21,6 +21,7 @@ from app.market_data.synchronization import CoverageSnapshotReference
 from app.persistence.conflicts import unresolved_source_conflicts
 from app.persistence.coverage import (
     load_historical_coverage_snapshot,
+    load_persisted_historical_coverage_snapshot,
     persist_historical_coverage_snapshot,
 )
 from app.persistence.models import (
@@ -147,6 +148,57 @@ async def persist_historical_quality_report(
         result_hash=report.result_hash,
         reused=False,
     )
+
+
+async def load_persisted_historical_quality_report(
+    session: AsyncSession,
+    report_id: UUID,
+) -> HistoricalQualityReport:
+    """Reconstruct and verify one immutable historical quality report."""
+    record = await session.get(HistoricalQualityReportRecord, report_id)
+    if record is None:
+        raise HistoricalQualityError("Historical quality evidence is missing.")
+    rows = tuple(
+        (
+            await session.scalars(
+                select(HistoricalQualityTimeframeRecord)
+                .where(HistoricalQualityTimeframeRecord.report_id == report_id)
+                .order_by(HistoricalQualityTimeframeRecord.timeframe)
+            )
+        ).all()
+    )
+    rows_by_timeframe = {row.timeframe: row for row in rows}
+    if set(rows_by_timeframe) != {"5m", "10m", "15m"} or len(rows) != 3:
+        raise HistoricalQualityError(
+            "Stored historical quality report has incomplete timeframe evidence."
+        )
+    references: list[CoverageSnapshotReference | None] = []
+    conflict_counts: list[int] = []
+    for timeframe in ("5m", "10m", "15m"):
+        row = rows_by_timeframe[timeframe]
+        conflict_counts.append(row.unresolved_conflict_count)
+        if row.source_snapshot_id is None:
+            references.append(None)
+            continue
+        snapshot = await load_persisted_historical_coverage_snapshot(
+            session,
+            row.source_snapshot_id,
+        )
+        references.append(
+            CoverageSnapshotReference(
+                snapshot_id=row.source_snapshot_id,
+                snapshot=snapshot,
+            )
+        )
+    report = build_historical_quality_report(
+        as_of=record.as_of,
+        five_minute=references[0],
+        ten_minute=references[1],
+        fifteen_minute=references[2],
+        unresolved_conflict_counts=tuple(conflict_counts),  # type: ignore[arg-type]
+    )
+    _verify_existing_report(record, rows, report)
+    return report
 
 
 def _report_record(
