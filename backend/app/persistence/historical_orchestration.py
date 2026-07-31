@@ -28,6 +28,7 @@ from app.persistence.candles import (
     CandlePersistenceResult,
     persist_historical_sample,
 )
+from app.persistence.conflicts import unresolved_source_conflicts
 from app.persistence.models import (
     CandleRecord,
     HistoricalAcquisitionAttemptRecord,
@@ -53,6 +54,11 @@ class SqlHistoricalOrchestrationStore:
         code_version: str,
     ) -> AcquisitionCheckpoint | None:
         async with self._session_maker() as session:
+            conflicts = await unresolved_source_conflicts(session, timeframe)
+            if conflicts:
+                raise CheckpointIntegrityError(
+                    "Unresolved source conflicts block acquisition resumption."
+                )
             incomplete = await session.scalar(
                 select(HistoricalAcquisitionAttemptRecord)
                 .outerjoin(
@@ -218,6 +224,8 @@ class SqlHistoricalOrchestrationStore:
                 sample,
                 acquisition_attempt_id=attempt_id,
             )
+        if result.conflict_count:
+            return result
         timestamps = tuple(
             candle.timestamp
             for candle in sample.candles
@@ -237,6 +245,34 @@ class SqlHistoricalOrchestrationStore:
                 "Persisted canonical evidence differs from the acquired window."
             )
         return result
+
+    async def record_conflict(
+        self,
+        attempt: AcquisitionAttempt,
+        persistence: CandlePersistenceResult,
+        completed_at: datetime,
+    ) -> None:
+        verify_acquisition_attempt(attempt)
+        if persistence.conflict_count <= 0:
+            raise CheckpointIntegrityError(
+                "Conflict outcome requires persisted conflict evidence."
+            )
+        async with self._session_maker() as session:
+            async with session.begin():
+                session.add(
+                    HistoricalAcquisitionOutcomeRecord(
+                        attempt_id=attempt.attempt_id,
+                        ingestion_batch_id=persistence.ingestion_batch_id,
+                        terminal_reason="CONFLICT_FAILED",
+                        failure_class="SourceConflictError",
+                        failure_summary=(
+                            f"{persistence.conflict_count} source conflict(s); "
+                            "whole native batch failed closed."
+                        ),
+                        completed_at=completed_at,
+                        immutable=True,
+                    )
+                )
 
     async def record_checkpoint(
         self,

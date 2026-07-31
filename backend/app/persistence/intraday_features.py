@@ -29,6 +29,7 @@ from app.persistence.models import (
     FeaturePipelineRunValueRecord,
     IngestionBatchRecord,
 )
+from app.persistence.conflicts import unresolved_source_conflicts
 
 
 _INSERT_CHUNK_SIZE = 500
@@ -79,6 +80,11 @@ async def load_intraday_source_snapshot(
     }:
         raise FeatureComputationError(
             "Intraday feature persistence supports only 5m, 10m, and 15m."
+        )
+    conflicts = await unresolved_source_conflicts(session, timeframe)
+    if conflicts:
+        raise FeatureComputationError(
+            "Unresolved source conflicts block intraday feature evidence."
         )
     records = tuple(
         (
@@ -351,6 +357,16 @@ async def _verify_source_snapshot_against_database(
     session: AsyncSession,
     snapshot: IntradaySourceSnapshot,
 ) -> None:
+    conflicts = await unresolved_source_conflicts(
+        session,
+        snapshot.timeframe,
+        range_start=snapshot.range_start,
+        range_end=snapshot.range_end,
+    )
+    if conflicts:
+        raise FeatureComputationError(
+            "Unresolved source conflicts intersect the feature source range."
+        )
     batches = tuple(
         (
             await session.scalars(

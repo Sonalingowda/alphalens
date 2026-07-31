@@ -24,6 +24,7 @@ from app.persistence.models import (
     HistoricalCoverageSnapshotRecord,
     IngestionBatchRecord,
 )
+from app.persistence.conflicts import unresolved_source_conflicts
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,6 +49,12 @@ async def load_historical_coverage_snapshot(
     }:
         raise HistoricalCoverageError(
             "Historical coverage supports only 5m, 10m, and 15m."
+        )
+
+    conflicts = await unresolved_source_conflicts(session, timeframe)
+    if conflicts:
+        raise HistoricalCoverageError(
+            "Unresolved source conflicts block a new coverage snapshot."
         )
 
     rows = (

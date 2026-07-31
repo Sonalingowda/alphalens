@@ -41,6 +41,12 @@ class IngestionBatchRecord(Base):
             name="ck_ingestion_batches_non_negative_counts",
         ),
         CheckConstraint(
+            "reused_candle_count >= 0 AND conflict_count >= 0 AND "
+            "(conflict_count = 0 OR persisted_candle_count = 0) AND "
+            "(source_data_hash IS NULL OR char_length(source_data_hash) = 64)",
+            name="ck_ingestion_batches_conflict_counts",
+        ),
+        CheckConstraint(
             (
                 "provider_page_count > 0 "
                 "AND excluded_incomplete_candle_count >= 0 "
@@ -98,6 +104,20 @@ class IngestionBatchRecord(Base):
     )
     candle_count: Mapped[int] = mapped_column(Integer, nullable=False)
     persisted_candle_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    reused_candle_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        server_default="0",
+    )
+    conflict_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        server_default="0",
+    )
+    source_data_hash: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+    )
     provider_page_count: Mapped[int] = mapped_column(
         Integer,
         nullable=False,
@@ -512,7 +532,7 @@ class HistoricalAcquisitionOutcomeRecord(Base):
             "terminal_reason IN ('SUCCESS_NEW_INSERTS', 'SUCCESS_REUSE_ONLY', "
             "'PROVIDER_HISTORY_EXHAUSTED', 'PROVIDER_FAILED', "
             "'VALIDATION_FAILED', 'PERSISTENCE_FAILED', "
-            "'INTERRUPTED_BEFORE_PERSISTENCE')",
+            "'INTERRUPTED_BEFORE_PERSISTENCE', 'CONFLICT_FAILED')",
             name="ck_historical_acquisition_outcomes_reason",
         ),
         CheckConstraint(
@@ -522,7 +542,10 @@ class HistoricalAcquisitionOutcomeRecord(Base):
             "AND failure_summary IS NULL) OR "
             "(terminal_reason IN ('PROVIDER_FAILED', 'VALIDATION_FAILED', "
             "'PERSISTENCE_FAILED', 'INTERRUPTED_BEFORE_PERSISTENCE') "
-            "AND ingestion_batch_id IS NULL AND failure_class IS NOT NULL))",
+            "AND ingestion_batch_id IS NULL AND failure_class IS NOT NULL) OR "
+            "(terminal_reason = 'CONFLICT_FAILED' "
+            "AND ingestion_batch_id IS NOT NULL "
+            "AND failure_class IS NOT NULL))",
             name="ck_historical_acquisition_outcomes_evidence",
         ),
         CheckConstraint("immutable", name="ck_historical_acquisition_outcomes_immutable"),
@@ -614,6 +637,105 @@ class HistoricalAcquisitionCheckpointRecord(Base):
     checkpoint_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     immutable: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class SourceConflictRecord(Base):
+    """Immutable canonical-versus-incoming source conflict evidence."""
+
+    __tablename__ = "market_data_source_conflicts"
+    __table_args__ = (
+        CheckConstraint(
+            "conflict_type IN ('provider_revision_conflict', "
+            "'provider_identity_conflict')",
+            name="ck_source_conflicts_type",
+        ),
+        CheckConstraint(
+            "asset_identifier = 'BTC' AND quote_currency = 'USD' "
+            "AND timeframe IN ('5m', '15m')",
+            name="ck_source_conflicts_scope",
+        ),
+        CheckConstraint(
+            "char_length(canonical_candle_hash) = 64 AND "
+            "char_length(incoming_candle_hash) = 64 AND "
+            "char_length(incoming_batch_source_hash) = 64 AND "
+            "char_length(conflict_hash) = 64",
+            name="ck_source_conflicts_hashes",
+        ),
+        CheckConstraint("immutable", name="ck_source_conflicts_immutable"),
+        UniqueConstraint(
+            "incoming_ingestion_batch_id",
+            "canonical_candle_id",
+            name="uq_source_conflicts_batch_candle",
+        ),
+        Index(
+            "ix_source_conflicts_scope_timestamp",
+            "asset_identifier",
+            "quote_currency",
+            "timeframe",
+            "candle_timestamp",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    schema_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    hash_schema_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    conflict_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    asset_identifier: Mapped[str] = mapped_column(String(32), nullable=False)
+    quote_currency: Mapped[str] = mapped_column(String(16), nullable=False)
+    timeframe: Mapped[str] = mapped_column(String(16), nullable=False)
+    candle_timestamp: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    canonical_candle_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("market_data_candles.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    canonical_ingestion_batch_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("market_data_ingestion_batches.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    canonical_provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    canonical_open: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
+    canonical_high: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
+    canonical_low: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
+    canonical_close: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
+    canonical_volume: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
+    incoming_attempt_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("historical_acquisition_attempts.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    incoming_ingestion_batch_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("market_data_ingestion_batches.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    incoming_provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    incoming_open: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
+    incoming_high: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
+    incoming_low: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
+    incoming_close: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
+    incoming_volume: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
+    retrieved_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    available_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    canonical_candle_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    incoming_candle_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    incoming_batch_source_hash: Mapped[str] = mapped_column(
+        String(64), nullable=False
+    )
+    conflict_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    immutable: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="true"
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
 
 
 class FeaturePipelineRunRecord(Base):

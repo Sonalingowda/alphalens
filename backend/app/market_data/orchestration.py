@@ -2,7 +2,6 @@
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal, ROUND_HALF_EVEN, localcontext
 import hashlib
 import json
 import logging
@@ -13,6 +12,7 @@ from app.market_data.coverage import (
     ACQUISITION_POLICY_IDENTIFIER,
     ACQUISITION_POLICY_VERSION,
 )
+from app.market_data.conflicts import SourceConflictError, candle_sequence_hash
 from app.market_data.history import (
     HistoricalSample,
     KRAKEN_OHLC_PAGE_LIMIT,
@@ -126,6 +126,13 @@ class HistoricalOrchestrationStore(Protocol):
         completed_at: datetime,
     ) -> UUID: ...
 
+    async def record_conflict(
+        self,
+        attempt: AcquisitionAttempt,
+        persistence: CandlePersistenceResult,
+        completed_at: datetime,
+    ) -> None: ...
+
 
 async def orchestrate_intraday_historical_window(
     *,
@@ -207,6 +214,16 @@ async def orchestrate_intraday_historical_window(
             sample.retrieved_at,
         )
         raise
+    if persistence.conflict_count:
+        await store.record_conflict(
+            attempt,
+            persistence,
+            sample.retrieved_at,
+        )
+        raise SourceConflictError(
+            "Incoming provider evidence conflicts with canonical market data; "
+            "the native batch failed closed."
+        )
     checkpoint = build_acquisition_checkpoint(
         attempt=attempt,
         sample=sample,
@@ -401,34 +418,7 @@ def _checkpoint_payload(checkpoint: AcquisitionCheckpoint) -> dict[str, object]:
 
 def hash_candle_sequence(candles: tuple[Candle, ...]) -> str:
     """Hash ordered fixed-point candle evidence without binary floats."""
-    return _sha256(
-        {
-            "hash_schema_version": ORCHESTRATION_HASH_SCHEMA_VERSION,
-            "candles": [
-                {
-                    "timestamp": _timestamp(candle.timestamp),
-                    "open": _decimal(candle.open),
-                    "high": _decimal(candle.high),
-                    "low": _decimal(candle.low),
-                    "close": _decimal(candle.close),
-                    "volume": _decimal(candle.volume),
-                }
-                for candle in candles
-            ],
-        }
-    )
-
-
-def _decimal(value: object) -> str:
-    if not isinstance(value, Decimal) or not value.is_finite():
-        raise HistoricalOrchestrationError("Hash Decimal value is invalid.")
-    with localcontext() as context:
-        context.prec = max(80, len(value.as_tuple().digits) + 40)
-        quantized = value.quantize(
-            Decimal("0.000000000000000001"),
-            rounding=ROUND_HALF_EVEN,
-        )
-    return format(quantized, "f")
+    return candle_sequence_hash(candles)
 
 
 def _build_attempt(**values: object) -> AcquisitionAttempt:
