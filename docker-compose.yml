@@ -5,47 +5,63 @@ services:
     image: postgres:16.8-alpine3.21@sha256:3b057e1c2c6dfee60a30950096f3fab33be141dbb0fdd7af3d477083de94166c
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-alphalens}
-      POSTGRES_USER: ${POSTGRES_USER:-alphalens_app}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_USER: ${POSTGRES_USER:-alphalens}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-alphalens_dev}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test:
-        - CMD-SHELL
-        - pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
       timeout: 5s
       retries: 12
     restart: unless-stopped
-    security_opt:
-      - no-new-privileges:true
+    security_opt: ["no-new-privileges:true"]
+
+  redis:
+    image: redis:7.4.2-alpine
+    user: redis
+    working_dir: /data
+    command: ["redis-server", "--appendonly", "no", "--save", "", "--requirepass", "${REDIS_PASSWORD:-alphalens_dev}"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-alphalens_dev}", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+    read_only: true
+    tmpfs: ["/data"]
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
 
   backend:
     image: alphalens-backend:1.0.0
     build:
       context: .
       dockerfile: backend/Dockerfile
-    environment:
-      ALPHALENS_ENVIRONMENT: production
-      ALPHALENS_API_NAME: AlphaLens Live Prediction API
+    environment: &backend-environment
+      ALPHALENS_ENVIRONMENT: ${ALPHALENS_ENVIRONMENT:-development}
+      ALPHALENS_API_NAME: AlphaLens API
       ALPHALENS_API_HOST: 0.0.0.0
       ALPHALENS_API_PORT: 8000
-      ALPHALENS_API_WORKERS: ${ALPHALENS_API_WORKERS:-2}
+      ALPHALENS_API_WORKERS: ${ALPHALENS_API_WORKERS:-1}
       ALPHALENS_LOG_LEVEL: ${ALPHALENS_LOG_LEVEL:-INFO}
-      ALPHALENS_CORS_ALLOWED_ORIGINS: ${ALPHALENS_CORS_ALLOWED_ORIGINS:?Set ALPHALENS_CORS_ALLOWED_ORIGINS in .env}
-      ALPHALENS_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-alphalens_app}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-alphalens}
-      ALPHALENS_PREDICTION_API_MAX_REQUEST_BYTES: 32768
+      ALPHALENS_CORS_ALLOWED_ORIGINS: ${ALPHALENS_CORS_ALLOWED_ORIGINS:-http://127.0.0.1:3000,http://localhost:3000}
+      ALPHALENS_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-alphalens}:${POSTGRES_PASSWORD:-alphalens_dev}@postgres:5432/${POSTGRES_DB:-alphalens}
+      ALPHALENS_DATABASE_POOL_SIZE: ${ALPHALENS_DATABASE_POOL_SIZE:-5}
+      ALPHALENS_DATABASE_MAX_OVERFLOW: ${ALPHALENS_DATABASE_MAX_OVERFLOW:-10}
+      ALPHALENS_DATABASE_POOL_TIMEOUT_SECONDS: ${ALPHALENS_DATABASE_POOL_TIMEOUT_SECONDS:-30}
+      ALPHALENS_REDIS_URL: redis://:${REDIS_PASSWORD:-alphalens_dev}@redis:6379/0
+      ALPHALENS_METRICS_ENABLED: "true"
+      ALPHALENS_WORKER_CONCURRENCY: ${ALPHALENS_WORKER_CONCURRENCY:-2}
+      ALPHALENS_WORKER_POLL_SECONDS: ${ALPHALENS_WORKER_POLL_SECONDS:-1}
+      ALPHALENS_WORKER_MAX_RETRIES: ${ALPHALENS_WORKER_MAX_RETRIES:-3}
     ports:
       - "${ALPHALENS_BIND_ADDRESS:-127.0.0.1}:8000:8000"
     depends_on:
-      postgres:
-        condition: service_healthy
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
     healthcheck:
-      test:
-        - CMD
-        - python
-        - -c
-        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=3)"
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/readiness', timeout=3)"]
       interval: 10s
       timeout: 5s
       start_period: 30s
@@ -53,12 +69,32 @@ services:
     restart: unless-stopped
     init: true
     read_only: true
-    tmpfs:
-      - /tmp
-    cap_drop:
-      - ALL
-    security_opt:
-      - no-new-privileges:true
+    tmpfs: ["/tmp"]
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+
+  worker:
+    image: alphalens-backend:1.0.0
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    entrypoint: ["python", "-m", "app.background_worker"]
+    environment: *backend-environment
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "python", "-m", "app.worker_health"]
+      interval: 10s
+      timeout: 5s
+      start_period: 20s
+      retries: 6
+    restart: unless-stopped
+    init: true
+    read_only: true
+    tmpfs: ["/tmp"]
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
 
   frontend:
     image: alphalens-frontend:1.0.0
@@ -71,12 +107,9 @@ services:
     ports:
       - "${ALPHALENS_BIND_ADDRESS:-127.0.0.1}:3000:3000"
     depends_on:
-      backend:
-        condition: service_healthy
+      backend: {condition: service_healthy}
     healthcheck:
-      test:
-        - CMD-SHELL
-        - wget --quiet --tries=1 --spider http://127.0.0.1:3000/system-health
+      test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://127.0.0.1:3000/markets/live"]
       interval: 10s
       timeout: 5s
       start_period: 20s
@@ -84,12 +117,9 @@ services:
     restart: unless-stopped
     init: true
     read_only: true
-    tmpfs:
-      - /tmp
-    cap_drop:
-      - ALL
-    security_opt:
-      - no-new-privileges:true
+    tmpfs: ["/tmp"]
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
 
 volumes:
   postgres_data:

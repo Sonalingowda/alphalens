@@ -13,7 +13,7 @@ export const metadata: Metadata = {
     template: "%s · AlphaLens",
   },
   description:
-    "Quantitative market intelligence and research operations dashboard.",
+    "Deterministic, explainable market opportunity intelligence.",
 };
 
 export default function RootLayout({

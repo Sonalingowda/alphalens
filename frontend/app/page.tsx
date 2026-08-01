@@ -1,200 +1,122 @@
-import {
-  Activity,
-  ArrowDownRight,
-  ArrowUpRight,
-  BriefcaseBusiness,
-  CircleDollarSign,
-  ShieldAlert,
-  Wallet,
-} from "lucide-react";
+import { Activity, Radar, ShieldCheck, TriangleAlert } from "lucide-react";
 
-import { ChartCard } from "@/components/dashboard/chart-card";
+import { MarketStatus } from "@/components/markets/market-status";
+import { OpportunityCard } from "@/components/opportunities/opportunity-card";
+import { OpportunityFilters } from "@/components/opportunities/opportunity-filters";
 import { ApiUnavailable, EmptyState } from "@/components/dashboard/data-states";
-import { MetricCard } from "@/components/dashboard/metric-card";
 import { PageHeader } from "@/components/dashboard/page-header";
-import { SignalBadge } from "@/components/dashboard/signal-badge";
-import { TimeSeriesChart } from "@/components/dashboard/time-series-chart";
+import { MetricCard } from "@/components/dashboard/metric-card";
 import { Badge } from "@/components/ui/badge";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import { getDashboardBundle } from "@/lib/api";
-import {
-  formatCurrency,
-  formatPercent,
-  formatTimestamp,
-  shortHash,
-} from "@/lib/format";
-import type { DashboardBundle } from "@/lib/types";
+import { getLiveMarket, getMvpHealth, getOpportunities } from "@/lib/api";
+import type { OpportunityFilters as Filters } from "@/lib/types";
 
-export default async function DashboardPage() {
-  const result = await getDashboardBundle();
+type DashboardSearchParams = Promise<{
+  instrument?: string;
+  timeframe?: string;
+  stance?: string;
+  search?: string;
+}>;
+
+export default async function DashboardPage({
+  searchParams,
+}: {
+  searchParams: DashboardSearchParams;
+}) {
+  const requested = await searchParams;
+  const filters: Filters = {
+    instrument: requested.instrument || "BTCUSDT",
+    timeframe: ["5m", "10m", "15m"].includes(requested.timeframe ?? "")
+      ? requested.timeframe!
+      : "5m",
+    stance:
+      requested.stance === "BUY" || requested.stance === "SELL"
+        ? requested.stance
+        : undefined,
+    search: requested.search?.trim() || undefined,
+  };
+  const [health, market, opportunities] = await Promise.all([
+    getMvpHealth(),
+    getLiveMarket(filters.instrument, filters.timeframe),
+    getOpportunities(filters),
+  ]);
 
   return (
     <>
       <PageHeader
-        eyebrow="Live operations"
-        title="Dashboard"
-        description="A read-only view of verified prediction, paper portfolio, risk, and model evidence."
+        eyebrow="Opportunity intelligence"
+        title="Market surveillance"
+        description="Deterministic, evidence-backed opportunities from completed market snapshots. AlphaLens informs; you make every trading decision."
         actions={
-          <Badge variant="outline" className="w-fit gap-2">
-            <span
-              className={`size-1.5 rounded-full ${
-                result.ok ? "bg-emerald-400" : "bg-rose-400"
-              }`}
-            />
-            {result.ok ? "API operational" : "API unavailable"}
+          <Badge
+            variant="outline"
+            className={health.ok && health.data.status === "ready" ? "border-emerald-400/30 text-emerald-400" : "border-amber-400/30 text-amber-300"}
+          >
+            <span className={`mr-2 size-1.5 rounded-full ${health.ok && health.data.status === "ready" ? "bg-emerald-400" : "bg-amber-400"}`} />
+            {health.ok ? `API ${health.data.status}` : "API unavailable"}
           </Badge>
         }
       />
-      {!result.ok ? (
-        <ApiUnavailable message={result.error} />
-      ) : (
-        <DashboardContent data={result.data} />
-      )}
-    </>
-  );
-}
 
-function DashboardContent({ data }: { data: DashboardBundle }) {
-  const { dashboard, model } = data;
-  const prediction = dashboard.prediction;
-  const dailyPnl = Number(dashboard.portfolio.daily_pnl ?? 0);
-  const predicted = Number(prediction?.predicted_forward_return ?? 0);
-  return (
-    <div className="space-y-6">
-      <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <MetricCard
-          label="Current prediction"
-          value={
-            prediction
-              ? formatPercent(prediction.predicted_forward_return, 3)
-              : "Unavailable"
-          }
-          detail={
-            prediction
-              ? `${prediction.horizon_observations}-observation forward log return`
-              : "No immutable prediction evidence"
-          }
-          icon={predicted >= 0 ? ArrowUpRight : ArrowDownRight}
-          tone={predicted >= 0 ? "positive" : "negative"}
-        />
-        <MetricCard
-          label="Portfolio value"
-          value={formatCurrency(dashboard.portfolio.portfolio_value)}
-          detail={`Cash ${formatCurrency(dashboard.portfolio.cash)}`}
-          icon={Wallet}
-        />
-        <MetricCard
-          label="Daily P&L"
-          value={formatCurrency(dashboard.portfolio.daily_pnl)}
-          detail={`Realized ${formatCurrency(dashboard.portfolio.realized_pnl)}`}
-          icon={dailyPnl >= 0 ? ArrowUpRight : ArrowDownRight}
-          tone={dailyPnl >= 0 ? "positive" : "negative"}
-        />
-        <MetricCard
-          label="Unrealized P&L"
-          value={formatCurrency(dashboard.portfolio.unrealized_pnl)}
-          detail={`${dashboard.portfolio.open_position_count} open position`}
-          icon={BriefcaseBusiness}
-        />
-      </section>
+      <div className="space-y-6">
+        {market.ok ? <MarketStatus snapshot={market.data} /> : <ApiUnavailable message={market.error} />}
 
-      <section className="grid gap-4 lg:grid-cols-[1.35fr_.65fr]">
-        <ChartCard
-          title="Portfolio equity"
-          description="Immutable paper portfolio history from the latest report."
-        >
-          {dashboard.charts.equity_curve.length ? (
-            <TimeSeriesChart data={dashboard.charts.equity_curve} />
-          ) : (
-            <EmptyState
-              title="No equity observations"
-              description="The latest paper report has not recorded an equity curve."
-            />
-          )}
-        </ChartCard>
-        <Card className="bg-card/95">
-          <CardHeader>
-            <CardTitle>Latest decision</CardTitle>
-            <CardDescription>
-              Prediction and deterministic strategy output
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-5">
-            <div className="flex items-center justify-between rounded-lg border bg-muted/30 p-4">
-              <span className="text-sm text-muted-foreground">Signal</span>
-              <SignalBadge action={dashboard.signal?.action ?? null} />
+        <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          <MetricCard
+            label="Active opportunities"
+            value={opportunities.ok ? String(opportunities.data.items.length) : "Unavailable"}
+            detail="Current filtered ranking projection"
+            icon={Radar}
+          />
+          <MetricCard
+            label="Market coverage"
+            value={opportunities.ok ? opportunities.data.coverage_status ?? "Not reported" : "Unavailable"}
+            detail={`${filters.instrument} · ${filters.timeframe}`}
+            icon={Activity}
+          />
+          <MetricCard
+            label="Data integrity"
+            value={market.ok && market.data.complete ? "Complete" : "Unavailable"}
+            detail="Immutable completed-candle snapshot"
+            icon={ShieldCheck}
+            tone={market.ok && market.data.complete ? "positive" : "default"}
+          />
+          <MetricCard
+            label="Partial failures"
+            value={opportunities.ok ? String(opportunities.data.partial_failures?.length ?? 0) : "Unavailable"}
+            detail="Fail-closed projection issues"
+            icon={TriangleAlert}
+          />
+        </section>
+
+        <section id="opportunities" className="scroll-mt-24 space-y-4">
+          <div className="flex flex-col justify-between gap-3 md:flex-row md:items-end">
+            <div>
+              <p className="text-xs font-medium uppercase tracking-[0.16em] text-primary">Ranked feed</p>
+              <h2 className="mt-1 text-xl font-semibold">Opportunities</h2>
             </div>
-            <Detail
-              label="Prediction timestamp"
-              value={formatTimestamp(prediction?.prediction_timestamp)}
+            {opportunities.ok ? (
+              <p className="font-mono text-[10px] text-muted-foreground">
+                RESPONSE {opportunities.responseHash.slice(0, 12)}
+              </p>
+            ) : null}
+          </div>
+          <OpportunityFilters values={filters} />
+          {!opportunities.ok ? (
+            <ApiUnavailable message={opportunities.error} />
+          ) : opportunities.data.items.length === 0 ? (
+            <EmptyState
+              title="No qualified opportunities"
+              description="No immutable ranked opportunities match this scope. AlphaLens does not create placeholder signals."
             />
-            <Detail
-              label="Confidence"
-              value={
-                dashboard.confidence.available
-                  ? "Available"
-                  : "Not produced by model"
-              }
-            />
-            <Detail
-              label="Model artifact"
-              value={shortHash(model.artifact_identifier)}
-              mono
-            />
-            <Detail label="Model version" value={model.artifact_version} />
-          </CardContent>
-        </Card>
-      </section>
-
-      <section className="grid gap-4 md:grid-cols-3">
-        <MetricCard
-          label="Closed trades"
-          value={String(dashboard.portfolio.closed_trade_count)}
-          detail={`${dashboard.orders.length} simulated orders`}
-          icon={CircleDollarSign}
-        />
-        <MetricCard
-          label="Risk events"
-          value={String(dashboard.risk_events.length)}
-          detail="Latest immutable risk report"
-          icon={ShieldAlert}
-        />
-        <MetricCard
-          label="API requests"
-          value={String(data.metrics.request_count)}
-          detail={`${data.metrics.prediction_count} prediction requests`}
-          icon={Activity}
-        />
-      </section>
-    </div>
-  );
-}
-
-function Detail({
-  label,
-  value,
-  mono = false,
-}: {
-  label: string;
-  value: string;
-  mono?: boolean;
-}) {
-  return (
-    <div className="flex items-start justify-between gap-4 border-b pb-3 last:border-0 last:pb-0">
-      <span className="text-xs text-muted-foreground">{label}</span>
-      <span
-        className={`max-w-[65%] text-right text-xs font-medium ${
-          mono ? "font-mono" : ""
-        }`}
-      >
-        {value}
-      </span>
-    </div>
+          ) : (
+            <div className="grid gap-4 md:grid-cols-2 2xl:grid-cols-3">
+              {opportunities.data.items.map((item) => (
+                <OpportunityCard key={item.opportunity_version_id} item={item} />
+              ))}
+            </div>
+          )}
+        </section>
+      </div>
+    </>
   );
 }

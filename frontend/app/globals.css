@@ -121,7 +121,8 @@
     @apply border-border outline-ring/50;
     }
   body {
-    @apply min-h-screen bg-background text-foreground antialiased;
+    @apply min-h-screen bg-background text-foreground antialiased selection:bg-primary/20;
+    background-image: radial-gradient(circle at 80% -10%, color-mix(in oklab, var(--primary) 9%, transparent), transparent 34rem);
     }
   html {
     @apply font-sans;

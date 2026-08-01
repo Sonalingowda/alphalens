@@ -220,3 +220,134 @@ export type DashboardBundle = {
 export type DashboardDataResult =
   | { ok: true; data: DashboardBundle }
   | { ok: false; error: string };
+
+export type ApiEnvelope<T> = {
+  contract_version: string;
+  data: T;
+  response_hash: string;
+};
+
+export type ApiResult<T> =
+  | { ok: true; data: T; responseHash: string }
+  | { ok: false; error: string };
+
+export type MarketScope = {
+  instrument: string;
+  timeframe: string;
+};
+
+export type MarketCandle = {
+  candle_id: string;
+  timestamp: string;
+  available_at: string;
+  open: string;
+  high: string;
+  low: string;
+  close: string;
+  volume: string;
+};
+
+export type LiveMarketSnapshot = {
+  contract_version: string;
+  snapshot_id: string;
+  scope: MarketScope;
+  candles: MarketCandle[];
+  complete: boolean;
+  audit: {
+    created_at: string;
+    evidence_cutoff: string;
+    available_at: string;
+    result_hash: string;
+  };
+};
+
+export type OpportunityDashboardItem = {
+  opportunity_id: string;
+  opportunity_version_id: string;
+  scope: MarketScope;
+  stance: "BUY" | "SELL";
+  lifecycle_state: string;
+  evidence_cutoff: string;
+  available_at: string;
+  freshness_state: string;
+  rank: number;
+  reason_codes: string[];
+  has_plan: boolean;
+  limitations: string[];
+  detail_reference: string;
+};
+
+export type OpportunityPage = {
+  contract_version: string;
+  as_of?: string;
+  generated_at?: string;
+  scope?: MarketScope;
+  items: OpportunityDashboardItem[];
+  applied_filters: string[];
+  sort: string;
+  next_cursor?: string | null;
+  freshness_status?: string;
+  coverage_status?: string;
+  partial_failures?: string[];
+};
+
+export type OpportunityDetail = {
+  contract_version: string;
+  detail_id: string;
+  opportunity: {
+    opportunity_id: string;
+    opportunity_version_id: string;
+    scope: MarketScope;
+    stance: "BUY" | "SELL" | "WAIT";
+    detected_at?: string;
+    available_at?: string;
+    [key: string]: unknown;
+  };
+  market_snapshot: LiveMarketSnapshot;
+  indicators: Array<{
+    feature_identifier: string;
+    definition_version: string;
+    output_name: string;
+    value: string;
+    unit: string;
+    candle_timestamp: string;
+    available_at: string;
+  }>;
+  evidence: {
+    package_id: string;
+    [key: string]: unknown;
+  };
+  explanation: {
+    [key: string]: unknown;
+  };
+  lifecycle: {
+    current_state?: string;
+    [key: string]: unknown;
+  };
+  verification_status: string;
+  audit: {
+    evidence_cutoff: string;
+    available_at: string;
+    result_hash: string;
+  };
+};
+
+export type MvpHealth = {
+  status: "ready" | "degraded";
+  service: string;
+  api_version: string;
+  read_only: boolean;
+  authentication_required: boolean;
+  components: {
+    market_snapshots: "configured" | "unavailable";
+    opportunity_dashboard: "configured";
+    opportunity_detail: "configured";
+  };
+};
+
+export type OpportunityFilters = {
+  instrument: string;
+  timeframe: string;
+  stance?: "BUY" | "SELL";
+  search?: string;
+};

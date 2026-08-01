@@ -14,6 +14,7 @@ from sqlalchemy import (
     Identity,
     Index,
     Integer,
+    LargeBinary,
     Numeric,
     String,
     Text,
@@ -27,6 +28,76 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 class Base(DeclarativeBase):
     pass
+
+
+class ImmutableAggregateRecord(Base):
+    """Canonical append-only storage for frozen runtime aggregate contracts."""
+
+    __tablename__ = "immutable_runtime_aggregates"
+    __table_args__ = (
+        UniqueConstraint(
+            "entity_type",
+            "entity_id",
+            name="uq_immutable_runtime_aggregate_identity",
+        ),
+        CheckConstraint(
+            "char_length(canonical_hash) = 64",
+            name="ck_immutable_runtime_aggregate_hash",
+        ),
+        CheckConstraint(
+            "revision = 1",
+            name="ck_immutable_runtime_aggregate_revision",
+        ),
+        Index(
+            "ix_immutable_runtime_scope_latest",
+            "entity_type",
+            "scope_instrument",
+            "scope_timeframe",
+            "available_at",
+        ),
+        Index(
+            "ix_immutable_runtime_logical_history",
+            "entity_type",
+            "logical_id",
+            "available_at",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    entity_type: Mapped[str] = mapped_column(String(96), nullable=False)
+    entity_id: Mapped[str] = mapped_column(String(256), nullable=False)
+    logical_id: Mapped[str] = mapped_column(String(256), nullable=False)
+    scope_instrument: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    scope_timeframe: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    canonical_payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    canonical_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+
+class PolicyArtifactRecord(Base):
+    """Immutable policy bytes; PostgreSQL remains the canonical source."""
+
+    __tablename__ = "policy_artifacts"
+    __table_args__ = (
+        UniqueConstraint("policy_id", "policy_version", name="uq_policy_artifact"),
+        CheckConstraint("octet_length(artifact_bytes) > 0", name="ck_policy_artifact_bytes"),
+        CheckConstraint("char_length(artifact_hash) = 64", name="ck_policy_artifact_hash"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    policy_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    policy_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    artifact_bytes: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    artifact_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
 
 
 class IngestionBatchRecord(Base):

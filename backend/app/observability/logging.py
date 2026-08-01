@@ -10,13 +10,21 @@ class JsonLogFormatter(logging.Formatter):
     """Render one machine-readable JSON object per log event."""
 
     def format(self, record: logging.LogRecord) -> str:
+        from app.infrastructure.observability import CORRELATION_ID, REQUEST_ID
+
         payload: dict[str, Any] = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "level": record.levelname,
             "logger": record.name,
             "message": record.getMessage(),
         }
+        if REQUEST_ID.get() is not None:
+            payload["request_id"] = REQUEST_ID.get()
+        if CORRELATION_ID.get() is not None:
+            payload["correlation_id"] = CORRELATION_ID.get()
         for name in (
+            "request_id",
+            "correlation_id",
             "request_path",
             "http_method",
             "status_code",
@@ -24,6 +32,8 @@ class JsonLogFormatter(logging.Formatter):
             "error_code",
             "prediction_hash",
             "artifact_id",
+            "task_reference",
+            "attempt",
         ):
             value = getattr(record, name, None)
             if value is not None:

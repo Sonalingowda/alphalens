@@ -25,6 +25,9 @@ class ProductionConfigurationTests(TestCase):
                 "ALPHALENS_DATABASE_URL": (
                     "postgresql+asyncpg://app:strong-test-value@db/alphalens"
                 ),
+                "ALPHALENS_REDIS_URL": (
+                    "redis://:strong-redis-value@redis:6379/0"
+                ),
             },
             clear=True,
         ):
@@ -74,6 +77,15 @@ class ProductionConfigurationTests(TestCase):
             clear=True,
         ):
             with self.assertRaisesRegex(ConfigurationError, "between"):
+                load_settings()
+
+    def test_invalid_database_pool_configuration_is_rejected(self) -> None:
+        with patch.dict(
+            os.environ,
+            {"ALPHALENS_DATABASE_POOL_SIZE": "0"},
+            clear=True,
+        ):
+            with self.assertRaisesRegex(ConfigurationError, "POOL_SIZE"):
                 load_settings()
 
 

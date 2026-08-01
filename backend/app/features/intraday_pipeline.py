@@ -135,8 +135,10 @@ def build_intraday_source_snapshot(
     timeframe: CandleTimeframe,
     observations: tuple[SourceCandleObservation, ...],
 ) -> IntradaySourceSnapshot:
-    if asset_identifier != "BTC" or quote_currency != "USD":
-        raise FeatureComputationError("Phase 3 source snapshots support only BTC/USD.")
+    if asset_identifier != "BTC" or quote_currency not in {"USD", "USDT"}:
+        raise FeatureComputationError(
+            "Intraday source snapshots support only BTC/USD and BTC/USDT."
+        )
     _validate_source_observations(observations, timeframe)
 
     timestamps = tuple(

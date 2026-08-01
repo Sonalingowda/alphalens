@@ -4,17 +4,11 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
 import {
-  Activity,
   BarChart3,
-  FlaskConical,
-  HeartPulse,
-  History,
   LayoutDashboard,
   Menu,
-  Radio,
-  Settings,
-  ShieldAlert,
-  WalletCards,
+  RadioTower,
+  SearchCheck,
 } from "lucide-react";
 
 import { ThemeToggle } from "@/components/dashboard/theme-toggle";
@@ -31,14 +25,8 @@ import { cn } from "@/lib/utils";
 
 const navigation = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/predictions", label: "Predictions", icon: Activity },
-  { href: "/paper-trading", label: "Paper Trading", icon: Radio },
-  { href: "/portfolio", label: "Portfolio", icon: WalletCards },
-  { href: "/trade-history", label: "Trade History", icon: History },
-  { href: "/risk-events", label: "Risk Events", icon: ShieldAlert },
-  { href: "/backtest-reports", label: "Backtest Reports", icon: FlaskConical },
-  { href: "/system-health", label: "System Health", icon: HeartPulse },
-  { href: "/settings", label: "Settings", icon: Settings },
+  { href: "/#opportunities", label: "Opportunities", icon: SearchCheck },
+  { href: "/markets/live", label: "Live Market", icon: RadioTower },
 ] as const;
 
 function Brand() {
@@ -52,7 +40,7 @@ function Brand() {
           ALPHALENS
         </span>
         <span className="block text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
-          Research Operations
+          Market Intelligence
         </span>
       </span>
     </Link>
@@ -104,9 +92,9 @@ export function AppShell({ children }: { children: ReactNode }) {
         <div className="border-t p-4 text-xs text-muted-foreground">
           <div className="mb-1 flex items-center gap-2 text-foreground">
             <span className="size-1.5 rounded-full bg-emerald-400" />
-            Artifact-only inference
+            Deterministic surveillance
           </div>
-          No training surface
+          User-directed decisions only
         </div>
       </aside>
 
@@ -138,7 +126,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           </div>
           <div className="hidden items-center gap-2 text-xs uppercase tracking-[0.16em] text-muted-foreground lg:flex">
             <span className="size-1.5 rounded-full bg-emerald-400" />
-            Operational console
+            Market intelligence console
           </div>
           <ThemeToggle />
         </header>

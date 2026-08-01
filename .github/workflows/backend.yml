@@ -11,6 +11,34 @@ jobs:
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16.8-alpine3.21
+        env:
+          POSTGRES_DB: alphalens_test
+          POSTGRES_USER: alphalens
+          POSTGRES_PASSWORD: ci-validation-only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U alphalens -d alphalens_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+      redis:
+        image: redis:7.4.2-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 12
+    env:
+      ALPHALENS_ENVIRONMENT: test
+      ALPHALENS_DATABASE_URL: postgresql+asyncpg://alphalens:ci-validation-only@127.0.0.1:5432/alphalens_test
+      ALPHALENS_REDIS_URL: redis://127.0.0.1:6379/0
+      ALPHALENS_RUN_POSTGRES_TESTS: "1"
     defaults:
       run:
         working-directory: backend
@@ -29,5 +57,13 @@ jobs:
         run: uv run ruff check app tests
       - name: Compile
         run: uv run python -m compileall -q app
+      - name: Validate migrations
+        run: |
+          uv run alembic upgrade head
+          uv run python -m app.startup readiness
+          uv run alembic downgrade -1
+          uv run alembic upgrade head
       - name: Test
         run: uv run python -m unittest discover -s tests -p "test_*.py"
+      - name: Check migration graph
+        run: test "$(uv run alembic heads | wc -l | tr -d ' ')" = "1"

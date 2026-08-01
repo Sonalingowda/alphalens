@@ -1,14 +1,14 @@
 # AlphaLens Dashboard
 
-AlphaLens Dashboard v1.0.0 is a read-only operational interface for the Live
-Prediction API. It displays verified prediction, paper-trading, portfolio,
-risk, backtest, and system evidence. It contains no machine-learning,
-prediction, trading, or risk-decision logic.
+AlphaLens Dashboard v1.0.0 is a read-only market-surveillance interface for the
+MVP API. It displays immutable live market snapshots and ranked opportunity
+projections with their evidence-backed detail. It contains no indicator,
+scoring, detection, confidence, ranking, or trading-decision logic.
 
 ## Requirements
 
-- Node.js 20.9 or newer
-- A running AlphaLens Live Prediction API
+- Node.js 22.13 or newer
+- A running AlphaLens MVP API
 
 ## Configuration
 
@@ -32,18 +32,13 @@ Open `http://127.0.0.1:3000`. The API runs separately on port `8000`.
 
 ## Pages
 
-- Dashboard
-- Predictions
-- Paper Trading
-- Portfolio
-- Trade History
-- Risk Events
-- Backtest Reports
-- System Health
-- Settings
+- Market Surveillance Dashboard
+- Opportunity Detail
+- Live Market Status
 
-Settings are inspection-only. Missing API or report evidence is shown as
-unavailable and is never replaced with fabricated values.
+Missing snapshots, opportunities, explanation text, or API evidence are shown
+as unavailable and are never replaced with fabricated values. Charts render
+only OHLC observations returned by the API.
 
 ## Verification
 
@@ -53,5 +48,5 @@ npm test
 npm run build
 ```
 
-Component tests cover shared dashboard states and signal presentation. API
-integration tests verify the dashboard's versioned read-only API contract.
+Component tests cover opportunity cards, market status, and explicit unavailable
+states. API integration tests verify all four versioned read-only MVP endpoints.

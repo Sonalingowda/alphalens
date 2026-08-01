@@ -1,6 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { getDashboardBundle } from "@/lib/api";
+import {
+  getDashboardBundle,
+  getLiveMarket,
+  getMvpHealth,
+  getOpportunities,
+  getOpportunityDetail,
+} from "@/lib/api";
 
 const dashboard = {
   snapshot_version: "1.0.0",
@@ -148,5 +154,99 @@ describe("Live Prediction API integration", () => {
     if (!result.ok) {
       expect(result.error).toContain("503");
     }
+  });
+});
+
+describe("AlphaLens MVP API integration", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("loads deterministic market, opportunity, detail, and health envelopes", async () => {
+    const envelopeByPath: Record<string, unknown> = {
+      "/health": {
+        contract_version: "1.0.0",
+        data: {
+          status: "ready",
+          service: "alphalens-mvp-api",
+          api_version: "1.0.0",
+          read_only: true,
+          authentication_required: false,
+          components: {
+            market_snapshots: "configured",
+            opportunity_dashboard: "configured",
+            opportunity_detail: "configured",
+          },
+        },
+        response_hash: "a".repeat(64),
+      },
+      "/markets/live": {
+        contract_version: "1.0.0",
+        data: {
+          contract_version: "1.0.0",
+          snapshot_id: "market.1",
+          scope: { instrument: "BTCUSDT", timeframe: "5m" },
+          candles: [],
+          complete: true,
+          audit: {
+            created_at: "2026-08-01T00:00:00Z",
+            evidence_cutoff: "2026-08-01T00:00:00Z",
+            available_at: "2026-08-01T00:00:00Z",
+            result_hash: "b".repeat(64),
+          },
+        },
+        response_hash: "b".repeat(64),
+      },
+      "/opportunities": {
+        contract_version: "1.0.0",
+        data: {
+          contract_version: "1.0.0",
+          items: [],
+          applied_filters: [],
+          sort: "canonical.rank",
+        },
+        response_hash: "c".repeat(64),
+      },
+      "/opportunities/opportunity.1": {
+        contract_version: "1.0.0",
+        data: { contract_version: "1.0.0", detail_id: "detail.1" },
+        response_hash: "d".repeat(64),
+      },
+    };
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = new URL(String(input));
+      return new Response(JSON.stringify(envelopeByPath[url.pathname]), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const [healthResult, marketResult, opportunityResult, detailResult] =
+      await Promise.all([
+        getMvpHealth(),
+        getLiveMarket(),
+        getOpportunities({ instrument: "BTCUSDT", timeframe: "5m" }),
+        getOpportunityDetail("opportunity.1"),
+      ]);
+
+    expect(healthResult.ok && healthResult.data.status).toBe("ready");
+    expect(marketResult.ok && marketResult.data.snapshot_id).toBe("market.1");
+    expect(opportunityResult.ok && opportunityResult.data.items).toEqual([]);
+    expect(detailResult.ok && detailResult.data.detail_id).toBe("detail.1");
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(String(fetchMock.mock.calls[1]?.[0])).toContain("timeframe=5m");
+  });
+
+  it("returns an explicit unavailable state instead of placeholder data", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("unavailable", { status: 503 })),
+    );
+
+    const result = await getLiveMarket();
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toContain("503");
   });
 });
