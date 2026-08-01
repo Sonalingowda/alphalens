@@ -15,10 +15,18 @@ from app.features.contracts import (
     FeatureValueDependency,
 )
 from app.features.ema import (
+    EMA_100_IDENTIFIER,
+    EMA_12_IDENTIFIER,
+    EMA_200_IDENTIFIER,
+    EMA_26_IDENTIFIER,
+    EMA_50_IDENTIFIER,
     EMA_DEFINITION_VERSION,
+    EMA_FEATURE_DEFINITIONS,
+    EMA_FAMILY_IDENTITIES,
     EMA_IDENTIFIER,
     EMA_PERIOD,
     ExponentialMovingAverage,
+    ExponentialMovingAverageFamilyMember,
 )
 from app.features.intraday_pipeline import (
     INTRADAY_PIPELINE_VERSION,
@@ -201,6 +209,141 @@ class ExponentialMovingAverageFormulaTests(unittest.TestCase):
             values[-1].dependencies[0].timestamp = values[-1].timestamp
 
 
+class ExponentialMovingAverageFamilyTests(unittest.TestCase):
+    def test_family_identities_periods_and_metadata_match_specification(self) -> None:
+        self.assertEqual(
+            EMA_FAMILY_IDENTITIES,
+            (
+                (12, EMA_12_IDENTIFIER, "EMA-12"),
+                (20, EMA_IDENTIFIER, "EMA-20"),
+                (26, EMA_26_IDENTIFIER, "EMA-26"),
+                (50, EMA_50_IDENTIFIER, "EMA-50"),
+                (100, EMA_100_IDENTIFIER, "EMA-100"),
+                (200, EMA_200_IDENTIFIER, "EMA-200"),
+            ),
+        )
+        self.assertEqual(
+            tuple(
+                definition.metadata.identifier for definition in EMA_FEATURE_DEFINITIONS
+            ),
+            tuple(identity[1] for identity in EMA_FAMILY_IDENTITIES),
+        )
+        self.assertEqual(
+            tuple(
+                definition.metadata.outputs[0].minimum_observations
+                for definition in EMA_FEATURE_DEFINITIONS
+            ),
+            tuple(identity[0] for identity in EMA_FAMILY_IDENTITIES),
+        )
+        self.assertTrue(
+            all(
+                definition.metadata.required_inputs == (CandleField.CLOSE,)
+                and definition.metadata.dependencies == ()
+                and definition.metadata.dependency_contracts == ()
+                and definition.metadata.history_type is FeatureHistoryType.RECURSIVE
+                for definition in EMA_FEATURE_DEFINITIONS
+            )
+        )
+
+    def test_all_members_share_formula_and_exact_warmup_boundaries(self) -> None:
+        for definition, (period, identifier, _) in zip(
+            EMA_FEATURE_DEFINITIONS,
+            EMA_FAMILY_IDENTITIES,
+            strict=True,
+        ):
+            with self.subTest(identifier=identifier):
+                warmup = definition.compute(
+                    _candles_from_closes(
+                        tuple(Decimal(index) for index in range(1, period))
+                    ),
+                    CandleTimeframe.MINUTE_5,
+                )
+                self.assertEqual(warmup, ())
+
+                values = definition.compute(
+                    _candles_from_closes(
+                        tuple(Decimal(index) for index in range(1, period + 3))
+                    ),
+                    CandleTimeframe.MINUTE_5,
+                )
+                seed = Decimal(period + 1) / Decimal(2)
+                self.assertEqual(
+                    tuple(value.value for value in values),
+                    tuple(
+                        (seed + offset).quantize(Decimal("0.000000000000000001"))
+                        for offset in range(3)
+                    ),
+                )
+                self.assertEqual(values[0].feature_name, identifier)
+                self.assertEqual(values[0].dependencies, ())
+                self.assertEqual(
+                    tuple(value.dependencies[0].timestamp for value in values[1:]),
+                    tuple(value.timestamp for value in values[:-1]),
+                )
+
+    def test_missing_members_use_one_parameterized_implementation(self) -> None:
+        added = tuple(
+            definition
+            for definition in EMA_FEATURE_DEFINITIONS
+            if definition.metadata.identifier != EMA_IDENTIFIER
+        )
+
+        self.assertEqual(len(added), 5)
+        self.assertTrue(
+            all(
+                isinstance(definition, ExponentialMovingAverageFamilyMember)
+                for definition in added
+            )
+        )
+        self.assertEqual(
+            {definition.metadata.implementation_reference for definition in added},
+            {"app.features.ema.ExponentialMovingAverageFamilyMember"},
+        )
+
+    def test_every_family_member_is_prefix_invariant_and_future_isolated(self) -> None:
+        closes = tuple(Decimal(index) / Decimal(7) + 100 for index in range(205))
+        candles = _candles_from_closes(closes)
+        changed_last = candles[:-1] + (
+            replace(
+                candles[-1],
+                open=candles[-1].open + Decimal(5),
+                high=candles[-1].high + Decimal(5),
+                low=candles[-1].low + Decimal(5),
+                close=candles[-1].close + Decimal(5),
+            ),
+        )
+
+        for definition in EMA_FEATURE_DEFINITIONS:
+            with self.subTest(identifier=definition.metadata.identifier):
+                full = definition.compute(candles, CandleTimeframe.MINUTE_5)
+                prefix = definition.compute(candles[:-1], CandleTimeframe.MINUTE_5)
+                changed = definition.compute(changed_last, CandleTimeframe.MINUTE_5)
+                self.assertEqual(prefix, full[:-1])
+                self.assertEqual(changed[:-1], full[:-1])
+                self.assertNotEqual(changed[-1], full[-1])
+
+    def test_family_rejects_undeclared_dependencies(self) -> None:
+        dependency = FeatureDependencyInput(
+            definition_identifier="true_range",
+            definition_version="1.0.0",
+            output_name="true_range",
+            values=(),
+        )
+        candles = _candles_from_closes(tuple(Decimal(index) for index in range(1, 13)))
+
+        for definition in EMA_FEATURE_DEFINITIONS:
+            with self.subTest(identifier=definition.metadata.identifier):
+                with self.assertRaisesRegex(
+                    FeatureComputationError,
+                    "does not accept derived feature dependencies",
+                ):
+                    definition.compute(
+                        candles,
+                        CandleTimeframe.MINUTE_5,
+                        (dependency,),
+                    )
+
+
 class ExponentialMovingAveragePipelineTests(unittest.TestCase):
     def test_registry_and_pipeline_integrate_ema_in_canonical_order(self) -> None:
         observations = _observations(23, CandleTimeframe.MINUTE_5)
@@ -208,24 +351,37 @@ class ExponentialMovingAveragePipelineTests(unittest.TestCase):
             _snapshot(observations, CandleTimeframe.MINUTE_5)
         )
 
-        self.assertEqual(INTRADAY_PIPELINE_VERSION, "2.3.0")
+        self.assertEqual(INTRADAY_PIPELINE_VERSION, "2.4.0")
         self.assertEqual(
             result.execution_order,
             (
                 "candle_geometry",
                 "true_range",
                 "average_true_range",
+                "exponential_moving_average_12",
                 "exponential_moving_average",
+                "exponential_moving_average_26",
+                "exponential_moving_average_50",
+                "exponential_moving_average_100",
+                "exponential_moving_average_200",
                 "relative_strength_index",
             ),
         )
         self.assertEqual(
-            INTRADAY_FEATURE_REGISTRY.definitions[-2],
+            next(
+                definition
+                for definition in INTRADAY_FEATURE_REGISTRY.definitions
+                if definition.identifier == EMA_IDENTIFIER
+            ),
             ExponentialMovingAverage.metadata,
         )
         self.assertEqual(
-            INTRADAY_FEATURE_REGISTRY.output_names[-2],
-            EMA_IDENTIFIER,
+            tuple(
+                name
+                for name in INTRADAY_FEATURE_REGISTRY.output_names
+                if name.startswith("exponential_moving_average")
+            ),
+            tuple(identity[1] for identity in EMA_FAMILY_IDENTITIES),
         )
         ema_values = _ema_values(result.values)
         self.assertEqual(len(ema_values), 4)
@@ -237,6 +393,42 @@ class ExponentialMovingAveragePipelineTests(unittest.TestCase):
             observations[19].candle.timestamp + timedelta(minutes=5),
         )
         self.assertTrue(all(value.value > 0 for value in ema_values))
+
+    def test_pipeline_emits_every_family_member_with_exact_recursive_lineage(
+        self,
+    ) -> None:
+        observations = _observations(202, CandleTimeframe.MINUTE_5)
+        result = run_intraday_feature_pipeline(
+            _snapshot(observations, CandleTimeframe.MINUTE_5)
+        )
+
+        for period, identifier, _ in EMA_FAMILY_IDENTITIES:
+            with self.subTest(identifier=identifier):
+                values = tuple(
+                    value for value in result.values if value.output_name == identifier
+                )
+                memberships = tuple(
+                    membership
+                    for membership in result.dependency_memberships
+                    if membership.consumer_feature_identifier == identifier
+                )
+                self.assertEqual(len(values), 202 - period + 1)
+                self.assertEqual(
+                    values[0].candle_timestamp,
+                    observations[period - 1].candle.timestamp,
+                )
+                self.assertEqual(len(memberships), len(values) - 1)
+                self.assertEqual(
+                    tuple(
+                        membership.dependency_candle_timestamp
+                        for membership in memberships
+                    ),
+                    tuple(value.candle_timestamp for value in values[:-1]),
+                )
+                self.assertEqual(
+                    tuple(membership.dependency_value for membership in memberships),
+                    tuple(value.value for value in values[:-1]),
+                )
 
     def test_pipeline_retains_exact_recursive_predecessor_lineage(self) -> None:
         observations = _observations(23, CandleTimeframe.MINUTE_10)

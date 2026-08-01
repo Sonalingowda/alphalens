@@ -207,14 +207,19 @@ class AverageTrueRangePipelineTests(unittest.TestCase):
 
         result = run_intraday_feature_pipeline(snapshot)
 
-        self.assertEqual(INTRADAY_PIPELINE_VERSION, "2.3.0")
+        self.assertEqual(INTRADAY_PIPELINE_VERSION, "2.4.0")
         self.assertEqual(
             result.execution_order,
             (
                 "candle_geometry",
                 "true_range",
                 "average_true_range",
+                "exponential_moving_average_12",
                 "exponential_moving_average",
+                "exponential_moving_average_26",
+                "exponential_moving_average_50",
+                "exponential_moving_average_100",
+                "exponential_moving_average_200",
                 "relative_strength_index",
             ),
         )
@@ -286,11 +291,19 @@ class AverageTrueRangePipelineTests(unittest.TestCase):
         )
         run_id = UUID("00000000-0000-0000-0000-000000000102")
         recorded_at = datetime(2026, 8, 1, tzinfo=timezone.utc)
+        atr_result = replace(
+            result,
+            dependency_memberships=tuple(
+                membership
+                for membership in result.dependency_memberships
+                if membership.consumer_feature_identifier == "average_true_range"
+            ),
+        )
 
         rows = _dependency_membership_rows(
             run_id,
             stored_values,
-            result,
+            atr_result,
             recorded_at,
         )
 

@@ -244,14 +244,19 @@ class RelativeStrengthIndexPipelineTests(unittest.TestCase):
             _snapshot(observations, CandleTimeframe.MINUTE_5)
         )
 
-        self.assertEqual(INTRADAY_PIPELINE_VERSION, "2.3.0")
+        self.assertEqual(INTRADAY_PIPELINE_VERSION, "2.4.0")
         self.assertEqual(
             result.execution_order,
             (
                 "candle_geometry",
                 "true_range",
                 "average_true_range",
+                "exponential_moving_average_12",
                 "exponential_moving_average",
+                "exponential_moving_average_26",
+                "exponential_moving_average_50",
+                "exponential_moving_average_100",
+                "exponential_moving_average_200",
                 "relative_strength_index",
             ),
         )

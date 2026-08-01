@@ -159,7 +159,12 @@ class IntradayFeaturePipelineTests(unittest.TestCase):
                 "candle_geometry",
                 "true_range",
                 "average_true_range",
+                "exponential_moving_average_12",
                 "exponential_moving_average",
+                "exponential_moving_average_26",
+                "exponential_moving_average_50",
+                "exponential_moving_average_100",
+                "exponential_moving_average_200",
                 "relative_strength_index",
             ),
         )
