@@ -166,6 +166,7 @@ class IntradayFeaturePipelineTests(unittest.TestCase):
                 "exponential_moving_average_100",
                 "exponential_moving_average_200",
                 "relative_strength_index",
+                "moving_average_convergence_divergence",
             ),
         )
         self.assertEqual(

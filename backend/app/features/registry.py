@@ -13,6 +13,7 @@ from app.features.contracts import (
 )
 from app.features.atr import ATR_FEATURE_METADATA
 from app.features.ema import EMA_FEATURE_METADATA
+from app.features.macd import MACD_FEATURE_METADATA
 from app.features.rsi import RSI_FEATURE_METADATA
 from app.features.tier_a import TIER_A_FEATURE_METADATA
 
@@ -179,5 +180,6 @@ INTRADAY_FEATURE_REGISTRY = FeatureRegistry(
     TIER_A_FEATURE_METADATA
     + ATR_FEATURE_METADATA
     + EMA_FEATURE_METADATA
-    + RSI_FEATURE_METADATA,
+    + RSI_FEATURE_METADATA
+    + MACD_FEATURE_METADATA,
 )

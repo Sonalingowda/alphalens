@@ -24,6 +24,7 @@ from app.features.registry import (
 )
 from app.features.atr import ATR_FEATURE_DEFINITIONS
 from app.features.ema import EMA_FEATURE_DEFINITIONS
+from app.features.macd import MACD_FEATURE_DEFINITIONS
 from app.features.rsi import RSI_FEATURE_DEFINITIONS
 from app.features.tier_a import (
     TIER_A_FEATURE_DEFINITIONS,
@@ -40,7 +41,8 @@ LEGACY_INTRADAY_PIPELINE_VERSION = "2.0.0"
 ATR_INTRADAY_PIPELINE_VERSION = "2.1.0"
 EMA_INTRADAY_PIPELINE_VERSION = "2.2.0"
 RSI_INTRADAY_PIPELINE_VERSION = "2.3.0"
-INTRADAY_PIPELINE_VERSION = "2.4.0"
+EMA_FAMILY_INTRADAY_PIPELINE_VERSION = "2.4.0"
+INTRADAY_PIPELINE_VERSION = "2.5.0"
 
 
 @dataclass(frozen=True, slots=True)
@@ -342,6 +344,7 @@ def _approved_definitions_by_identifier() -> dict[str, IntradayFeatureDefinition
         + ATR_FEATURE_DEFINITIONS
         + EMA_FEATURE_DEFINITIONS
         + RSI_FEATURE_DEFINITIONS
+        + MACD_FEATURE_DEFINITIONS
     )
     definitions = {
         definition.metadata.identifier: definition

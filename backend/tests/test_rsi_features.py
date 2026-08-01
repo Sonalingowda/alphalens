@@ -244,7 +244,7 @@ class RelativeStrengthIndexPipelineTests(unittest.TestCase):
             _snapshot(observations, CandleTimeframe.MINUTE_5)
         )
 
-        self.assertEqual(INTRADAY_PIPELINE_VERSION, "2.4.0")
+        self.assertEqual(INTRADAY_PIPELINE_VERSION, "2.5.0")
         self.assertEqual(
             result.execution_order,
             (
@@ -258,15 +258,24 @@ class RelativeStrengthIndexPipelineTests(unittest.TestCase):
                 "exponential_moving_average_100",
                 "exponential_moving_average_200",
                 "relative_strength_index",
+                "moving_average_convergence_divergence",
             ),
         )
         self.assertEqual(
-            INTRADAY_FEATURE_REGISTRY.definitions[-1],
+            next(
+                definition
+                for definition in INTRADAY_FEATURE_REGISTRY.definitions
+                if definition.identifier == RSI_IDENTIFIER
+            ),
             RelativeStrengthIndex.metadata,
         )
         self.assertEqual(
-            INTRADAY_FEATURE_REGISTRY.output_names[-1],
-            RSI_IDENTIFIER,
+            tuple(
+                name
+                for name in INTRADAY_FEATURE_REGISTRY.output_names
+                if name == RSI_IDENTIFIER
+            ),
+            (RSI_IDENTIFIER,),
         )
         rsi_values = _rsi_values(result.values)
         self.assertEqual(len(rsi_values), 6)

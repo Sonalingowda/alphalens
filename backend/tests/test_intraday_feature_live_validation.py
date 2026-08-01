@@ -128,7 +128,7 @@ class LiveIntradayFeatureValidationTests(unittest.IsolatedAsyncioTestCase):
                 _FakeSessionMaker(),
             )
 
-        self.assertEqual(report.pipeline_version, "2.4.0")
+        self.assertEqual(report.pipeline_version, "2.5.0")
         self.assertEqual(
             report.registry_hash,
             INTRADAY_FEATURE_REGISTRY.configuration_hash,

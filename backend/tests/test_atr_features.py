@@ -207,7 +207,7 @@ class AverageTrueRangePipelineTests(unittest.TestCase):
 
         result = run_intraday_feature_pipeline(snapshot)
 
-        self.assertEqual(INTRADAY_PIPELINE_VERSION, "2.4.0")
+        self.assertEqual(INTRADAY_PIPELINE_VERSION, "2.5.0")
         self.assertEqual(
             result.execution_order,
             (
@@ -221,6 +221,7 @@ class AverageTrueRangePipelineTests(unittest.TestCase):
                 "exponential_moving_average_100",
                 "exponential_moving_average_200",
                 "relative_strength_index",
+                "moving_average_convergence_divergence",
             ),
         )
         atr_values = tuple(

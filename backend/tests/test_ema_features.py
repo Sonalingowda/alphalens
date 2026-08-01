@@ -351,7 +351,7 @@ class ExponentialMovingAveragePipelineTests(unittest.TestCase):
             _snapshot(observations, CandleTimeframe.MINUTE_5)
         )
 
-        self.assertEqual(INTRADAY_PIPELINE_VERSION, "2.4.0")
+        self.assertEqual(INTRADAY_PIPELINE_VERSION, "2.5.0")
         self.assertEqual(
             result.execution_order,
             (
@@ -365,6 +365,7 @@ class ExponentialMovingAveragePipelineTests(unittest.TestCase):
                 "exponential_moving_average_100",
                 "exponential_moving_average_200",
                 "relative_strength_index",
+                "moving_average_convergence_divergence",
             ),
         )
         self.assertEqual(

@@ -102,6 +102,7 @@ class FeatureRegistryTests(unittest.TestCase):
                 "exponential_moving_average_100",
                 "exponential_moving_average_200",
                 "relative_strength_index",
+                "moving_average_convergence_divergence",
             ),
         )
         self.assertEqual(
@@ -120,6 +121,9 @@ class FeatureRegistryTests(unittest.TestCase):
                 "exponential_moving_average_100",
                 "exponential_moving_average_200",
                 "relative_strength_index",
+                "macd_line",
+                "macd_signal",
+                "macd_histogram",
             ),
         )
         self.assertEqual(INTRADAY_FEATURE_REGISTRY.schema_version, "1.1.0")
