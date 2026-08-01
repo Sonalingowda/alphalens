@@ -96,6 +96,7 @@ class FeatureRegistryTests(unittest.TestCase):
                 "true_range",
                 "average_true_range",
                 "exponential_moving_average",
+                "relative_strength_index",
             ),
         )
         self.assertEqual(
@@ -108,6 +109,7 @@ class FeatureRegistryTests(unittest.TestCase):
                 "true_range",
                 "average_true_range",
                 "exponential_moving_average",
+                "relative_strength_index",
             ),
         )
         self.assertEqual(INTRADAY_FEATURE_REGISTRY.schema_version, "1.1.0")

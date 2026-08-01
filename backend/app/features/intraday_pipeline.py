@@ -24,6 +24,7 @@ from app.features.registry import (
 )
 from app.features.atr import ATR_FEATURE_DEFINITIONS
 from app.features.ema import EMA_FEATURE_DEFINITIONS
+from app.features.rsi import RSI_FEATURE_DEFINITIONS
 from app.features.tier_a import (
     TIER_A_FEATURE_DEFINITIONS,
     IntradayFeatureDefinition,
@@ -37,7 +38,8 @@ from app.market_data.validation import (
 
 LEGACY_INTRADAY_PIPELINE_VERSION = "2.0.0"
 ATR_INTRADAY_PIPELINE_VERSION = "2.1.0"
-INTRADAY_PIPELINE_VERSION = "2.2.0"
+EMA_INTRADAY_PIPELINE_VERSION = "2.2.0"
+INTRADAY_PIPELINE_VERSION = "2.3.0"
 
 
 @dataclass(frozen=True, slots=True)
@@ -335,7 +337,10 @@ def source_batch_evidence(
 
 def _approved_definitions_by_identifier() -> dict[str, IntradayFeatureDefinition]:
     approved_definitions = (
-        TIER_A_FEATURE_DEFINITIONS + ATR_FEATURE_DEFINITIONS + EMA_FEATURE_DEFINITIONS
+        TIER_A_FEATURE_DEFINITIONS
+        + ATR_FEATURE_DEFINITIONS
+        + EMA_FEATURE_DEFINITIONS
+        + RSI_FEATURE_DEFINITIONS
     )
     definitions = {
         definition.metadata.identifier: definition

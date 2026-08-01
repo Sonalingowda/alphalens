@@ -396,6 +396,59 @@ def exponential_moving_average(
     return tuple(results)
 
 
+def wilder_relative_strength_index(
+    values: tuple[Decimal, ...],
+    period: int,
+) -> tuple[Decimal | None, ...]:
+    if period <= 0:
+        raise FeatureComputationError("RSI period must be positive.")
+    if any(not isinstance(value, Decimal) or not value.is_finite() for value in values):
+        raise FeatureComputationError("RSI input must contain finite Decimal values.")
+
+    results: list[Decimal | None] = [None] * len(values)
+    if len(values) <= period:
+        return tuple(results)
+
+    with localcontext() as context:
+        context.prec = 50
+        changes = tuple(
+            values[index] - values[index - 1] for index in range(1, len(values))
+        )
+        gains = tuple(max(change, Decimal(0)) for change in changes)
+        losses = tuple(max(-change, Decimal(0)) for change in changes)
+        average_gain = sum(gains[:period], Decimal(0)) / Decimal(period)
+        average_loss = sum(losses[:period], Decimal(0)) / Decimal(period)
+        results[period] = _relative_strength_index_value(
+            average_gain,
+            average_loss,
+        )
+
+        for point_index in range(period + 1, len(values)):
+            change_index = point_index - 1
+            average_gain = (
+                average_gain * Decimal(period - 1) + gains[change_index]
+            ) / Decimal(period)
+            average_loss = (
+                average_loss * Decimal(period - 1) + losses[change_index]
+            ) / Decimal(period)
+            results[point_index] = _relative_strength_index_value(
+                average_gain,
+                average_loss,
+            )
+
+    return tuple(results)
+
+
+def _relative_strength_index_value(
+    average_gain: Decimal,
+    average_loss: Decimal,
+) -> Decimal:
+    if average_loss == 0:
+        return Decimal(50) if average_gain == 0 else Decimal(100)
+    relative_strength = average_gain / average_loss
+    return Decimal(100) - Decimal(100) / (Decimal(1) + relative_strength)
+
+
 def _required_decimal(value: Decimal | None) -> Decimal:
     if value is None:
         raise FeatureComputationError("Feature input value is unexpectedly missing.")

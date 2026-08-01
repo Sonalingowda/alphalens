@@ -1,4 +1,4 @@
-"""Focused specification and integration tests for approved EMA-01."""
+"""Focused specification and integration tests for approved RSI-01."""
 
 from dataclasses import FrozenInstanceError, replace
 from datetime import datetime, timedelta, timezone
@@ -12,76 +12,136 @@ from app.features.contracts import (
     FeatureComputationError,
     FeatureDependencyInput,
     FeatureHistoryType,
-    FeatureValueDependency,
-)
-from app.features.ema import (
-    EMA_DEFINITION_VERSION,
-    EMA_IDENTIFIER,
-    EMA_PERIOD,
-    ExponentialMovingAverage,
 )
 from app.features.intraday_pipeline import (
     INTRADAY_PIPELINE_VERSION,
-    PipelineFeatureValue,
     SourceCandleObservation,
-    _feature_dependency_memberships,
     build_intraday_source_snapshot,
     run_intraday_feature_pipeline,
 )
+from app.features.momentum import RelativeStrengthIndex as LegacyRelativeStrengthIndex
 from app.features.registry import INTRADAY_FEATURE_REGISTRY
+from app.features.rsi import (
+    RSI_IDENTIFIER,
+    RSI_MINIMUM_OBSERVATIONS,
+    RSI_PERIOD,
+    RelativeStrengthIndex,
+)
 from app.market_data.models import Candle, CandleTimeframe
 from app.persistence.intraday_features import _dependency_membership_rows
 
 
-_BATCH_ID = UUID("00000000-0000-0000-0000-000000000201")
+_BATCH_ID = UUID("00000000-0000-0000-0000-000000000301")
+_CLASSIC_CLOSES = tuple(
+    Decimal(value)
+    for value in (
+        "44.34",
+        "44.09",
+        "44.15",
+        "43.61",
+        "44.33",
+        "44.83",
+        "45.10",
+        "45.42",
+        "45.84",
+        "46.08",
+        "45.89",
+        "46.03",
+        "45.61",
+        "46.28",
+        "46.28",
+        "46.00",
+        "46.03",
+        "46.41",
+        "46.22",
+        "45.64",
+    )
+)
 
 
-class ExponentialMovingAverageFormulaTests(unittest.TestCase):
-    feature = ExponentialMovingAverage()
+class RelativeStrengthIndexFormulaTests(unittest.TestCase):
+    feature = RelativeStrengthIndex()
 
-    def test_metadata_matches_successor_registry_specification(self) -> None:
+    def test_metadata_matches_approved_quantitative_specification(self) -> None:
         metadata = self.feature.metadata
 
-        self.assertEqual(metadata.identifier, "exponential_moving_average")
+        self.assertEqual(metadata.identifier, "relative_strength_index")
         self.assertEqual(metadata.definition_version, "1.0.0")
-        self.assertEqual(metadata.category, "trend")
+        self.assertEqual(metadata.category, "momentum")
         self.assertEqual(metadata.required_inputs, (CandleField.CLOSE,))
         self.assertEqual(metadata.history_type, FeatureHistoryType.RECURSIVE)
         self.assertIsNone(metadata.maximum_lookback_observations)
         self.assertTrue(metadata.requires_continuity)
-        self.assertEqual(metadata.outputs[0].identifier, EMA_IDENTIFIER)
-        self.assertEqual(metadata.outputs[0].minimum_observations, EMA_PERIOD)
+        self.assertEqual(metadata.outputs[0].identifier, RSI_IDENTIFIER)
+        self.assertEqual(
+            metadata.outputs[0].minimum_observations,
+            RSI_MINIMUM_OBSERVATIONS,
+        )
         self.assertEqual(metadata.dependencies, ())
         self.assertEqual(metadata.dependency_contracts, ())
 
-    def test_seed_and_recursive_values_match_approved_fixtures(self) -> None:
-        candles = _candles_from_closes(tuple(Decimal(index) for index in range(1, 23)))
-
-        values = self.feature.compute(candles, CandleTimeframe.MINUTE_5)
+    def test_wilder_seed_and_recursion_match_approved_fixtures(self) -> None:
+        values = self.feature.compute(
+            _candles_from_closes(_CLASSIC_CLOSES),
+            CandleTimeframe.MINUTE_5,
+        )
 
         self.assertEqual(
             tuple(value.value for value in values),
             (
-                Decimal("10.500000000000000000"),
-                Decimal("11.500000000000000000"),
-                Decimal("12.500000000000000000"),
+                Decimal("70.464135021097046414"),
+                Decimal("66.249618553555080867"),
+                Decimal("66.480941834712670474"),
+                Decimal("69.346853162908698511"),
+                Decimal("66.294712658926250984"),
+                Decimal("57.915020670085559689"),
             ),
         )
-        self.assertEqual(values[0].timestamp, candles[19].timestamp)
+        self.assertEqual(
+            values[0].timestamp, _candles_from_closes(_CLASSIC_CLOSES)[14].timestamp
+        )
         self.assertEqual(values[0].dependencies, ())
         self.assertEqual(
             tuple(value.dependencies[0].timestamp for value in values[1:]),
-            (candles[19].timestamp, candles[20].timestamp),
+            tuple(value.timestamp for value in values[:-1]),
         )
 
+    def test_zero_gain_and_loss_edges_are_exact(self) -> None:
+        fixtures = (
+            (
+                tuple(Decimal(index) for index in range(10, 26)),
+                Decimal("100.000000000000000000"),
+            ),
+            (
+                tuple(Decimal(100 - index) for index in range(16)),
+                Decimal("0.000000000000000000"),
+            ),
+            (
+                (Decimal("100"),) * 16,
+                Decimal("50.000000000000000000"),
+            ),
+        )
+
+        for closes, expected in fixtures:
+            with self.subTest(expected=expected):
+                values = self.feature.compute(
+                    _candles_from_closes(closes),
+                    CandleTimeframe.MINUTE_5,
+                )
+                self.assertTrue(values)
+                self.assertTrue(all(value.value == expected for value in values))
+                self.assertTrue(
+                    all(Decimal(0) <= value.value <= Decimal(100) for value in values)
+                )
+
     def test_warmup_omits_every_undefined_value(self) -> None:
-        for candle_count in range(1, EMA_PERIOD):
+        for candle_count in range(1, RSI_MINIMUM_OBSERVATIONS):
             with self.subTest(candle_count=candle_count):
                 self.assertEqual(
                     self.feature.compute(
                         _candles_from_closes(
                             tuple(
-                                Decimal(index) for index in range(1, candle_count + 1)
+                                Decimal(100 + index) for index in range(candle_count)
                             ),
                             CandleTimeframe.MINUTE_10,
                         ),
@@ -92,40 +152,15 @@ class ExponentialMovingAverageFormulaTests(unittest.TestCase):
 
         first = self.feature.compute(
             _candles_from_closes(
-                tuple(Decimal(index) for index in range(1, EMA_PERIOD + 1)),
+                tuple(Decimal(100 + index) for index in range(15)),
                 CandleTimeframe.MINUTE_10,
             ),
             CandleTimeframe.MINUTE_10,
         )
         self.assertEqual(len(first), 1)
 
-    def test_recursive_state_is_not_replaced_by_quantized_output(self) -> None:
-        closes = (Decimal("100"),) * 19 + (
-            Decimal("100.000000000000000001"),
-            Decimal("100.000000000000000010"),
-            Decimal("100.000000000000000020"),
-            Decimal("100.000000000000000030"),
-        )
-
-        values = self.feature.compute(
-            _candles_from_closes(closes),
-            CandleTimeframe.MINUTE_5,
-        )
-
-        self.assertEqual(
-            tuple(value.value for value in values),
-            (
-                Decimal("100.000000000000000000"),
-                Decimal("100.000000000000000001"),
-                Decimal("100.000000000000000003"),
-                Decimal("100.000000000000000005"),
-            ),
-        )
-
     def test_execution_is_isolated_from_ambient_decimal_context(self) -> None:
-        candles = _candles_from_closes(
-            tuple(Decimal(index) / Decimal(7) + Decimal(100) for index in range(23))
-        )
+        candles = _candles_from_closes(_CLASSIC_CLOSES)
         expected = self.feature.compute(candles, CandleTimeframe.MINUTE_5)
 
         with localcontext() as context:
@@ -134,12 +169,22 @@ class ExponentialMovingAverageFormulaTests(unittest.TestCase):
 
         self.assertEqual(actual, expected)
 
+    def test_legacy_reference_reuses_identical_shared_wilder_primitive(self) -> None:
+        candles = _candles_from_closes(_CLASSIC_CLOSES)
+
+        successor = self.feature.compute(candles, CandleTimeframe.MINUTE_5)
+        legacy = LegacyRelativeStrengthIndex(period=RSI_PERIOD).compute(candles)
+
+        self.assertEqual(
+            tuple((value.timestamp, value.value) for value in successor),
+            tuple((value.timestamp, value.value) for value in legacy),
+        )
+
     def test_derived_dependency_input_is_rejected(self) -> None:
-        candles = _candles_from_closes(tuple(Decimal(index) for index in range(1, 21)))
         dependency = FeatureDependencyInput(
-            definition_identifier="true_range",
+            definition_identifier="exponential_moving_average",
             definition_version="1.0.0",
-            output_name="true_range",
+            output_name="exponential_moving_average",
             values=(),
         )
 
@@ -148,24 +193,17 @@ class ExponentialMovingAverageFormulaTests(unittest.TestCase):
             "does not accept derived feature dependencies",
         ):
             self.feature.compute(
-                candles,
+                _candles_from_closes(_CLASSIC_CLOSES),
                 CandleTimeframe.MINUTE_5,
                 (dependency,),
             )
 
     def test_invalid_source_evidence_fails_closed(self) -> None:
-        valid = _candles_from_closes(tuple(Decimal(index) for index in range(1, 21)))
+        valid = _candles_from_closes(_CLASSIC_CLOSES)
         invalid_sequences = (
             valid[:5] + (replace(valid[5], close=None),) + valid[6:],
-            valid[:5] + (replace(valid[5], close=6),) + valid[6:],
-            valid[:5]
-            + (
-                replace(
-                    valid[5],
-                    timestamp=valid[4].timestamp,
-                ),
-            )
-            + valid[6:],
+            valid[:5] + (replace(valid[5], close=45),) + valid[6:],
+            valid[:5] + (replace(valid[5], timestamp=valid[4].timestamp),) + valid[6:],
             valid[:5]
             + (
                 replace(
@@ -175,12 +213,7 @@ class ExponentialMovingAverageFormulaTests(unittest.TestCase):
             )
             + valid[6:],
             valid[:5]
-            + (
-                replace(
-                    valid[5],
-                    close=valid[5].high + Decimal(1),
-                ),
-            )
+            + (replace(valid[5], close=valid[5].high + Decimal(1)),)
             + valid[6:],
         )
 
@@ -191,7 +224,7 @@ class ExponentialMovingAverageFormulaTests(unittest.TestCase):
 
     def test_outputs_and_predecessor_memberships_are_immutable(self) -> None:
         values = self.feature.compute(
-            _candles_from_closes(tuple(Decimal(index) for index in range(1, 22))),
+            _candles_from_closes(_CLASSIC_CLOSES),
             CandleTimeframe.MINUTE_5,
         )
 
@@ -201,9 +234,12 @@ class ExponentialMovingAverageFormulaTests(unittest.TestCase):
             values[-1].dependencies[0].timestamp = values[-1].timestamp
 
 
-class ExponentialMovingAveragePipelineTests(unittest.TestCase):
-    def test_registry_and_pipeline_integrate_ema_in_canonical_order(self) -> None:
-        observations = _observations(23, CandleTimeframe.MINUTE_5)
+class RelativeStrengthIndexPipelineTests(unittest.TestCase):
+    def test_registry_and_pipeline_integrate_rsi_in_canonical_order(self) -> None:
+        observations = _observations_from_closes(
+            tuple(Decimal(100 + index) for index in range(20)),
+            CandleTimeframe.MINUTE_5,
+        )
         result = run_intraday_feature_pipeline(
             _snapshot(observations, CandleTimeframe.MINUTE_5)
         )
@@ -220,148 +256,70 @@ class ExponentialMovingAveragePipelineTests(unittest.TestCase):
             ),
         )
         self.assertEqual(
-            INTRADAY_FEATURE_REGISTRY.definitions[-2],
-            ExponentialMovingAverage.metadata,
+            INTRADAY_FEATURE_REGISTRY.definitions[-1],
+            RelativeStrengthIndex.metadata,
         )
         self.assertEqual(
-            INTRADAY_FEATURE_REGISTRY.output_names[-2],
-            EMA_IDENTIFIER,
+            INTRADAY_FEATURE_REGISTRY.output_names[-1],
+            RSI_IDENTIFIER,
         )
-        ema_values = _ema_values(result.values)
-        self.assertEqual(len(ema_values), 4)
+        rsi_values = _rsi_values(result.values)
+        self.assertEqual(len(rsi_values), 6)
         self.assertEqual(
-            ema_values[0].candle_timestamp, observations[19].candle.timestamp
+            rsi_values[0].candle_timestamp, observations[14].candle.timestamp
         )
         self.assertEqual(
-            ema_values[0].available_at,
-            observations[19].candle.timestamp + timedelta(minutes=5),
+            rsi_values[0].available_at,
+            observations[14].candle.timestamp + timedelta(minutes=5),
         )
-        self.assertTrue(all(value.value > 0 for value in ema_values))
+        self.assertTrue(
+            all(
+                value.value == Decimal("100.000000000000000000") for value in rsi_values
+            )
+        )
 
     def test_pipeline_retains_exact_recursive_predecessor_lineage(self) -> None:
-        observations = _observations(23, CandleTimeframe.MINUTE_10)
+        observations = _observations_from_closes(
+            _CLASSIC_CLOSES,
+            CandleTimeframe.MINUTE_10,
+        )
         result = run_intraday_feature_pipeline(
             _snapshot(observations, CandleTimeframe.MINUTE_10)
         )
-        ema_values = _ema_values(result.values)
-        memberships = _ema_memberships(result.dependency_memberships)
+        rsi_values = _rsi_values(result.values)
+        memberships = _rsi_memberships(result.dependency_memberships)
 
-        self.assertEqual(len(memberships), len(ema_values) - 1)
+        self.assertEqual(len(memberships), len(rsi_values) - 1)
+        self.assertTrue(all(value.dependency_ordinal == 0 for value in memberships))
         self.assertEqual(
-            tuple(membership.dependency_ordinal for membership in memberships),
-            (0, 0, 0),
+            tuple(value.consumer_candle_timestamp for value in memberships),
+            tuple(value.candle_timestamp for value in rsi_values[1:]),
         )
         self.assertEqual(
-            tuple(membership.consumer_candle_timestamp for membership in memberships),
-            tuple(value.candle_timestamp for value in ema_values[1:]),
+            tuple(value.dependency_candle_timestamp for value in memberships),
+            tuple(value.candle_timestamp for value in rsi_values[:-1]),
         )
         self.assertEqual(
-            tuple(membership.dependency_candle_timestamp for membership in memberships),
-            tuple(value.candle_timestamp for value in ema_values[:-1]),
-        )
-        self.assertEqual(
-            tuple(membership.dependency_value for membership in memberships),
-            tuple(value.value for value in ema_values[:-1]),
+            tuple(value.dependency_value for value in memberships),
+            tuple(value.value for value in rsi_values[:-1]),
         )
         self.assertTrue(
             all(
                 membership.dependency_available_at
                 < next(
                     value.available_at
-                    for value in ema_values
+                    for value in rsi_values
                     if value.candle_timestamp == membership.consumer_candle_timestamp
                 )
                 for membership in memberships
             )
         )
 
-    def test_invalid_recursive_lineage_is_rejected(self) -> None:
-        feature = ExponentialMovingAverage()
-        values = feature.compute(
-            _candles_from_closes(tuple(Decimal(index) for index in range(1, 22))),
+    def test_prefix_invariance_and_future_isolation(self) -> None:
+        observations = _observations_from_closes(
+            _CLASSIC_CLOSES,
             CandleTimeframe.MINUTE_5,
         )
-        lookup = {
-            (
-                EMA_IDENTIFIER,
-                EMA_DEFINITION_VERSION,
-                EMA_IDENTIFIER,
-                value.timestamp,
-            ): PipelineFeatureValue(
-                feature_identifier=EMA_IDENTIFIER,
-                definition_version=EMA_DEFINITION_VERSION,
-                output_name=EMA_IDENTIFIER,
-                candle_timestamp=value.timestamp,
-                available_at=value.timestamp + timedelta(minutes=5),
-                value=value.value,
-            )
-            for value in values
-        }
-        predecessor = values[1].dependencies[0]
-        invalid_values = (
-            (values[0], replace(values[1], dependencies=())),
-            (
-                values[0],
-                replace(
-                    values[1],
-                    dependencies=(replace(predecessor, definition_version="2.0.0"),),
-                ),
-            ),
-            (
-                values[0],
-                replace(
-                    values[1],
-                    dependencies=(replace(predecessor, output_name="other"),),
-                ),
-            ),
-            (
-                values[0],
-                replace(
-                    values[1],
-                    dependencies=(replace(predecessor, timestamp=values[1].timestamp),),
-                ),
-            ),
-            (
-                replace(
-                    values[0],
-                    dependencies=(
-                        FeatureValueDependency(
-                            definition_identifier=EMA_IDENTIFIER,
-                            definition_version=EMA_DEFINITION_VERSION,
-                            output_name=EMA_IDENTIFIER,
-                            timestamp=values[0].timestamp,
-                        ),
-                    ),
-                ),
-                values[1],
-            ),
-        )
-
-        for tampered in invalid_values:
-            with self.subTest(tampered=tampered):
-                with self.assertRaises(FeatureComputationError):
-                    _feature_dependency_memberships(
-                        feature.metadata,
-                        tampered,
-                        lookup,
-                    )
-
-        with self.assertRaisesRegex(
-            FeatureComputationError,
-            "dependency value is missing",
-        ):
-            _feature_dependency_memberships(
-                feature.metadata,
-                values,
-                {
-                    key: value
-                    for key, value in lookup.items()
-                    if key[-1] != values[0].timestamp
-                },
-            )
-
-    def test_prefix_invariance_and_future_isolation(self) -> None:
-        observations = _observations(24, CandleTimeframe.MINUTE_5)
         full = run_intraday_feature_pipeline(
             _snapshot(observations, CandleTimeframe.MINUTE_5)
         )
@@ -371,18 +329,18 @@ class ExponentialMovingAveragePipelineTests(unittest.TestCase):
         prefix_end = observations[-2].candle.timestamp
 
         self.assertEqual(
-            _ema_values(prefix.values),
+            _rsi_values(prefix.values),
             tuple(
                 value
-                for value in _ema_values(full.values)
+                for value in _rsi_values(full.values)
                 if value.candle_timestamp <= prefix_end
             ),
         )
         self.assertEqual(
-            _ema_memberships(prefix.dependency_memberships),
+            _rsi_memberships(prefix.dependency_memberships),
             tuple(
                 membership
-                for membership in _ema_memberships(full.dependency_memberships)
+                for membership in _rsi_memberships(full.dependency_memberships)
                 if membership.consumer_candle_timestamp <= prefix_end
             ),
         )
@@ -399,16 +357,19 @@ class ExponentialMovingAveragePipelineTests(unittest.TestCase):
             _snapshot(observations[:-1] + (changed_last,), CandleTimeframe.MINUTE_5)
         )
         self.assertEqual(
-            _ema_values(full.values)[:-1],
-            _ema_values(changed.values)[:-1],
+            _rsi_values(full.values)[:-1],
+            _rsi_values(changed.values)[:-1],
         )
         self.assertNotEqual(
-            _ema_values(full.values)[-1],
-            _ema_values(changed.values)[-1],
+            _rsi_values(full.values)[-1],
+            _rsi_values(changed.values)[-1],
         )
 
     def test_replay_and_hashing_are_deterministic(self) -> None:
-        snapshot = _snapshot(_observations(23), CandleTimeframe.MINUTE_5)
+        snapshot = _snapshot(
+            _observations_from_closes(_CLASSIC_CLOSES, CandleTimeframe.MINUTE_15),
+            CandleTimeframe.MINUTE_15,
+        )
 
         first = run_intraday_feature_pipeline(snapshot)
         second = run_intraday_feature_pipeline(snapshot)
@@ -421,10 +382,13 @@ class ExponentialMovingAveragePipelineTests(unittest.TestCase):
 
     def test_recursive_provenance_maps_to_exact_persisted_values(self) -> None:
         result = run_intraday_feature_pipeline(
-            _snapshot(_observations(23), CandleTimeframe.MINUTE_5)
+            _snapshot(
+                _observations_from_closes(_CLASSIC_CLOSES),
+                CandleTimeframe.MINUTE_5,
+            )
         )
-        ema_values = _ema_values(result.values)
-        memberships = _ema_memberships(result.dependency_memberships)
+        rsi_values = _rsi_values(result.values)
+        memberships = _rsi_memberships(result.dependency_memberships)
         stored_values = tuple(
             SimpleNamespace(
                 id=index + 1,
@@ -432,22 +396,22 @@ class ExponentialMovingAveragePipelineTests(unittest.TestCase):
                 feature_name=value.output_name,
                 feature_value=value.value,
             )
-            for index, value in enumerate(ema_values)
+            for index, value in enumerate(rsi_values)
         )
-        ema_result = replace(
+        rsi_result = replace(
             result,
-            values=ema_values,
+            values=rsi_values,
             dependency_memberships=memberships,
         )
 
         rows = _dependency_membership_rows(
-            UUID("00000000-0000-0000-0000-000000000202"),
+            UUID("00000000-0000-0000-0000-000000000302"),
             stored_values,
-            ema_result,
+            rsi_result,
             datetime(2026, 8, 1, tzinfo=timezone.utc),
         )
 
-        self.assertEqual(len(rows), len(ema_values) - 1)
+        self.assertEqual(len(rows), len(rsi_values) - 1)
         self.assertEqual(
             tuple(row["feature_value_id"] for row in rows),
             tuple(value.id for value in stored_values[1:]),
@@ -470,7 +434,7 @@ def _candles_from_closes(
             timestamp=start + step * index,
             open=close,
             high=close + Decimal(1),
-            low=close - Decimal(1) if close > 1 else close / Decimal(2),
+            low=close - Decimal(1),
             close=close,
             volume=Decimal(10),
         )
@@ -478,11 +442,10 @@ def _candles_from_closes(
     )
 
 
-def _observations(
-    count: int,
+def _observations_from_closes(
+    closes: tuple[Decimal, ...],
     timeframe: CandleTimeframe = CandleTimeframe.MINUTE_5,
 ) -> tuple[SourceCandleObservation, ...]:
-    closes = tuple(Decimal(100 + index) for index in range(count))
     return tuple(
         SourceCandleObservation(
             candle=candle,
@@ -505,15 +468,15 @@ def _snapshot(
     )
 
 
-def _ema_values(values):
-    return tuple(value for value in values if value.output_name == EMA_IDENTIFIER)
+def _rsi_values(values):
+    return tuple(value for value in values if value.output_name == RSI_IDENTIFIER)
 
 
-def _ema_memberships(memberships):
+def _rsi_memberships(memberships):
     return tuple(
         membership
         for membership in memberships
-        if membership.consumer_feature_identifier == EMA_IDENTIFIER
+        if membership.consumer_feature_identifier == RSI_IDENTIFIER
     )
 
 

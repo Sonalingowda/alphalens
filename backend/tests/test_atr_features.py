@@ -207,7 +207,7 @@ class AverageTrueRangePipelineTests(unittest.TestCase):
 
         result = run_intraday_feature_pipeline(snapshot)
 
-        self.assertEqual(INTRADAY_PIPELINE_VERSION, "2.2.0")
+        self.assertEqual(INTRADAY_PIPELINE_VERSION, "2.3.0")
         self.assertEqual(
             result.execution_order,
             (
@@ -215,6 +215,7 @@ class AverageTrueRangePipelineTests(unittest.TestCase):
                 "true_range",
                 "average_true_range",
                 "exponential_moving_average",
+                "relative_strength_index",
             ),
         )
         atr_values = tuple(
@@ -229,8 +230,13 @@ class AverageTrueRangePipelineTests(unittest.TestCase):
                 Decimal("8.500000000000000000"),
             ),
         )
-        self.assertEqual(len(result.dependency_memberships), 28)
-        first_memberships = result.dependency_memberships[:14]
+        atr_memberships = tuple(
+            value
+            for value in result.dependency_memberships
+            if value.consumer_feature_identifier == "average_true_range"
+        )
+        self.assertEqual(len(atr_memberships), 28)
+        first_memberships = atr_memberships[:14]
         self.assertEqual(
             tuple(value.dependency_ordinal for value in first_memberships),
             tuple(range(14)),
@@ -240,7 +246,7 @@ class AverageTrueRangePipelineTests(unittest.TestCase):
                 value.dependency_feature_identifier == "true_range"
                 and value.dependency_definition_version == "1.0.0"
                 and value.dependency_output_name == "true_range"
-                for value in result.dependency_memberships
+                for value in atr_memberships
             )
         )
         self.assertEqual(
@@ -255,7 +261,7 @@ class AverageTrueRangePipelineTests(unittest.TestCase):
                     for value in atr_values
                     if value.candle_timestamp == membership.consumer_candle_timestamp
                 )
-                for membership in result.dependency_memberships
+                for membership in atr_memberships
             )
         )
 

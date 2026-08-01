@@ -1,13 +1,14 @@
 """Momentum feature definitions."""
 
 from dataclasses import dataclass
-from decimal import Decimal, localcontext
+from decimal import Decimal
 
 from app.features.contracts import (
     FeatureValue,
     exponential_moving_average,
     quantize_feature_value,
     validated_candle_points,
+    wilder_relative_strength_index,
 )
 from app.market_data.models import Candle
 
@@ -22,59 +23,19 @@ class RelativeStrengthIndex:
 
     def compute(self, candles: tuple[Candle, ...]) -> tuple[FeatureValue, ...]:
         points = validated_candle_points(candles)
-        if self.period <= 0:
-            raise ValueError("RSI period must be positive.")
-        if len(points) <= self.period:
-            return ()
-
-        with localcontext() as context:
-            context.prec = 50
-            changes = tuple(
-                points[index].close - points[index - 1].close
-                for index in range(1, len(points))
+        raw_values = wilder_relative_strength_index(
+            tuple(point.close for point in points),
+            self.period,
+        )
+        return tuple(
+            FeatureValue(
+                timestamp=points[index].timestamp,
+                feature_name=self.feature_names[0],
+                value=quantize_feature_value(raw_value),
             )
-            gains = tuple(max(change, Decimal(0)) for change in changes)
-            losses = tuple(max(-change, Decimal(0)) for change in changes)
-            average_gain = sum(gains[: self.period], Decimal(0)) / Decimal(
-                self.period
-            )
-            average_loss = sum(losses[: self.period], Decimal(0)) / Decimal(
-                self.period
-            )
-            results = [
-                FeatureValue(
-                    timestamp=points[self.period].timestamp,
-                    feature_name=self.feature_names[0],
-                    value=quantize_feature_value(
-                        _relative_strength_index(average_gain, average_loss)
-                    ),
-                )
-            ]
-
-            for point_index in range(self.period + 1, len(points)):
-                change_index = point_index - 1
-                average_gain = (
-                    average_gain * Decimal(self.period - 1)
-                    + gains[change_index]
-                ) / Decimal(self.period)
-                average_loss = (
-                    average_loss * Decimal(self.period - 1)
-                    + losses[change_index]
-                ) / Decimal(self.period)
-                results.append(
-                    FeatureValue(
-                        timestamp=points[point_index].timestamp,
-                        feature_name=self.feature_names[0],
-                        value=quantize_feature_value(
-                            _relative_strength_index(
-                                average_gain,
-                                average_loss,
-                            )
-                        ),
-                    )
-                )
-
-        return tuple(results)
+            for index, raw_value in enumerate(raw_values)
+            if raw_value is not None
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,9 +46,7 @@ class MovingAverageConvergenceDivergence:
 
     @property
     def feature_names(self) -> tuple[str, ...]:
-        prefix = (
-            f"macd_{self.fast_period}_{self.slow_period}_{self.signal_period}"
-        )
+        prefix = f"macd_{self.fast_period}_{self.slow_period}_{self.signal_period}"
         return (
             f"{prefix}_line",
             f"{prefix}_signal",
@@ -142,16 +101,6 @@ class MovingAverageConvergenceDivergence:
                     )
                 )
         return tuple(results)
-
-
-def _relative_strength_index(
-    average_gain: Decimal,
-    average_loss: Decimal,
-) -> Decimal:
-    if average_loss == 0:
-        return Decimal(50) if average_gain == 0 else Decimal(100)
-    relative_strength = average_gain / average_loss
-    return Decimal(100) - Decimal(100) / (Decimal(1) + relative_strength)
 
 
 def _required_decimal(value: Decimal | None) -> Decimal:
