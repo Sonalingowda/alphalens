@@ -26,6 +26,9 @@ from app.features.atr import ATR_FEATURE_DEFINITIONS
 from app.features.ema import EMA_FEATURE_DEFINITIONS
 from app.features.macd import MACD_FEATURE_DEFINITIONS
 from app.features.rsi import RSI_FEATURE_DEFINITIONS
+from app.features.statistical_volatility import (
+    STATISTICAL_VOLATILITY_FEATURE_DEFINITIONS,
+)
 from app.features.tier_a import (
     TIER_A_FEATURE_DEFINITIONS,
     IntradayFeatureDefinition,
@@ -42,7 +45,8 @@ ATR_INTRADAY_PIPELINE_VERSION = "2.1.0"
 EMA_INTRADAY_PIPELINE_VERSION = "2.2.0"
 RSI_INTRADAY_PIPELINE_VERSION = "2.3.0"
 EMA_FAMILY_INTRADAY_PIPELINE_VERSION = "2.4.0"
-INTRADAY_PIPELINE_VERSION = "2.5.0"
+MACD_INTRADAY_PIPELINE_VERSION = "2.5.0"
+INTRADAY_PIPELINE_VERSION = "2.6.0"
 
 
 @dataclass(frozen=True, slots=True)
@@ -345,6 +349,7 @@ def _approved_definitions_by_identifier() -> dict[str, IntradayFeatureDefinition
         + EMA_FEATURE_DEFINITIONS
         + RSI_FEATURE_DEFINITIONS
         + MACD_FEATURE_DEFINITIONS
+        + STATISTICAL_VOLATILITY_FEATURE_DEFINITIONS
     )
     definitions = {
         definition.metadata.identifier: definition

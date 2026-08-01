@@ -327,8 +327,7 @@ class MovingAverageConvergenceDivergencePipelineTests(unittest.TestCase):
             _snapshot(observations, CandleTimeframe.MINUTE_5)
         )
 
-        self.assertEqual(INTRADAY_PIPELINE_VERSION, "2.5.0")
-        self.assertEqual(result.execution_order[-1], MACD_IDENTIFIER)
+        self.assertEqual(INTRADAY_PIPELINE_VERSION, "2.6.0")
         self.assertLess(
             result.execution_order.index(EMA_12_IDENTIFIER),
             result.execution_order.index(MACD_IDENTIFIER),
@@ -338,11 +337,24 @@ class MovingAverageConvergenceDivergencePipelineTests(unittest.TestCase):
             result.execution_order.index(MACD_IDENTIFIER),
         )
         self.assertEqual(
-            INTRADAY_FEATURE_REGISTRY.definitions[-1],
+            next(
+                definition
+                for definition in INTRADAY_FEATURE_REGISTRY.definitions
+                if definition.identifier == MACD_IDENTIFIER
+            ),
             MovingAverageConvergenceDivergence.metadata,
         )
         self.assertEqual(
-            INTRADAY_FEATURE_REGISTRY.output_names[-3:],
+            tuple(
+                name
+                for name in INTRADAY_FEATURE_REGISTRY.output_names
+                if name
+                in {
+                    MACD_LINE_IDENTIFIER,
+                    MACD_SIGNAL_IDENTIFIER,
+                    MACD_HISTOGRAM_IDENTIFIER,
+                }
+            ),
             (
                 MACD_LINE_IDENTIFIER,
                 MACD_SIGNAL_IDENTIFIER,

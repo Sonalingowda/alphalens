@@ -6,6 +6,8 @@ from decimal import Decimal, localcontext
 from app.features.contracts import (
     FeatureValue,
     quantize_feature_value,
+    rolling_arithmetic_mean,
+    rolling_population_standard_deviation,
     validated_candle_points,
 )
 from app.market_data.models import Candle
@@ -30,23 +32,20 @@ class BollingerBands:
         if self.period <= 0 or self.standard_deviations <= 0:
             raise ValueError("Bollinger Band parameters must be positive.")
 
+        closes = tuple(point.close for point in points)
+        means = rolling_arithmetic_mean(closes, self.period)
+        deviations = rolling_population_standard_deviation(
+            closes,
+            means,
+            self.period,
+        )
         results: list[FeatureValue] = []
         with localcontext() as context:
             context.prec = 50
             for index in range(self.period - 1, len(points)):
-                window = points[index - self.period + 1 : index + 1]
-                middle = sum(
-                    (point.close for point in window),
-                    Decimal(0),
-                ) / Decimal(self.period)
-                variance = sum(
-                    (
-                        (point.close - middle) * (point.close - middle)
-                        for point in window
-                    ),
-                    Decimal(0),
-                ) / Decimal(self.period)
-                distance = variance.sqrt() * Decimal(self.standard_deviations)
+                middle = _required_decimal(means[index])
+                deviation = _required_decimal(deviations[index])
+                distance = deviation * Decimal(self.standard_deviations)
                 timestamp = points[index].timestamp
                 results.extend(
                     (
@@ -68,3 +67,9 @@ class BollingerBands:
                     )
                 )
         return tuple(results)
+
+
+def _required_decimal(value: Decimal | None) -> Decimal:
+    if value is None:
+        raise ValueError("Expected rolling statistical value is missing.")
+    return value

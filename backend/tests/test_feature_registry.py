@@ -103,6 +103,9 @@ class FeatureRegistryTests(unittest.TestCase):
                 "exponential_moving_average_200",
                 "relative_strength_index",
                 "moving_average_convergence_divergence",
+                "simple_moving_average_20",
+                "rolling_standard_deviation_20",
+                "bollinger_bands_20_2",
             ),
         )
         self.assertEqual(
@@ -124,6 +127,13 @@ class FeatureRegistryTests(unittest.TestCase):
                 "macd_line",
                 "macd_signal",
                 "macd_histogram",
+                "simple_moving_average_20",
+                "rolling_standard_deviation_20",
+                "bollinger_middle",
+                "bollinger_upper",
+                "bollinger_lower",
+                "bollinger_band_width",
+                "bollinger_percent_b",
             ),
         )
         self.assertEqual(INTRADAY_FEATURE_REGISTRY.schema_version, "1.1.0")

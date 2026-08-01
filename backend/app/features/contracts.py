@@ -396,6 +396,67 @@ def exponential_moving_average(
     return tuple(results)
 
 
+def rolling_arithmetic_mean(
+    values: tuple[Decimal, ...],
+    period: int,
+) -> tuple[Decimal | None, ...]:
+    if period <= 0:
+        raise FeatureComputationError("Rolling-mean period must be positive.")
+    _validate_decimal_series(values, "Rolling-mean")
+
+    results: list[Decimal | None] = [None] * len(values)
+    if len(values) < period:
+        return tuple(results)
+
+    with localcontext() as context:
+        context.prec = 50
+        rolling_sum = sum(values[:period], Decimal(0))
+        results[period - 1] = rolling_sum / Decimal(period)
+        for index in range(period, len(values)):
+            rolling_sum += values[index] - values[index - period]
+            results[index] = rolling_sum / Decimal(period)
+
+    return tuple(results)
+
+
+def rolling_population_standard_deviation(
+    values: tuple[Decimal, ...],
+    means: tuple[Decimal | None, ...],
+    period: int,
+) -> tuple[Decimal | None, ...]:
+    if period <= 0:
+        raise FeatureComputationError(
+            "Rolling-standard-deviation period must be positive."
+        )
+    if len(means) != len(values):
+        raise FeatureComputationError(
+            "Rolling-standard-deviation means must align with input values."
+        )
+    _validate_decimal_series(values, "Rolling-standard-deviation")
+
+    results: list[Decimal | None] = [None] * len(values)
+    with localcontext() as context:
+        context.prec = 50
+        for index in range(period - 1, len(values)):
+            mean = means[index]
+            if not isinstance(mean, Decimal) or not mean.is_finite():
+                raise FeatureComputationError(
+                    "Rolling-standard-deviation mean is unavailable or invalid."
+                )
+            window = values[index - period + 1 : index + 1]
+            variance = sum(
+                ((value - mean) * (value - mean) for value in window),
+                Decimal(0),
+            ) / Decimal(period)
+            if variance < 0:
+                raise FeatureComputationError(
+                    "Rolling population variance cannot be negative."
+                )
+            results[index] = variance.sqrt()
+
+    return tuple(results)
+
+
 def wilder_relative_strength_index(
     values: tuple[Decimal, ...],
     period: int,
@@ -447,6 +508,13 @@ def _relative_strength_index_value(
         return Decimal(50) if average_gain == 0 else Decimal(100)
     relative_strength = average_gain / average_loss
     return Decimal(100) - Decimal(100) / (Decimal(1) + relative_strength)
+
+
+def _validate_decimal_series(values: tuple[Decimal, ...], label: str) -> None:
+    if any(not isinstance(value, Decimal) or not value.is_finite() for value in values):
+        raise FeatureComputationError(
+            f"{label} input must contain finite Decimal values."
+        )
 
 
 def _required_decimal(value: Decimal | None) -> Decimal:
