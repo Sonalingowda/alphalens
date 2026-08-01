@@ -12,6 +12,7 @@ from app.features.contracts import (
     FeatureMetadataError,
 )
 from app.features.atr import ATR_FEATURE_METADATA
+from app.features.directional_movement import DIRECTIONAL_MOVEMENT_FEATURE_METADATA
 from app.features.ema import EMA_FEATURE_METADATA
 from app.features.macd import MACD_FEATURE_METADATA
 from app.features.rsi import RSI_FEATURE_METADATA
@@ -185,5 +186,6 @@ INTRADAY_FEATURE_REGISTRY = FeatureRegistry(
     + EMA_FEATURE_METADATA
     + RSI_FEATURE_METADATA
     + MACD_FEATURE_METADATA
-    + STATISTICAL_VOLATILITY_FEATURE_METADATA,
+    + STATISTICAL_VOLATILITY_FEATURE_METADATA
+    + DIRECTIONAL_MOVEMENT_FEATURE_METADATA,
 )

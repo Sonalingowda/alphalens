@@ -457,6 +457,31 @@ def rolling_population_standard_deviation(
     return tuple(results)
 
 
+def wilder_smoothed_sum(
+    values: tuple[Decimal, ...],
+    period: int,
+) -> tuple[Decimal | None, ...]:
+    """Return a one-time sum seed followed by Wilder recursive smoothing."""
+    if period <= 0:
+        raise FeatureComputationError("Wilder-smoothed-sum period must be positive.")
+    _validate_decimal_series(values, "Wilder-smoothed-sum")
+
+    results: list[Decimal | None] = [None] * len(values)
+    if len(values) < period:
+        return tuple(results)
+
+    with localcontext() as context:
+        context.prec = 50
+        previous = sum(values[:period], Decimal(0))
+        results[period - 1] = previous
+        divisor = Decimal(period)
+        for index in range(period, len(values)):
+            previous = previous - previous / divisor + values[index]
+            results[index] = previous
+
+    return tuple(results)
+
+
 def wilder_relative_strength_index(
     values: tuple[Decimal, ...],
     period: int,

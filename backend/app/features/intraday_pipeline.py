@@ -23,6 +23,7 @@ from app.features.registry import (
     INTRADAY_FEATURE_REGISTRY,
 )
 from app.features.atr import ATR_FEATURE_DEFINITIONS
+from app.features.directional_movement import DIRECTIONAL_MOVEMENT_FEATURE_DEFINITIONS
 from app.features.ema import EMA_FEATURE_DEFINITIONS
 from app.features.macd import MACD_FEATURE_DEFINITIONS
 from app.features.rsi import RSI_FEATURE_DEFINITIONS
@@ -46,7 +47,8 @@ EMA_INTRADAY_PIPELINE_VERSION = "2.2.0"
 RSI_INTRADAY_PIPELINE_VERSION = "2.3.0"
 EMA_FAMILY_INTRADAY_PIPELINE_VERSION = "2.4.0"
 MACD_INTRADAY_PIPELINE_VERSION = "2.5.0"
-INTRADAY_PIPELINE_VERSION = "2.6.0"
+STATISTICAL_VOLATILITY_INTRADAY_PIPELINE_VERSION = "2.6.0"
+INTRADAY_PIPELINE_VERSION = "2.7.0"
 
 
 @dataclass(frozen=True, slots=True)
@@ -350,6 +352,7 @@ def _approved_definitions_by_identifier() -> dict[str, IntradayFeatureDefinition
         + RSI_FEATURE_DEFINITIONS
         + MACD_FEATURE_DEFINITIONS
         + STATISTICAL_VOLATILITY_FEATURE_DEFINITIONS
+        + DIRECTIONAL_MOVEMENT_FEATURE_DEFINITIONS
     )
     definitions = {
         definition.metadata.identifier: definition

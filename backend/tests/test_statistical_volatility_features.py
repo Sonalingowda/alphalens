@@ -257,9 +257,9 @@ class StatisticalVolatilityPipelineTests(unittest.TestCase):
             _snapshot(observations, CandleTimeframe.MINUTE_5)
         )
 
-        self.assertEqual(INTRADAY_PIPELINE_VERSION, "2.6.0")
+        self.assertEqual(INTRADAY_PIPELINE_VERSION, "2.7.0")
         self.assertEqual(
-            result.execution_order[-3:],
+            result.execution_order[-8:-5],
             (
                 SMA_20_IDENTIFIER,
                 STANDARD_DEVIATION_20_IDENTIFIER,
@@ -269,9 +269,9 @@ class StatisticalVolatilityPipelineTests(unittest.TestCase):
         self.assertEqual(
             tuple(
                 definition.identifier
-                for definition in INTRADAY_FEATURE_REGISTRY.definitions[-3:]
+                for definition in INTRADAY_FEATURE_REGISTRY.definitions[-8:-5]
             ),
-            result.execution_order[-3:],
+            result.execution_order[-8:-5],
         )
         for identifier, expected in _EXPECTED.items():
             with self.subTest(identifier=identifier):

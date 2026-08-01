@@ -106,6 +106,11 @@ class FeatureRegistryTests(unittest.TestCase):
                 "simple_moving_average_20",
                 "rolling_standard_deviation_20",
                 "bollinger_bands_20_2",
+                "directional_movement",
+                "directional_indicators",
+                "directional_index",
+                "average_directional_index",
+                "average_directional_movement_rating",
             ),
         )
         self.assertEqual(
@@ -134,6 +139,13 @@ class FeatureRegistryTests(unittest.TestCase):
                 "bollinger_lower",
                 "bollinger_band_width",
                 "bollinger_percent_b",
+                "positive_directional_movement",
+                "negative_directional_movement",
+                "positive_directional_indicator",
+                "negative_directional_indicator",
+                "directional_index",
+                "average_directional_index",
+                "average_directional_movement_rating",
             ),
         )
         self.assertEqual(INTRADAY_FEATURE_REGISTRY.schema_version, "1.1.0")

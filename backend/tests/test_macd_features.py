@@ -327,7 +327,7 @@ class MovingAverageConvergenceDivergencePipelineTests(unittest.TestCase):
             _snapshot(observations, CandleTimeframe.MINUTE_5)
         )
 
-        self.assertEqual(INTRADAY_PIPELINE_VERSION, "2.6.0")
+        self.assertEqual(INTRADAY_PIPELINE_VERSION, "2.7.0")
         self.assertLess(
             result.execution_order.index(EMA_12_IDENTIFIER),
             result.execution_order.index(MACD_IDENTIFIER),

@@ -170,6 +170,11 @@ class IntradayFeaturePipelineTests(unittest.TestCase):
                 "simple_moving_average_20",
                 "rolling_standard_deviation_20",
                 "bollinger_bands_20_2",
+                "directional_movement",
+                "directional_indicators",
+                "directional_index",
+                "average_directional_index",
+                "average_directional_movement_rating",
             ),
         )
         self.assertEqual(
@@ -179,7 +184,7 @@ class IntradayFeaturePipelineTests(unittest.TestCase):
         self.assertEqual(result.registry_schema_version, "1.1.0")
         self.assertEqual(result.availability_contract_version, "1.0.0")
         self.assertTrue(result.point_in_time_validated)
-        self.assertEqual(len(result.values), 19)
+        self.assertEqual(len(result.values), 25)
         self.assertEqual(len(result.result_hash), 64)
 
     def test_warmup_and_output_order_are_enforced(self) -> None:
@@ -218,6 +223,8 @@ class IntradayFeaturePipelineTests(unittest.TestCase):
                 "upper_wick_fraction",
                 "lower_wick_fraction",
                 "true_range",
+                "positive_directional_movement",
+                "negative_directional_movement",
             ),
         )
 

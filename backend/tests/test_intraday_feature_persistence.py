@@ -112,7 +112,7 @@ class IntradayFeaturePersistenceTests(unittest.IsolatedAsyncioTestCase):
                 result,
             )
 
-        self.assertEqual(persisted.pipeline_version, "2.6.0")
+        self.assertEqual(persisted.pipeline_version, "2.7.0")
         self.assertEqual(
             persisted.inserted_value_count,
             len(result.values),
@@ -242,7 +242,7 @@ class IntradayFeaturePersistenceTests(unittest.IsolatedAsyncioTestCase):
             datetime.now(timezone.utc),
         )
 
-        self.assertEqual(row["pipeline_version"], "2.6.0")
+        self.assertEqual(row["pipeline_version"], "2.7.0")
         self.assertEqual(
             row["source_ingestion_batch_id"],
             source_batch_by_timestamp[value.candle_timestamp],
