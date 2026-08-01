@@ -11,7 +11,10 @@ from app.features.contracts import (
     FeatureValue,
     feature_available_at,
 )
-from app.features.registry import INTRADAY_FEATURE_REGISTRY
+from app.features.registry import (
+    INTRADAY_FEATURE_REGISTRY,
+    TIER_A_FEATURE_REGISTRY,
+)
 from app.features.tier_a import (
     TIER_A_FEATURE_DEFINITIONS,
     CandleGeometry,
@@ -40,18 +43,10 @@ class CandleGeometryTests(unittest.TestCase):
         self.assertEqual(
             _values_by_name(values),
             {
-                "candle_body_fraction": Decimal(
-                    "0.050000000000000000"
-                ),
-                "candle_range_fraction": Decimal(
-                    "0.200000000000000000"
-                ),
-                "upper_wick_fraction": Decimal(
-                    "0.050000000000000000"
-                ),
-                "lower_wick_fraction": Decimal(
-                    "0.100000000000000000"
-                ),
+                "candle_body_fraction": Decimal("0.050000000000000000"),
+                "candle_range_fraction": Decimal("0.200000000000000000"),
+                "upper_wick_fraction": Decimal("0.050000000000000000"),
+                "lower_wick_fraction": Decimal("0.100000000000000000"),
             },
         )
 
@@ -72,18 +67,10 @@ class CandleGeometryTests(unittest.TestCase):
         self.assertEqual(
             _values_by_name(values),
             {
-                "candle_body_fraction": Decimal(
-                    "-0.050000000000000000"
-                ),
-                "candle_range_fraction": Decimal(
-                    "0.140000000000000000"
-                ),
-                "upper_wick_fraction": Decimal(
-                    "0.040000000000000000"
-                ),
-                "lower_wick_fraction": Decimal(
-                    "0.050000000000000000"
-                ),
+                "candle_body_fraction": Decimal("-0.050000000000000000"),
+                "candle_range_fraction": Decimal("0.140000000000000000"),
+                "upper_wick_fraction": Decimal("0.040000000000000000"),
+                "lower_wick_fraction": Decimal("0.050000000000000000"),
             },
         )
 
@@ -281,12 +268,12 @@ class TierAIntegrityTests(unittest.TestCase):
         self.assertEqual(
             tuple(
                 definition.identifier
-                for definition in INTRADAY_FEATURE_REGISTRY.definitions
+                for definition in TIER_A_FEATURE_REGISTRY.definitions
             ),
             ("candle_geometry", "true_range"),
         )
         self.assertEqual(
-            INTRADAY_FEATURE_REGISTRY.output_names,
+            TIER_A_FEATURE_REGISTRY.output_names,
             (
                 "candle_body_fraction",
                 "candle_range_fraction",
@@ -362,9 +349,7 @@ class TierAIntegrityTests(unittest.TestCase):
                     prefix = candles[:prefix_length]
                     expected_end = prefix[-1].timestamp
                     expected = tuple(
-                        value
-                        for value in full
-                        if value.timestamp <= expected_end
+                        value for value in full if value.timestamp <= expected_end
                     )
                     self.assertEqual(
                         definition.compute(
@@ -398,14 +383,10 @@ class TierAIntegrityTests(unittest.TestCase):
             )
             self.assertEqual(
                 tuple(
-                    value
-                    for value in original
-                    if value.timestamp <= prior_timestamp
+                    value for value in original if value.timestamp <= prior_timestamp
                 ),
                 tuple(
-                    value
-                    for value in recomputed
-                    if value.timestamp <= prior_timestamp
+                    value for value in recomputed if value.timestamp <= prior_timestamp
                 ),
             )
 
@@ -414,12 +395,8 @@ class TierAIntegrityTests(unittest.TestCase):
     ) -> None:
         candles = _candles(3, CandleTimeframe.MINUTE_5)
         invalid_cases = (
-            candles[:1]
-            + (replace(candles[1], close=None),)
-            + candles[2:],
-            candles[:1]
-            + (replace(candles[1], open=Decimal("0")),)
-            + candles[2:],
+            candles[:1] + (replace(candles[1], close=None),) + candles[2:],
+            candles[:1] + (replace(candles[1], open=Decimal("0")),) + candles[2:],
             candles[:1]
             + (
                 replace(
@@ -433,8 +410,7 @@ class TierAIntegrityTests(unittest.TestCase):
             + (
                 replace(
                     candles[1],
-                    timestamp=candles[1].timestamp
-                    + timedelta(minutes=5),
+                    timestamp=candles[1].timestamp + timedelta(minutes=5),
                 ),
             )
             + candles[2:],
@@ -468,8 +444,7 @@ class TierAIntegrityTests(unittest.TestCase):
                 CandleTimeframe.MINUTE_5,
             )
             identities = tuple(
-                (value.timestamp, value.feature_name)
-                for value in values
+                (value.timestamp, value.feature_name) for value in values
             )
             self.assertEqual(len(identities), len(set(identities)))
 

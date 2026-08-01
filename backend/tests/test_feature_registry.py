@@ -9,6 +9,7 @@ from app.features.contracts import (
     CandleField,
     FeatureAvailabilityRule,
     FeatureDefinitionMetadata,
+    FeatureDependencyMetadata,
     FeatureHistoryType,
     FeatureMetadataError,
     FeatureOutputMetadata,
@@ -16,6 +17,7 @@ from app.features.contracts import (
 )
 from app.features.registry import (
     INTRADAY_FEATURE_REGISTRY,
+    TIER_A_FEATURE_REGISTRY,
     FeatureRegistry,
 )
 from app.market_data.models import CandleTimeframe
@@ -24,6 +26,7 @@ from app.persistence.models import (
     FeaturePipelineRunRecord,
     FeaturePipelineRunSourceRecord,
     FeaturePipelineRunValueRecord,
+    FeatureValueDependencyRecord,
 )
 
 
@@ -55,7 +58,7 @@ class FeatureRegistryTests(unittest.TestCase):
             ("price_state_value", "derived_state_value"),
         )
         payload = first.canonical_payload()
-        self.assertEqual(payload["registry_schema_version"], "1.0.0")
+        self.assertEqual(payload["registry_schema_version"], "1.1.0")
         self.assertEqual(
             payload["availability_contract_version"],
             "1.0.0",
@@ -65,12 +68,22 @@ class FeatureRegistryTests(unittest.TestCase):
             ["price_state"],
         )
         self.assertEqual(
+            payload["definitions"][1]["dependency_contracts"],
+            [
+                {
+                    "identifier": "price_state",
+                    "definition_version": "1.0.0",
+                    "output_names": ["price_state_value"],
+                }
+            ],
+        )
+        self.assertEqual(
             payload["definitions"][0]["implementation_reference"],
             "tests.test_feature_registry.price_state",
         )
         self.assertFalse(hasattr(definitions[0], "compute"))
 
-    def test_production_registry_contains_only_approved_tier_a_features(
+    def test_production_registry_adds_only_approved_phase_2_features_to_tier_a(
         self,
     ) -> None:
         self.assertEqual(
@@ -78,7 +91,12 @@ class FeatureRegistryTests(unittest.TestCase):
                 definition.identifier
                 for definition in INTRADAY_FEATURE_REGISTRY.definitions
             ),
-            ("candle_geometry", "true_range"),
+            (
+                "candle_geometry",
+                "true_range",
+                "average_true_range",
+                "exponential_moving_average",
+            ),
         )
         self.assertEqual(
             INTRADAY_FEATURE_REGISTRY.output_names,
@@ -88,9 +106,19 @@ class FeatureRegistryTests(unittest.TestCase):
                 "upper_wick_fraction",
                 "lower_wick_fraction",
                 "true_range",
+                "average_true_range",
+                "exponential_moving_average",
             ),
         )
+        self.assertEqual(INTRADAY_FEATURE_REGISTRY.schema_version, "1.1.0")
         self.assertEqual(len(INTRADAY_FEATURE_REGISTRY.configuration_hash), 64)
+
+    def test_frozen_tier_a_registry_identity_is_preserved(self) -> None:
+        self.assertEqual(TIER_A_FEATURE_REGISTRY.schema_version, "1.0.0")
+        self.assertEqual(
+            TIER_A_FEATURE_REGISTRY.configuration_hash,
+            "c89cdef54e4a59689259d18e0571ca5ab9dfebe713115c27dffd0818a6858aac",
+        )
 
     def test_duplicate_definitions_and_outputs_are_rejected(self) -> None:
         first = _definition("price_state", "shared_output")
@@ -249,6 +277,18 @@ class FeatureProvenanceSchemaTests(unittest.TestCase):
             ("feature_run_id", "feature_value_id"),
         )
 
+    def test_ordered_feature_dependency_membership_is_immutable(self) -> None:
+        table = FeatureValueDependencyRecord.__table__
+        self.assertEqual(
+            tuple(column.name for column in table.primary_key.columns),
+            (
+                "feature_run_id",
+                "feature_value_id",
+                "dependency_ordinal",
+            ),
+        )
+        self.assertIn("dependency_feature_value_id", table.columns)
+
 
 def _definition(
     identifier: str,
@@ -280,10 +320,16 @@ def _definition(
         maximum_lookback_observations=maximum_lookback,
         requires_continuity=True,
         availability_rule=FeatureAvailabilityRule.CANDLE_CLOSE,
-        implementation_reference=(
-            f"tests.test_feature_registry.{identifier}"
-        ),
+        implementation_reference=(f"tests.test_feature_registry.{identifier}"),
         dependencies=dependencies,
+        dependency_contracts=tuple(
+            FeatureDependencyMetadata(
+                identifier=dependency,
+                definition_version="1.0.0",
+                output_names=(f"{dependency}_value",),
+            )
+            for dependency in dependencies
+        ),
     )
 
 

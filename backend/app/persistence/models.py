@@ -660,9 +660,7 @@ class HistoricalQualityReportRecord(Base):
     acquisition_policy_identifier: Mapped[str] = mapped_column(
         String(96), nullable=False
     )
-    acquisition_policy_version: Mapped[str] = mapped_column(
-        String(32), nullable=False
-    )
+    acquisition_policy_version: Mapped[str] = mapped_column(String(32), nullable=False)
     acquisition_policy_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     source_policy_identifier: Mapped[str] = mapped_column(String(96), nullable=False)
     source_policy_version: Mapped[str] = mapped_column(String(32), nullable=False)
@@ -767,18 +765,12 @@ class HistoricalQualityTimeframeRecord(Base):
     latest_canonical_completed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
-    canonical_lag_seconds: Mapped[int | None] = mapped_column(
-        BigInteger, nullable=True
-    )
+    canonical_lag_seconds: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     latest_retrieved_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
-    retrieval_age_seconds: Mapped[int | None] = mapped_column(
-        BigInteger, nullable=True
-    )
-    unresolved_conflict_count: Mapped[int] = mapped_column(
-        Integer, nullable=False
-    )
+    retrieval_age_seconds: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    unresolved_conflict_count: Mapped[int] = mapped_column(Integer, nullable=False)
     validation_verified: Mapped[bool] = mapped_column(Boolean, nullable=False)
     provenance_verified: Mapped[bool] = mapped_column(Boolean, nullable=False)
     result_hash: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -830,17 +822,13 @@ class HistoricalExpansionReadinessReportRecord(Base):
     quote_currency: Mapped[str] = mapped_column(String(16), nullable=False)
     as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     readiness_status: Mapped[str] = mapped_column(String(64), nullable=False)
-    acquisition_level_eligible: Mapped[bool] = mapped_column(
-        Boolean, nullable=False
-    )
+    acquisition_level_eligible: Mapped[bool] = mapped_column(Boolean, nullable=False)
     blocker_count: Mapped[int] = mapped_column(Integer, nullable=False)
     source_inspection_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     source_synchronization_hash: Mapped[str | None] = mapped_column(
         String(64), nullable=True
     )
-    source_quality_hash: Mapped[str | None] = mapped_column(
-        String(64), nullable=True
-    )
+    source_quality_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     source_provenance_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     canonical_json: Mapped[str] = mapped_column(Text, nullable=False)
     result_hash: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -871,7 +859,9 @@ class HistoricalAcquisitionAttemptRecord(Base):
             "char_length(attempt_hash) = 64",
             name="ck_historical_acquisition_attempts_hashes",
         ),
-        CheckConstraint("immutable", name="ck_historical_acquisition_attempts_immutable"),
+        CheckConstraint(
+            "immutable", name="ck_historical_acquisition_attempts_immutable"
+        ),
         Index(
             "ix_historical_acquisition_attempts_scope",
             "asset_identifier",
@@ -887,17 +877,27 @@ class HistoricalAcquisitionAttemptRecord(Base):
     asset_identifier: Mapped[str] = mapped_column(String(32), nullable=False)
     quote_currency: Mapped[str] = mapped_column(String(16), nullable=False)
     timeframe: Mapped[str] = mapped_column(String(16), nullable=False)
-    requested_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    requested_end_exclusive: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    requested_start: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    requested_end_exclusive: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
     policy_identifier: Mapped[str] = mapped_column(String(96), nullable=False)
     policy_version: Mapped[str] = mapped_column(String(32), nullable=False)
     policy_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     code_version: Mapped[str] = mapped_column(String(64), nullable=False)
     configuration_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     attempt_hash: Mapped[str] = mapped_column(String(64), nullable=False)
-    immutable: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    immutable: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="true"
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
 
 
 class HistoricalAcquisitionOutcomeRecord(Base):
@@ -925,7 +925,9 @@ class HistoricalAcquisitionOutcomeRecord(Base):
             "AND failure_class IS NOT NULL))",
             name="ck_historical_acquisition_outcomes_evidence",
         ),
-        CheckConstraint("immutable", name="ck_historical_acquisition_outcomes_immutable"),
+        CheckConstraint(
+            "immutable", name="ck_historical_acquisition_outcomes_immutable"
+        ),
     )
 
     attempt_id: Mapped[UUID] = mapped_column(
@@ -941,8 +943,12 @@ class HistoricalAcquisitionOutcomeRecord(Base):
     terminal_reason: Mapped[str] = mapped_column(String(64), nullable=False)
     failure_class: Mapped[str | None] = mapped_column(String(96), nullable=True)
     failure_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
-    completed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    immutable: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
+    completed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    immutable: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="true"
+    )
 
 
 class HistoricalAcquisitionCheckpointRecord(Base):
@@ -950,7 +956,10 @@ class HistoricalAcquisitionCheckpointRecord(Base):
 
     __tablename__ = "historical_acquisition_checkpoints"
     __table_args__ = (
-        CheckConstraint("timeframe IN ('5m', '15m')", name="ck_historical_acquisition_checkpoints_timeframe"),
+        CheckConstraint(
+            "timeframe IN ('5m', '15m')",
+            name="ck_historical_acquisition_checkpoints_timeframe",
+        ),
         CheckConstraint(
             "provider_row_count >= 0 AND accepted_count > 0 AND "
             "excluded_incomplete_count >= 0 AND reused_count >= 0 AND "
@@ -969,9 +978,15 @@ class HistoricalAcquisitionCheckpointRecord(Base):
             "'SUCCESS_REUSE_ONLY', 'PROVIDER_HISTORY_EXHAUSTED')",
             name="ck_historical_acquisition_checkpoints_reason",
         ),
-        CheckConstraint("validation_passed", name="ck_historical_acquisition_checkpoints_validation"),
-        CheckConstraint("immutable", name="ck_historical_acquisition_checkpoints_immutable"),
-        UniqueConstraint("attempt_id", name="uq_historical_acquisition_checkpoints_attempt"),
+        CheckConstraint(
+            "validation_passed", name="ck_historical_acquisition_checkpoints_validation"
+        ),
+        CheckConstraint(
+            "immutable", name="ck_historical_acquisition_checkpoints_immutable"
+        ),
+        UniqueConstraint(
+            "attempt_id", name="uq_historical_acquisition_checkpoints_attempt"
+        ),
         Index("ix_historical_acquisition_checkpoints_scope", "timeframe", "created_at"),
     )
 
@@ -994,17 +1009,29 @@ class HistoricalAcquisitionCheckpointRecord(Base):
     schema_version: Mapped[str] = mapped_column(String(32), nullable=False)
     hash_schema_version: Mapped[str] = mapped_column(String(32), nullable=False)
     timeframe: Mapped[str] = mapped_column(String(16), nullable=False)
-    requested_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    requested_end_exclusive: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    provider_available_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    provider_available_end: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    provider_cursor: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    requested_start: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    requested_end_exclusive: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    provider_available_start: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    provider_available_end: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    provider_cursor: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
     provider_row_count: Mapped[int] = mapped_column(Integer, nullable=False)
     accepted_count: Mapped[int] = mapped_column(Integer, nullable=False)
     excluded_incomplete_count: Mapped[int] = mapped_column(Integer, nullable=False)
     reused_count: Mapped[int] = mapped_column(Integer, nullable=False)
     inserted_count: Mapped[int] = mapped_column(Integer, nullable=False)
-    conflict_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    conflict_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default="0"
+    )
     validation_passed: Mapped[bool] = mapped_column(Boolean, nullable=False)
     provider_limit_reached: Mapped[bool] = mapped_column(Boolean, nullable=False)
     terminal_reason: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -1012,8 +1039,12 @@ class HistoricalAcquisitionCheckpointRecord(Base):
     source_data_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     progress_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     checkpoint_hash: Mapped[str] = mapped_column(String(64), nullable=False)
-    immutable: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    immutable: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="true"
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
 
 
 class SourceConflictRecord(Base):
@@ -1103,9 +1134,7 @@ class SourceConflictRecord(Base):
     )
     canonical_candle_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     incoming_candle_hash: Mapped[str] = mapped_column(String(64), nullable=False)
-    incoming_batch_source_hash: Mapped[str] = mapped_column(
-        String(64), nullable=False
-    )
+    incoming_batch_source_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     conflict_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     immutable: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default="true"
@@ -1382,6 +1411,51 @@ class FeaturePipelineRunValueRecord(Base):
         BigInteger,
         ForeignKey("engineered_features.id", ondelete="RESTRICT"),
         primary_key=True,
+    )
+    recorded_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+
+class FeatureValueDependencyRecord(Base):
+    """Ordered immutable dependency evidence for a feature value."""
+
+    __tablename__ = "feature_value_dependencies"
+    __table_args__ = (
+        CheckConstraint(
+            "dependency_ordinal >= 0",
+            name="ck_feature_value_dependencies_nonnegative_ordinal",
+        ),
+        CheckConstraint(
+            "feature_value_id <> dependency_feature_value_id",
+            name="ck_feature_value_dependencies_distinct_values",
+        ),
+        Index(
+            "ix_feature_value_dependencies_dependency_value_id",
+            "dependency_feature_value_id",
+        ),
+    )
+
+    feature_run_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("feature_pipeline_runs.id", ondelete="RESTRICT"),
+        primary_key=True,
+    )
+    feature_value_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("engineered_features.id", ondelete="RESTRICT"),
+        primary_key=True,
+    )
+    dependency_ordinal: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+    )
+    dependency_feature_value_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("engineered_features.id", ondelete="RESTRICT"),
+        nullable=False,
     )
     recorded_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -3541,11 +3615,7 @@ class HoldoutConsumptionRecord(Base):
     __tablename__ = "holdout_consumptions"
     __table_args__ = (
         CheckConstraint(
-            (
-                "purpose = 'official_final_evaluation' "
-                "AND official "
-                "AND irreversible"
-            ),
+            ("purpose = 'official_final_evaluation' AND official AND irreversible"),
             name="ck_holdout_consumptions_official",
         ),
         UniqueConstraint(

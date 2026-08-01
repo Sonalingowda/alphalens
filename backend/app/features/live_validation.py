@@ -50,6 +50,7 @@ class LiveIntradayFeatureValidation:
     canonical_value_count: int
     source_membership_count: int
     value_membership_count: int
+    dependency_membership_count: int
     pipeline_version: str
     registry_hash: str
     source_data_hash: str
@@ -75,9 +76,7 @@ async def validate_live_intraday_feature_pipeline(
     session_maker: async_sessionmaker[AsyncSession],
 ) -> LiveIntradayFeatureValidationReport:
     ingestion = await ingest_btc_usd_intraday(provider, session_maker)
-    items_by_timeframe = {
-        item.sample.timeframe: item for item in ingestion.items
-    }
+    items_by_timeframe = {item.sample.timeframe: item for item in ingestion.items}
     if set(items_by_timeframe) != set(_VALIDATION_TIMEFRAMES):
         raise FeatureComputationError(
             "Live ingestion did not return the complete approved timeframe set."
@@ -129,10 +128,7 @@ async def _validate_timeframe(
         raise FeatureComputationError(
             f"{timeframe.value} pipeline version verification failed."
         )
-    if (
-        first_result.registry_hash
-        != INTRADAY_FEATURE_REGISTRY.configuration_hash
-    ):
+    if first_result.registry_hash != INTRADAY_FEATURE_REGISTRY.configuration_hash:
         raise FeatureComputationError(
             f"{timeframe.value} registry hash verification failed."
         )
@@ -141,9 +137,7 @@ async def _validate_timeframe(
             f"{timeframe.value} snapshot contains an incomplete candle."
         )
 
-    expected_inserted_count = (
-        len(first_result.values) - value_count_before
-    )
+    expected_inserted_count = len(first_result.values) - value_count_before
     if expected_inserted_count < 0:
         raise FeatureComputationError(
             f"{timeframe.value} stored feature count exceeds pipeline output."
@@ -167,8 +161,7 @@ async def _validate_timeframe(
         )
     if (
         second_persistence.inserted_value_count != 0
-        or second_persistence.reused_value_count
-        != len(first_result.values)
+        or second_persistence.reused_value_count != len(first_result.values)
     ):
         raise FeatureComputationError(
             f"{timeframe.value} repeated persistence is not idempotent."
@@ -205,8 +198,9 @@ async def _validate_timeframe(
     if (
         second_evidence.source_membership_count
         != len(snapshot.source_ingestion_batch_ids)
-        or second_evidence.value_membership_count
-        != len(first_result.values)
+        or second_evidence.value_membership_count != len(first_result.values)
+        or second_evidence.dependency_membership_count
+        != len(first_result.dependency_memberships)
     ):
         raise FeatureComputationError(
             f"{timeframe.value} persisted memberships are incomplete."
@@ -216,26 +210,17 @@ async def _validate_timeframe(
         timeframe=timeframe,
         ingestion_batch_id=item.persistence.ingestion_batch_id,
         source_candle_count=len(snapshot.observations),
-        excluded_incomplete_candle_count=(
-            item.sample.excluded_incomplete_candle_count
-        ),
+        excluded_incomplete_candle_count=(item.sample.excluded_incomplete_candle_count),
         feature_value_count=len(first_result.values),
         first_run_id=first_persistence.feature_run_id,
         second_run_id=second_persistence.feature_run_id,
-        first_inserted_value_count=(
-            first_persistence.inserted_value_count
-        ),
-        second_inserted_value_count=(
-            second_persistence.inserted_value_count
-        ),
-        second_reused_value_count=(
-            second_persistence.reused_value_count
-        ),
+        first_inserted_value_count=(first_persistence.inserted_value_count),
+        second_inserted_value_count=(second_persistence.inserted_value_count),
+        second_reused_value_count=(second_persistence.reused_value_count),
         canonical_value_count=second_evidence.canonical_value_count,
-        source_membership_count=(
-            second_evidence.source_membership_count
-        ),
+        source_membership_count=(second_evidence.source_membership_count),
         value_membership_count=second_evidence.value_membership_count,
+        dependency_membership_count=(second_evidence.dependency_membership_count),
         pipeline_version=first_result.pipeline_version,
         registry_hash=first_result.registry_hash,
         source_data_hash=first_result.source_data_hash,

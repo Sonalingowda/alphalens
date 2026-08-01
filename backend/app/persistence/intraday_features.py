@@ -27,6 +27,7 @@ from app.persistence.models import (
     FeaturePipelineRunRecord,
     FeaturePipelineRunSourceRecord,
     FeaturePipelineRunValueRecord,
+    FeatureValueDependencyRecord,
     IngestionBatchRecord,
 )
 from app.persistence.conflicts import unresolved_source_conflicts
@@ -50,6 +51,7 @@ class IntradayFeaturePersistenceResult:
     inserted_value_count: int
     reused_value_count: int
     membership_count: int
+    dependency_membership_count: int
     is_active: bool
 
 
@@ -65,6 +67,7 @@ class StoredIntradayFeatureRunEvidence:
     persisted_value_count: int
     source_membership_count: int
     value_membership_count: int
+    dependency_membership_count: int
     canonical_value_count: int
     is_active: bool
 
@@ -144,38 +147,37 @@ async def get_stored_intraday_feature_run_evidence(
         )
     source_membership_count = int(
         await session.scalar(
-            select(func.count()).select_from(
-                FeaturePipelineRunSourceRecord
-            ).where(
-                FeaturePipelineRunSourceRecord.feature_run_id
-                == feature_run_id
-            )
+            select(func.count())
+            .select_from(FeaturePipelineRunSourceRecord)
+            .where(FeaturePipelineRunSourceRecord.feature_run_id == feature_run_id)
         )
         or 0
     )
     value_membership_count = int(
         await session.scalar(
-            select(func.count()).select_from(
-                FeaturePipelineRunValueRecord
-            ).where(
-                FeaturePipelineRunValueRecord.feature_run_id
-                == feature_run_id
-            )
+            select(func.count())
+            .select_from(FeaturePipelineRunValueRecord)
+            .where(FeaturePipelineRunValueRecord.feature_run_id == feature_run_id)
+        )
+        or 0
+    )
+    dependency_membership_count = int(
+        await session.scalar(
+            select(func.count())
+            .select_from(FeatureValueDependencyRecord)
+            .where(FeatureValueDependencyRecord.feature_run_id == feature_run_id)
         )
         or 0
     )
     canonical_value_count = int(
         await session.scalar(
-            select(func.count()).select_from(
-                EngineeredFeatureRecord
-            ).where(
-                EngineeredFeatureRecord.asset_identifier
-                == run.asset_identifier,
-                EngineeredFeatureRecord.quote_currency
-                == run.quote_currency,
+            select(func.count())
+            .select_from(EngineeredFeatureRecord)
+            .where(
+                EngineeredFeatureRecord.asset_identifier == run.asset_identifier,
+                EngineeredFeatureRecord.quote_currency == run.quote_currency,
                 EngineeredFeatureRecord.timeframe == run.timeframe,
-                EngineeredFeatureRecord.pipeline_version
-                == run.pipeline_version,
+                EngineeredFeatureRecord.pipeline_version == run.pipeline_version,
             )
         )
         or 0
@@ -184,15 +186,14 @@ async def get_stored_intraday_feature_run_evidence(
         feature_run_id=run.id,
         pipeline_version=run.pipeline_version,
         source_data_hash=run.source_data_hash,
-        source_provenance_hash=_required_hash(
-            run.source_provenance_hash
-        ),
+        source_provenance_hash=_required_hash(run.source_provenance_hash),
         registry_hash=_required_hash(run.registry_hash),
         result_hash=_required_hash(run.result_hash),
         feature_value_count=run.feature_value_count,
         persisted_value_count=run.persisted_value_count,
         source_membership_count=source_membership_count,
         value_membership_count=value_membership_count,
+        dependency_membership_count=dependency_membership_count,
         canonical_value_count=canonical_value_count,
         is_active=run.is_active,
     )
@@ -204,14 +205,13 @@ async def count_intraday_feature_values(
 ) -> int:
     return int(
         await session.scalar(
-            select(func.count()).select_from(
-                EngineeredFeatureRecord
-            ).where(
+            select(func.count())
+            .select_from(EngineeredFeatureRecord)
+            .where(
                 EngineeredFeatureRecord.asset_identifier == "BTC",
                 EngineeredFeatureRecord.quote_currency == "USD",
                 EngineeredFeatureRecord.timeframe == timeframe.value,
-                EngineeredFeatureRecord.pipeline_version
-                == INTRADAY_PIPELINE_VERSION,
+                EngineeredFeatureRecord.pipeline_version == INTRADAY_PIPELINE_VERSION,
             )
         )
         or 0
@@ -224,14 +224,13 @@ async def count_active_intraday_feature_runs(
 ) -> int:
     return int(
         await session.scalar(
-            select(func.count()).select_from(
-                FeaturePipelineRunRecord
-            ).where(
+            select(func.count())
+            .select_from(FeaturePipelineRunRecord)
+            .where(
                 FeaturePipelineRunRecord.asset_identifier == "BTC",
                 FeaturePipelineRunRecord.quote_currency == "USD",
                 FeaturePipelineRunRecord.timeframe == timeframe.value,
-                FeaturePipelineRunRecord.pipeline_version
-                == INTRADAY_PIPELINE_VERSION,
+                FeaturePipelineRunRecord.pipeline_version == INTRADAY_PIPELINE_VERSION,
                 FeaturePipelineRunRecord.is_active.is_(True),
             )
         )
@@ -262,6 +261,7 @@ async def persist_intraday_feature_result(
     recorded_at = datetime.now(timezone.utc)
     inserted_value_count = 0
     membership_count = 0
+    dependency_membership_count = 0
 
     async with session.begin():
         await _verify_source_snapshot_against_database(session, snapshot)
@@ -271,9 +271,7 @@ async def persist_intraday_feature_result(
             asset_identifier=result.asset_identifier,
             quote_currency=result.quote_currency,
             timeframe=result.timeframe.value,
-            source_ingestion_batch_id=(
-                result.source_ingestion_batch_ids[0]
-            ),
+            source_ingestion_batch_id=(result.source_ingestion_batch_ids[0]),
             source_candle_count=len(snapshot.observations),
             source_range_start=snapshot.range_start,
             source_range_end=snapshot.range_end,
@@ -282,12 +280,8 @@ async def persist_intraday_feature_result(
             result_hash=result.result_hash,
             registry_hash=result.registry_hash,
             registry_schema_version=result.registry_schema_version,
-            availability_contract_version=(
-                result.availability_contract_version
-            ),
-            registry_snapshot=(
-                INTRADAY_FEATURE_REGISTRY.canonical_payload()
-            ),
+            availability_contract_version=(result.availability_contract_version),
+            registry_snapshot=(INTRADAY_FEATURE_REGISTRY.canonical_payload()),
             point_in_time_validated=True,
             feature_value_count=len(result.values),
             persisted_value_count=0,
@@ -303,14 +297,12 @@ async def persist_intraday_feature_result(
             snapshot,
             recorded_at,
         )
-        stored_values, inserted_value_count = (
-            await _reconcile_feature_values(
-                session,
-                feature_run_id,
-                snapshot,
-                result,
-                recorded_at,
-            )
+        stored_values, inserted_value_count = await _reconcile_feature_values(
+            session,
+            feature_run_id,
+            snapshot,
+            result,
+            recorded_at,
         )
         await _persist_value_memberships(
             session,
@@ -318,14 +310,20 @@ async def persist_intraday_feature_result(
             stored_values,
             recorded_at,
         )
-        run_record.persisted_value_count = len(stored_values)
-        membership_count = await _verify_run_memberships(
+        await _persist_dependency_memberships(
             session,
             feature_run_id,
-            expected_source_count=len(
-                result.source_ingestion_batch_ids
-            ),
+            stored_values,
+            result,
+            recorded_at,
+        )
+        run_record.persisted_value_count = len(stored_values)
+        membership_count, dependency_membership_count = await _verify_run_memberships(
+            session,
+            feature_run_id,
+            expected_source_count=len(result.source_ingestion_batch_ids),
             expected_value_count=len(result.values),
+            expected_dependency_count=len(result.dependency_memberships),
         )
         await _promote_active_run(
             session,
@@ -345,10 +343,9 @@ async def persist_intraday_feature_result(
         source_batch_count=len(result.source_ingestion_batch_ids),
         computed_value_count=len(result.values),
         inserted_value_count=inserted_value_count,
-        reused_value_count=(
-            len(result.values) - inserted_value_count
-        ),
+        reused_value_count=(len(result.values) - inserted_value_count),
         membership_count=membership_count,
+        dependency_membership_count=dependency_membership_count,
         is_active=True,
     )
 
@@ -371,9 +368,7 @@ async def _verify_source_snapshot_against_database(
         (
             await session.scalars(
                 select(IngestionBatchRecord).where(
-                    IngestionBatchRecord.id.in_(
-                        snapshot.source_ingestion_batch_ids
-                    )
+                    IngestionBatchRecord.id.in_(snapshot.source_ingestion_batch_ids)
                 )
             )
         ).all()
@@ -398,15 +393,11 @@ async def _verify_source_snapshot_against_database(
             await session.scalars(
                 select(CandleRecord)
                 .where(
-                    CandleRecord.asset_identifier
-                    == snapshot.asset_identifier,
-                    CandleRecord.quote_currency
-                    == snapshot.quote_currency,
+                    CandleRecord.asset_identifier == snapshot.asset_identifier,
+                    CandleRecord.quote_currency == snapshot.quote_currency,
                     CandleRecord.timeframe == snapshot.timeframe.value,
-                    CandleRecord.candle_timestamp
-                    >= snapshot.range_start,
-                    CandleRecord.candle_timestamp
-                    <= snapshot.range_end,
+                    CandleRecord.candle_timestamp >= snapshot.range_start,
+                    CandleRecord.candle_timestamp <= snapshot.range_end,
                 )
                 .order_by(CandleRecord.candle_timestamp)
             )
@@ -424,8 +415,7 @@ async def _verify_source_snapshot_against_database(
         candle = observation.candle
         if (
             not record.is_complete
-            or record.ingestion_batch_id
-            != observation.ingestion_batch_id
+            or record.ingestion_batch_id != observation.ingestion_batch_id
             or record.candle_timestamp != candle.timestamp
             or record.open_price != candle.open
             or record.high_price != candle.high
@@ -477,14 +467,12 @@ async def _reconcile_feature_values(
         source_batch_by_timestamp,
     )
     existing_identities = {
-        (record.candle_timestamp, record.feature_name)
-        for record in existing
+        (record.candle_timestamp, record.feature_name) for record in existing
     }
     missing = tuple(
         value
         for value in result.values
-        if (value.candle_timestamp, value.output_name)
-        not in existing_identities
+        if (value.candle_timestamp, value.output_name) not in existing_identities
     )
 
     inserted_count = 0
@@ -504,14 +492,10 @@ async def _reconcile_feature_values(
                     for value in chunk
                 ]
             )
-            .on_conflict_do_nothing(
-                constraint="uq_engineered_features_identity"
-            )
+            .on_conflict_do_nothing(constraint="uq_engineered_features_identity")
             .returning(EngineeredFeatureRecord.id)
         )
-        inserted_count += len(
-            tuple((await session.scalars(statement)).all())
-        )
+        inserted_count += len(tuple((await session.scalars(statement)).all()))
 
     stored = await _load_result_feature_values(session, result)
     _verify_stored_values(
@@ -527,22 +511,15 @@ async def _load_result_feature_values(
     session: AsyncSession,
     result: IntradayFeaturePipelineResult,
 ) -> tuple[EngineeredFeatureRecord, ...]:
-    timestamps = tuple(
-        sorted({value.candle_timestamp for value in result.values})
-    )
-    output_names = tuple(
-        sorted({value.output_name for value in result.values})
-    )
+    timestamps = tuple(sorted({value.candle_timestamp for value in result.values}))
+    output_names = tuple(sorted({value.output_name for value in result.values}))
     return tuple(
         (
             await session.scalars(
                 select(EngineeredFeatureRecord).where(
-                    EngineeredFeatureRecord.asset_identifier
-                    == result.asset_identifier,
-                    EngineeredFeatureRecord.quote_currency
-                    == result.quote_currency,
-                    EngineeredFeatureRecord.timeframe
-                    == result.timeframe.value,
+                    EngineeredFeatureRecord.asset_identifier == result.asset_identifier,
+                    EngineeredFeatureRecord.quote_currency == result.quote_currency,
+                    EngineeredFeatureRecord.timeframe == result.timeframe.value,
                     EngineeredFeatureRecord.pipeline_version
                     == INTRADAY_PIPELINE_VERSION,
                     EngineeredFeatureRecord.candle_timestamp.in_(timestamps),
@@ -561,8 +538,7 @@ def _verify_stored_values(
     require_complete: bool = False,
 ) -> None:
     stored = {
-        (record.candle_timestamp, record.feature_name): record
-        for record in records
+        (record.candle_timestamp, record.feature_name): record for record in records
     }
     if len(stored) != len(records):
         raise FeatureComputationError(
@@ -573,16 +549,14 @@ def _verify_stored_values(
             "Stored feature values do not cover the complete result."
         )
     expected_identities = {
-        (value.candle_timestamp, value.output_name)
-        for value in expected_values
+        (value.candle_timestamp, value.output_name) for value in expected_values
     }
     if set(stored) - expected_identities:
         raise FeatureComputationError(
             "Stored feature query returned an unexpected identity."
         )
     expected_by_identity = {
-        (value.candle_timestamp, value.output_name): value
-        for value in expected_values
+        (value.candle_timestamp, value.output_name): value for value in expected_values
     }
     for identity, record in stored.items():
         expected = expected_by_identity[identity]
@@ -602,8 +576,7 @@ def _order_stored_values(
     expected_values: tuple[PipelineFeatureValue, ...],
 ) -> tuple[EngineeredFeatureRecord, ...]:
     by_identity = {
-        (record.candle_timestamp, record.feature_name): record
-        for record in records
+        (record.candle_timestamp, record.feature_name): record for record in records
     }
     return tuple(
         by_identity[(value.candle_timestamp, value.output_name)]
@@ -654,43 +627,108 @@ async def _persist_value_memberships(
     await session.execute(statement)
 
 
+async def _persist_dependency_memberships(
+    session: AsyncSession,
+    feature_run_id: UUID,
+    values: tuple[EngineeredFeatureRecord, ...],
+    result: IntradayFeaturePipelineResult,
+    recorded_at: datetime,
+) -> None:
+    if not result.dependency_memberships:
+        return
+    rows = _dependency_membership_rows(
+        feature_run_id,
+        values,
+        result,
+        recorded_at,
+    )
+    await session.execute(insert(FeatureValueDependencyRecord).values(rows))
+
+
+def _dependency_membership_rows(
+    feature_run_id: UUID,
+    values: tuple[EngineeredFeatureRecord, ...],
+    result: IntradayFeaturePipelineResult,
+    recorded_at: datetime,
+) -> list[dict[str, object]]:
+    values_by_identity = {
+        (record.candle_timestamp, record.feature_name): record for record in values
+    }
+    rows = []
+    for membership in result.dependency_memberships:
+        consumer = values_by_identity.get(
+            (
+                membership.consumer_candle_timestamp,
+                membership.consumer_output_name,
+            )
+        )
+        dependency = values_by_identity.get(
+            (
+                membership.dependency_candle_timestamp,
+                membership.dependency_output_name,
+            )
+        )
+        if consumer is None or dependency is None:
+            raise FeatureComputationError(
+                "Feature dependency persistence references a missing value."
+            )
+        if dependency.feature_value != membership.dependency_value:
+            raise FeatureComputationError(
+                "Feature dependency persistence value does not match."
+            )
+        rows.append(
+            {
+                "feature_run_id": feature_run_id,
+                "feature_value_id": consumer.id,
+                "dependency_ordinal": membership.dependency_ordinal,
+                "dependency_feature_value_id": dependency.id,
+                "recorded_at": recorded_at,
+            }
+        )
+    return rows
+
+
 async def _verify_run_memberships(
     session: AsyncSession,
     feature_run_id: UUID,
     *,
     expected_source_count: int,
     expected_value_count: int,
-) -> int:
+    expected_dependency_count: int,
+) -> tuple[int, int]:
     source_count = int(
         await session.scalar(
-            select(func.count()).select_from(
-                FeaturePipelineRunSourceRecord
-            ).where(
-                FeaturePipelineRunSourceRecord.feature_run_id
-                == feature_run_id
-            )
+            select(func.count())
+            .select_from(FeaturePipelineRunSourceRecord)
+            .where(FeaturePipelineRunSourceRecord.feature_run_id == feature_run_id)
         )
         or 0
     )
     value_count = int(
         await session.scalar(
-            select(func.count()).select_from(
-                FeaturePipelineRunValueRecord
-            ).where(
-                FeaturePipelineRunValueRecord.feature_run_id
-                == feature_run_id
-            )
+            select(func.count())
+            .select_from(FeaturePipelineRunValueRecord)
+            .where(FeaturePipelineRunValueRecord.feature_run_id == feature_run_id)
+        )
+        or 0
+    )
+    dependency_count = int(
+        await session.scalar(
+            select(func.count())
+            .select_from(FeatureValueDependencyRecord)
+            .where(FeatureValueDependencyRecord.feature_run_id == feature_run_id)
         )
         or 0
     )
     if (
         source_count != expected_source_count
         or value_count != expected_value_count
+        or dependency_count != expected_dependency_count
     ):
         raise FeatureComputationError(
             "Persisted feature-run memberships are incomplete."
         )
-    return value_count
+    return value_count, dependency_count
 
 
 async def _promote_active_run(
@@ -699,23 +737,17 @@ async def _promote_active_run(
     recorded_at: datetime,
 ) -> None:
     if (
-        run_record.persisted_value_count
-        != run_record.feature_value_count
+        run_record.persisted_value_count != run_record.feature_value_count
         or run_record.result_hash is None
         or run_record.source_provenance_hash is None
     ):
-        raise FeatureComputationError(
-            "Incomplete feature run cannot be promoted."
-        )
+        raise FeatureComputationError("Incomplete feature run cannot be promoted.")
     await session.execute(
         update(FeaturePipelineRunRecord)
         .where(
-            FeaturePipelineRunRecord.asset_identifier
-            == run_record.asset_identifier,
-            FeaturePipelineRunRecord.quote_currency
-            == run_record.quote_currency,
-            FeaturePipelineRunRecord.timeframe
-            == run_record.timeframe,
+            FeaturePipelineRunRecord.asset_identifier == run_record.asset_identifier,
+            FeaturePipelineRunRecord.quote_currency == run_record.quote_currency,
+            FeaturePipelineRunRecord.timeframe == run_record.timeframe,
             FeaturePipelineRunRecord.is_active.is_(True),
             FeaturePipelineRunRecord.id != run_record.id,
         )

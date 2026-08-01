@@ -61,9 +61,7 @@ class IntradaySourceSnapshotTests(unittest.TestCase):
 
     def test_incomplete_candle_is_rejected(self) -> None:
         observations = _observations(2, CandleTimeframe.MINUTE_5)
-        incomplete = observations[:1] + (
-            replace(observations[1], is_complete=False),
-        )
+        incomplete = observations[:1] + (replace(observations[1], is_complete=False),)
 
         with self.assertRaisesRegex(
             FeatureComputationError,
@@ -157,13 +155,18 @@ class IntradayFeaturePipelineTests(unittest.TestCase):
 
         self.assertEqual(
             result.execution_order,
-            ("candle_geometry", "true_range"),
+            (
+                "candle_geometry",
+                "true_range",
+                "average_true_range",
+                "exponential_moving_average",
+            ),
         )
         self.assertEqual(
             result.registry_hash,
             INTRADAY_FEATURE_REGISTRY.configuration_hash,
         )
-        self.assertEqual(result.registry_schema_version, "1.0.0")
+        self.assertEqual(result.registry_schema_version, "1.1.0")
         self.assertEqual(result.availability_contract_version, "1.0.0")
         self.assertTrue(result.point_in_time_validated)
         self.assertEqual(len(result.values), 19)
@@ -258,9 +261,7 @@ class IntradayFeaturePipelineTests(unittest.TestCase):
             )
             prefix_end = prefix[-1].candle.timestamp
             expected = tuple(
-                value
-                for value in full.values
-                if value.candle_timestamp <= prefix_end
+                value for value in full.values if value.candle_timestamp <= prefix_end
             )
             self.assertEqual(prefix_result.values, expected)
 
@@ -327,8 +328,7 @@ class IntradayFeaturePipelineTests(unittest.TestCase):
             )
         )
         identities = tuple(
-            (value.candle_timestamp, value.output_name)
-            for value in result.values
+            (value.candle_timestamp, value.output_name) for value in result.values
         )
 
         self.assertEqual(len(identities), len(set(identities)))
@@ -372,9 +372,7 @@ def _observations(
                     close=close,
                     volume=Decimal(10 + index),
                 ),
-                ingestion_batch_id=(
-                    _BATCH_A if index % 2 == 0 else _BATCH_B
-                ),
+                ingestion_batch_id=(_BATCH_A if index % 2 == 0 else _BATCH_B),
                 is_complete=True,
             )
         )

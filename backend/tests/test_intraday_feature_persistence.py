@@ -33,17 +33,14 @@ from app.persistence.models import (
 _BATCH_ID = UUID("00000000-0000-0000-0000-000000000001")
 
 
-class IntradayFeaturePersistenceTests(
-    unittest.IsolatedAsyncioTestCase
-):
+class IntradayFeaturePersistenceTests(unittest.IsolatedAsyncioTestCase):
     async def test_transaction_persists_and_promotes_in_final_step(
         self,
     ) -> None:
         snapshot, result = _pipeline_evidence()
         session = _FakeSession()
         stored_values = tuple(
-            SimpleNamespace(id=index + 1)
-            for index in range(len(result.values))
+            SimpleNamespace(id=index + 1) for index in range(len(result.values))
         )
         events = session.events
 
@@ -66,10 +63,13 @@ class IntradayFeaturePersistenceTests(
         async def persist_memberships(*_args):
             return await record("persist_memberships")
 
+        async def persist_dependencies(*_args):
+            return await record("persist_dependencies")
+
         async def verify_memberships(*_args, **_kwargs):
             return await record(
                 "verify_memberships",
-                len(stored_values),
+                (len(stored_values), len(result.dependency_memberships)),
             )
 
         async def promote(*_args):
@@ -82,23 +82,23 @@ class IntradayFeaturePersistenceTests(
                 new=AsyncMock(side_effect=verify_source),
             ),
             patch(
-                "app.persistence.intraday_features."
-                "_persist_source_memberships",
+                "app.persistence.intraday_features._persist_source_memberships",
                 new=AsyncMock(side_effect=persist_sources),
             ),
             patch(
-                "app.persistence.intraday_features."
-                "_reconcile_feature_values",
+                "app.persistence.intraday_features._reconcile_feature_values",
                 new=AsyncMock(side_effect=reconcile_values),
             ),
             patch(
-                "app.persistence.intraday_features."
-                "_persist_value_memberships",
+                "app.persistence.intraday_features._persist_value_memberships",
                 new=AsyncMock(side_effect=persist_memberships),
             ),
             patch(
-                "app.persistence.intraday_features."
-                "_verify_run_memberships",
+                "app.persistence.intraday_features._persist_dependency_memberships",
+                new=AsyncMock(side_effect=persist_dependencies),
+            ),
+            patch(
+                "app.persistence.intraday_features._verify_run_memberships",
                 new=AsyncMock(side_effect=verify_memberships),
             ),
             patch(
@@ -112,7 +112,7 @@ class IntradayFeaturePersistenceTests(
                 result,
             )
 
-        self.assertEqual(persisted.pipeline_version, "2.0.0")
+        self.assertEqual(persisted.pipeline_version, "2.2.0")
         self.assertEqual(
             persisted.inserted_value_count,
             len(result.values),
@@ -121,6 +121,10 @@ class IntradayFeaturePersistenceTests(
         self.assertEqual(
             persisted.membership_count,
             len(result.values),
+        )
+        self.assertEqual(
+            persisted.dependency_membership_count,
+            len(result.dependency_memberships),
         )
         self.assertTrue(persisted.is_active)
         self.assertEqual(events[-2:], ["promote", "transaction_commit"])
@@ -153,11 +157,8 @@ class IntradayFeaturePersistenceTests(
                 new=AsyncMock(),
             ),
             patch(
-                "app.persistence.intraday_features."
-                "_persist_source_memberships",
-                new=AsyncMock(
-                    side_effect=RuntimeError("injected failure")
-                ),
+                "app.persistence.intraday_features._persist_source_memberships",
+                new=AsyncMock(side_effect=RuntimeError("injected failure")),
             ),
             patch(
                 "app.persistence.intraday_features._promote_active_run",
@@ -241,7 +242,7 @@ class IntradayFeaturePersistenceTests(
             datetime.now(timezone.utc),
         )
 
-        self.assertEqual(row["pipeline_version"], "2.0.0")
+        self.assertEqual(row["pipeline_version"], "2.2.0")
         self.assertEqual(
             row["source_ingestion_batch_id"],
             source_batch_by_timestamp[value.candle_timestamp],
@@ -266,9 +267,7 @@ class IntradayFeaturePersistenceTests(
             feature_value=expected.value + Decimal("0.000000000000000001"),
             pipeline_version="2.0.0",
             source_ingestion_batch_id=_BATCH_ID,
-            computation_run_id=UUID(
-                "00000000-0000-0000-0000-000000000020"
-            ),
+            computation_run_id=UUID("00000000-0000-0000-0000-000000000020"),
             computed_at=datetime.now(timezone.utc),
         )
 
@@ -344,9 +343,7 @@ class _FakeTransaction:
         if exc_type is None:
             self.events.append("transaction_commit")
         else:
-            self.events.append(
-                f"transaction_rollback:{exc_type.__name__}"
-            )
+            self.events.append(f"transaction_rollback:{exc_type.__name__}")
         return False
 
 
@@ -373,9 +370,7 @@ class _FakeSession:
 
 def _pipeline_evidence(*, multiple_batches: bool = False):
     start = datetime(2026, 7, 30, 10, 0, tzinfo=timezone.utc)
-    second_batch_id = UUID(
-        "00000000-0000-0000-0000-000000000002"
-    )
+    second_batch_id = UUID("00000000-0000-0000-0000-000000000002")
     observations = tuple(
         SourceCandleObservation(
             candle=Candle(
@@ -387,9 +382,7 @@ def _pipeline_evidence(*, multiple_batches: bool = False):
                 volume=Decimal(10 + index),
             ),
             ingestion_batch_id=(
-                second_batch_id
-                if multiple_batches and index == 2
-                else _BATCH_ID
+                second_batch_id if multiple_batches and index == 2 else _BATCH_ID
             ),
             is_complete=True,
         )

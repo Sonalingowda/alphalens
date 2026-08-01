@@ -1,7 +1,7 @@
 """Shared contracts and input safeguards for feature computations."""
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal, ROUND_HALF_EVEN, localcontext
 from enum import StrEnum
 import re
@@ -66,13 +66,33 @@ class FeatureOutputMetadata:
     def __post_init__(self) -> None:
         _validate_identifier(self.identifier, "Feature output identifier")
         if not self.description.strip():
-            raise FeatureMetadataError(
-                "Feature output description must not be empty."
-            )
+            raise FeatureMetadataError("Feature output description must not be empty.")
         if self.minimum_observations <= 0:
             raise FeatureMetadataError(
                 "Feature output minimum observations must be positive."
             )
+
+
+@dataclass(frozen=True, slots=True)
+class FeatureDependencyMetadata:
+    identifier: str
+    definition_version: str
+    output_names: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        _validate_identifier(self.identifier, "Feature dependency")
+        if not _SEMANTIC_VERSION_PATTERN.fullmatch(self.definition_version):
+            raise FeatureMetadataError(
+                "Feature dependency version must use MAJOR.MINOR.PATCH."
+            )
+        if not self.output_names:
+            raise FeatureMetadataError(
+                "Feature dependency must declare at least one output."
+            )
+        if len(set(self.output_names)) != len(self.output_names):
+            raise FeatureMetadataError("Feature dependency contains duplicate outputs.")
+        for output_name in self.output_names:
+            _validate_identifier(output_name, "Feature dependency output")
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,19 +110,16 @@ class FeatureDefinitionMetadata:
     availability_rule: FeatureAvailabilityRule
     implementation_reference: str
     dependencies: tuple[str, ...] = ()
+    dependency_contracts: tuple[FeatureDependencyMetadata, ...] = ()
     decimal_quantum: Decimal = FEATURE_VALUE_QUANTUM
 
     def __post_init__(self) -> None:
         _validate_identifier(self.identifier, "Feature identifier")
         if not self.description.strip():
-            raise FeatureMetadataError(
-                "Feature description must not be empty."
-            )
+            raise FeatureMetadataError("Feature description must not be empty.")
         if not self.category.strip():
             raise FeatureMetadataError("Feature category must not be empty.")
-        if not _SEMANTIC_VERSION_PATTERN.fullmatch(
-            self.definition_version
-        ):
+        if not _SEMANTIC_VERSION_PATTERN.fullmatch(self.definition_version):
             raise FeatureMetadataError(
                 "Feature definition version must use MAJOR.MINOR.PATCH."
             )
@@ -118,9 +135,7 @@ class FeatureDefinitionMetadata:
             raise FeatureMetadataError(
                 "Feature definition must declare supported timeframes."
             )
-        if len(set(self.supported_timeframes)) != len(
-            self.supported_timeframes
-        ):
+        if len(set(self.supported_timeframes)) != len(self.supported_timeframes):
             raise FeatureMetadataError(
                 "Feature definition contains duplicate timeframes."
             )
@@ -142,9 +157,7 @@ class FeatureDefinitionMetadata:
             self.history_type is FeatureHistoryType.BOUNDED
             and self.maximum_lookback_observations is None
         ):
-            raise FeatureMetadataError(
-                "Bounded features require a maximum lookback."
-            )
+            raise FeatureMetadataError("Bounded features require a maximum lookback.")
         if (
             self.maximum_lookback_observations is not None
             and self.maximum_lookback_observations <= 0
@@ -154,14 +167,10 @@ class FeatureDefinitionMetadata:
             )
         if (
             self.maximum_lookback_observations is not None
-            and max(
-                output.minimum_observations for output in self.outputs
-            )
+            and max(output.minimum_observations for output in self.outputs)
             > self.maximum_lookback_observations
         ):
-            raise FeatureMetadataError(
-                "Output warm-up cannot exceed maximum lookback."
-            )
+            raise FeatureMetadataError("Output warm-up cannot exceed maximum lookback.")
         if not self.requires_continuity:
             raise FeatureMetadataError(
                 "Phase 3 features must require continuous candle input."
@@ -186,10 +195,18 @@ class FeatureDefinitionMetadata:
                 raise FeatureMetadataError(
                     "Feature definition cannot depend on itself."
                 )
-        if (
-            not self.decimal_quantum.is_finite()
-            or self.decimal_quantum <= 0
-        ):
+        contract_identifiers = tuple(
+            contract.identifier for contract in self.dependency_contracts
+        )
+        if len(set(contract_identifiers)) != len(contract_identifiers):
+            raise FeatureMetadataError(
+                "Feature definition contains duplicate dependency contracts."
+            )
+        if not set(contract_identifiers).issubset(self.dependencies):
+            raise FeatureMetadataError(
+                "Feature dependency contracts must reference dependencies."
+            )
+        if not self.decimal_quantum.is_finite() or self.decimal_quantum <= 0:
             raise FeatureMetadataError(
                 "Feature Decimal quantum must be finite and positive."
             )
@@ -207,6 +224,23 @@ class FeatureValue:
     timestamp: datetime
     feature_name: str
     value: Decimal
+    dependencies: tuple["FeatureValueDependency", ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class FeatureValueDependency:
+    definition_identifier: str
+    definition_version: str
+    output_name: str
+    timestamp: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class FeatureDependencyInput:
+    definition_identifier: str
+    definition_version: str
+    output_name: str
+    values: tuple[FeatureValue, ...]
 
 
 class FeatureDefinition(Protocol):
@@ -235,9 +269,7 @@ def feature_available_at(
             "Feature availability requires a canonical UTC timestamp."
         )
     if floor_timeframe_boundary(candle_timestamp, timeframe) != candle_timestamp:
-        raise FeatureMetadataError(
-            "Feature timestamp is not aligned to its timeframe."
-        )
+        raise FeatureMetadataError("Feature timestamp is not aligned to its timeframe.")
     if rule is not FeatureAvailabilityRule.CANDLE_CLOSE:
         raise FeatureMetadataError("Unsupported feature availability rule.")
     return candle_timestamp + timeframe_duration(timeframe)
@@ -293,10 +325,51 @@ def validated_candle_points(candles: tuple[Candle, ...]) -> tuple[CandlePoint, .
 
 def quantize_feature_value(value: Decimal) -> Decimal:
     if not value.is_finite():
-        raise FeatureComputationError("Feature computation produced a non-finite value.")
+        raise FeatureComputationError(
+            "Feature computation produced a non-finite value."
+        )
     with localcontext() as context:
         context.prec = 50
         return value.quantize(FEATURE_VALUE_QUANTUM, rounding=ROUND_HALF_EVEN)
+
+
+def validated_intraday_candles(
+    candles: tuple[Candle, ...],
+    timeframe: CandleTimeframe,
+) -> tuple[Candle, ...]:
+    if timeframe not in INTRADAY_TIMEFRAMES:
+        raise FeatureComputationError(
+            "Intraday features support only 5m, 10m, and 15m."
+        )
+
+    expected_step = timeframe_duration(timeframe)
+    previous_timestamp = None
+    for candle in candles:
+        timestamp = candle.timestamp
+        if timestamp is None:
+            raise FeatureComputationError("Feature input contains a missing timestamp.")
+        if timestamp.tzinfo is None or timestamp.utcoffset() is None:
+            raise FeatureComputationError(
+                "Feature input timestamp must be timezone-aware."
+            )
+        if timestamp.utcoffset() != timedelta(0):
+            raise FeatureComputationError(
+                "Feature input timestamp must be canonical UTC."
+            )
+        if floor_timeframe_boundary(timestamp, timeframe) != timestamp:
+            raise FeatureComputationError(
+                "Feature input timestamp is not timeframe-aligned."
+            )
+        if (
+            previous_timestamp is not None
+            and timestamp - previous_timestamp != expected_step
+        ):
+            raise FeatureComputationError(
+                "Feature input candles must be consecutive and chronological."
+            )
+        _validate_ohlc(candle)
+        previous_timestamp = timestamp
+    return candles
 
 
 def exponential_moving_average(
@@ -329,8 +402,28 @@ def _required_decimal(value: Decimal | None) -> Decimal:
     return value
 
 
+def _validate_ohlc(candle: Candle) -> None:
+    values = (candle.open, candle.high, candle.low, candle.close)
+    if any(not isinstance(value, Decimal) for value in values):
+        raise FeatureComputationError(
+            "Feature input contains a missing or non-Decimal OHLC value."
+        )
+    open_price = _required_decimal(candle.open)
+    high = _required_decimal(candle.high)
+    low = _required_decimal(candle.low)
+    close = _required_decimal(candle.close)
+    if any(not value.is_finite() for value in (open_price, high, low, close)):
+        raise FeatureComputationError("Feature input contains a non-finite OHLC value.")
+    if min(open_price, high, low, close) <= 0:
+        raise FeatureComputationError(
+            "Feature input contains a non-positive OHLC value."
+        )
+    if low > high or not low <= open_price <= high or not low <= close <= high:
+        raise FeatureComputationError(
+            "Feature input contains an invalid OHLC relationship."
+        )
+
+
 def _validate_identifier(value: str, label: str) -> None:
     if not _FEATURE_IDENTIFIER_PATTERN.fullmatch(value):
-        raise FeatureMetadataError(
-            f"{label} must use lowercase snake_case."
-        )
+        raise FeatureMetadataError(f"{label} must use lowercase snake_case.")

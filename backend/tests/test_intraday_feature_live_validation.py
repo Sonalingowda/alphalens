@@ -39,9 +39,7 @@ _TIMEFRAMES = (
 )
 
 
-class LiveIntradayFeatureValidationTests(
-    unittest.IsolatedAsyncioTestCase
-):
+class LiveIntradayFeatureValidationTests(unittest.IsolatedAsyncioTestCase):
     async def test_complete_live_flow_verifies_all_timeframes(self) -> None:
         ingestion, snapshots = _ingestion_and_snapshots()
         persistence_calls: dict[CandleTimeframe, int] = {
@@ -60,8 +58,7 @@ class LiveIntradayFeatureValidationTests(
             persistence_calls[timeframe] += 1
             sequence = persistence_calls[timeframe]
             run_id = UUID(
-                f"00000000-0000-0000-0000-{_minutes(timeframe):04d}"
-                f"{sequence:08d}"
+                f"00000000-0000-0000-0000-{_minutes(timeframe):04d}{sequence:08d}"
             )
             inserted = len(result.values) if sequence == 1 else 0
             evidence = _stored_evidence(
@@ -72,8 +69,7 @@ class LiveIntradayFeatureValidationTests(
             run_evidence[run_id] = evidence
             if sequence == 2:
                 first_id = UUID(
-                    f"00000000-0000-0000-0000-"
-                    f"{_minutes(timeframe):04d}00000001"
+                    f"00000000-0000-0000-0000-{_minutes(timeframe):04d}00000001"
                 )
                 run_evidence[first_id] = _stored_evidence(
                     first_id,
@@ -94,6 +90,7 @@ class LiveIntradayFeatureValidationTests(
                 inserted_value_count=inserted,
                 reused_value_count=len(result.values) - inserted,
                 membership_count=len(result.values),
+                dependency_membership_count=len(result.dependency_memberships),
                 is_active=True,
             )
 
@@ -114,18 +111,15 @@ class LiveIntradayFeatureValidationTests(
                 new=AsyncMock(side_effect=count_values),
             ),
             patch(
-                "app.features.live_validation."
-                "persist_intraday_feature_result",
+                "app.features.live_validation.persist_intraday_feature_result",
                 new=AsyncMock(side_effect=persist),
             ),
             patch(
-                "app.features.live_validation."
-                "get_stored_intraday_feature_run_evidence",
+                "app.features.live_validation.get_stored_intraday_feature_run_evidence",
                 new=AsyncMock(side_effect=get_evidence),
             ),
             patch(
-                "app.features.live_validation."
-                "count_active_intraday_feature_runs",
+                "app.features.live_validation.count_active_intraday_feature_runs",
                 new=AsyncMock(return_value=1),
             ),
         ):
@@ -134,7 +128,7 @@ class LiveIntradayFeatureValidationTests(
                 _FakeSessionMaker(),
             )
 
-        self.assertEqual(report.pipeline_version, "2.0.0")
+        self.assertEqual(report.pipeline_version, "2.2.0")
         self.assertEqual(
             report.registry_hash,
             INTRADAY_FEATURE_REGISTRY.configuration_hash,
@@ -187,9 +181,7 @@ class LiveIntradayFeatureValidationTests(
                 snapshot.timeframe,
                 result,
                 sequence=call_count,
-                inserted=(
-                    len(result.values) if call_count == 1 else 1
-                ),
+                inserted=(len(result.values) if call_count == 1 else 1),
             )
 
         with (
@@ -200,9 +192,7 @@ class LiveIntradayFeatureValidationTests(
             patch(
                 "app.features.live_validation.load_intraday_source_snapshot",
                 new=AsyncMock(
-                    side_effect=lambda _session, timeframe: snapshots[
-                        timeframe
-                    ]
+                    side_effect=lambda _session, timeframe: snapshots[timeframe]
                 ),
             ),
             patch(
@@ -210,8 +200,7 @@ class LiveIntradayFeatureValidationTests(
                 new=AsyncMock(return_value=0),
             ),
             patch(
-                "app.features.live_validation."
-                "persist_intraday_feature_result",
+                "app.features.live_validation.persist_intraday_feature_result",
                 new=AsyncMock(side_effect=persist),
             ),
         ):
@@ -327,9 +316,7 @@ def _ingestion_item(
 def _snapshot(timeframe: CandleTimeframe) -> IntradaySourceSnapshot:
     start = datetime(2026, 7, 30, 10, 0, tzinfo=timezone.utc)
     duration = timeframe_duration(timeframe)
-    batch_id = UUID(
-        f"00000000-0000-0000-0000-{_minutes(timeframe):012d}"
-    )
+    batch_id = UUID(f"00000000-0000-0000-0000-{_minutes(timeframe):012d}")
     observations = tuple(
         SourceCandleObservation(
             candle=Candle(
@@ -370,6 +357,7 @@ def _stored_evidence(
         persisted_value_count=len(result.values),
         source_membership_count=len(result.source_ingestion_batch_ids),
         value_membership_count=len(result.values),
+        dependency_membership_count=len(result.dependency_memberships),
         canonical_value_count=len(result.values),
         is_active=is_active,
     )
@@ -384,8 +372,7 @@ def _persistence_result(
 ) -> IntradayFeaturePersistenceResult:
     return IntradayFeaturePersistenceResult(
         feature_run_id=UUID(
-            f"00000000-0000-0000-0000-"
-            f"{_minutes(timeframe):04d}{sequence:08d}"
+            f"00000000-0000-0000-0000-{_minutes(timeframe):04d}{sequence:08d}"
         ),
         pipeline_version=result.pipeline_version,
         timeframe=timeframe.value,
@@ -399,6 +386,7 @@ def _persistence_result(
         inserted_value_count=inserted,
         reused_value_count=len(result.values) - inserted,
         membership_count=len(result.values),
+        dependency_membership_count=len(result.dependency_memberships),
         is_active=True,
     )
 
