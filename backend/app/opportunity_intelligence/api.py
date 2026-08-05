@@ -113,16 +113,32 @@ def create_opportunity_intelligence_app(
         search: str | None = None,
         sort: str = "canonical.rank",
     ) -> dict[str, object]:
-        return await list_opportunities(
-            instrument=instrument,
-            timeframe=timeframe,
-            as_of=_resolve_as_of(as_of, current_time),
-            limit=limit,
-            cursor=cursor,
-            stance=stance,
-            search=search,
-            sort=sort,
-        )
+        try:
+            return await list_opportunities(
+                instrument=instrument,
+                timeframe=timeframe,
+                as_of=_resolve_as_of(as_of, current_time),
+                limit=limit,
+                cursor=cursor,
+                stance=stance,
+                search=search,
+                sort=sort,
+            )
+        except EntityNotFoundError:
+            return _success(
+                {
+                    "contract_version": OPPORTUNITY_API_VERSION,
+                    "scope": {
+                        "instrument": instrument,
+                        "timeframe": timeframe,
+                    },
+                    "items": (),
+                    "applied_filters": _applied_filters(stance, search),
+                    "sort": sort,
+                    "coverage_status": "unavailable",
+                    "partial_failures": (),
+                }
+            )
 
     @app.get(
         "/api/v1/opportunities/{opportunity_id}",
@@ -160,13 +176,38 @@ def create_opportunity_intelligence_app(
             raise StorageUnavailableError(
                 "Live market snapshot repository is not configured."
             )
-        snapshot = await market_repository.get_latest(
-            ScopedRepositoryQuery(
-                scope=MarketScope(instrument=instrument, timeframe=timeframe),
-                as_of=_resolve_as_of(as_of, current_time),
-                limit=1,
+        try:
+            snapshot = await market_repository.get_latest(
+                ScopedRepositoryQuery(
+                    scope=MarketScope(instrument=instrument, timeframe=timeframe),
+                    as_of=_resolve_as_of(as_of, current_time),
+                    limit=1,
+                )
             )
-        )
+        except EntityNotFoundError:
+            resolved_as_of = _resolve_as_of(as_of, current_time)
+            payload = {
+                "contract_version": OPPORTUNITY_API_VERSION,
+                "snapshot_id": "market.unavailable",
+                "scope": {
+                    "instrument": instrument,
+                    "timeframe": timeframe,
+                },
+                "candles": (),
+                "complete": False,
+                "audit": {
+                    "created_at": resolved_as_of.isoformat(),
+                    "evidence_cutoff": resolved_as_of.isoformat(),
+                    "available_at": resolved_as_of.isoformat(),
+                    "result_hash": sha256(
+                        f"{instrument}:{timeframe}:{resolved_as_of.isoformat()}".encode(
+                            "utf-8",
+                        )
+                    ).hexdigest(),
+                },
+            }
+            return _success(payload)
+
         return _success(snapshot.to_dict())
 
     @app.get("/health", response_model=dict[str, object])

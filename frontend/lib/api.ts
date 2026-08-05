@@ -39,13 +39,31 @@ async function request<T>(path: string): Promise<T> {
   return (await response.json()) as T;
 }
 
+function isApiEnvelope<T>(value: unknown): value is ApiEnvelope<T> {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "contract_version" in value &&
+    "data" in value &&
+    "response_hash" in value
+  );
+}
+
 async function requestEnvelope<T>(path: string): Promise<ApiResult<T>> {
   try {
-    const envelope = await request<ApiEnvelope<T>>(path);
+    const envelope = await request<unknown>(path);
+    if (isApiEnvelope<T>(envelope)) {
+      return {
+        ok: true,
+        data: envelope.data,
+        responseHash: envelope.response_hash,
+      };
+    }
+
     return {
       ok: true,
-      data: envelope.data,
-      responseHash: envelope.response_hash,
+      data: envelope as T,
+      responseHash: "",
     };
   } catch (error) {
     return {

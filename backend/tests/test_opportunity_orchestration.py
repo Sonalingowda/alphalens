@@ -97,7 +97,9 @@ def _request() -> PipelineRunRequest:
 
 def _pipeline(**overrides: object) -> OpportunityIntelligencePipeline:
     defaults: dict[str, object] = {
-        "market_scanner": SimpleNamespace(scan=AsyncMock(return_value=_market_snapshot())),
+        "market_scanner": SimpleNamespace(
+            scan=AsyncMock(return_value=_market_snapshot())
+        ),
         "feature_snapshots": SimpleNamespace(
             resolve=AsyncMock(return_value=_feature_snapshot())
         ),
@@ -152,7 +154,9 @@ class OpportunityOrchestrationTests(unittest.IsolatedAsyncioTestCase):
             detection=SimpleNamespace(
                 detect=AsyncMock(
                     return_value=(
-                        _attempt(CandidateAttemptState.DETECTED, candidate.candidate_id),
+                        _attempt(
+                            CandidateAttemptState.DETECTED, candidate.candidate_id
+                        ),
                         candidate,
                     )
                 )
@@ -174,7 +178,7 @@ class OpportunityOrchestrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(result.outcome, PipelineOutcome.POLICY_BLOCKED)
         self.assertIs(result.stages[-1].stage, PipelineStage.SCORING)
         self.assertIs(result.stages[-1].status, PipelineStageStatus.BLOCKED)
-        self.assertEqual(result.stages[-1].reason_code, "policy.unavailable")
+        self.assertEqual(result.stages[-1].reason_code, "scoring.policy_unavailable")
         pipeline.ranking.rank.assert_not_awaited()  # type: ignore[attr-defined]
 
     async def test_service_failure_raises_with_partial_immutable_trace(self) -> None:

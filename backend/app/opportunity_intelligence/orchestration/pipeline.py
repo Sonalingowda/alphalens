@@ -20,6 +20,7 @@ from app.opportunity_intelligence.orchestration.models import (
     PipelineStageRecord,
     PipelineStageStatus,
 )
+from app.opportunity_intelligence.repositories import RepositoryError
 from app.opportunity_intelligence.services import (
     DashboardService,
     EvidenceService,
@@ -37,6 +38,8 @@ from app.opportunity_intelligence.services import (
     QualificationService,
     RankingService,
     ScoringService,
+    ServiceContractError,
+    ServiceUnavailableError,
 )
 
 
@@ -102,24 +105,147 @@ class OpportunityIntelligencePipeline:
                 )
 
             active_stage = PipelineStage.EVIDENCE
-            evidence = await self.evidence.assemble(
-                candidate,
-                market,
-                features,
-                context,
-            )
+            try:
+                evidence = await self.evidence.assemble(
+                    candidate,
+                    market,
+                    features,
+                    context,
+                )
+            except (ServiceContractError, ServiceUnavailableError):
+                _block(records, active_stage, "evidence.unavailable")
+                return _result(
+                    request,
+                    PipelineOutcome.UNAVAILABLE,
+                    records,
+                    market,
+                    features,
+                    context,
+                    attempt,
+                    candidate=candidate,
+                )
             _complete(records, active_stage, evidence.package_id)
 
             active_stage = PipelineStage.OPPORTUNITY_ASSESSMENT
-            opportunity = await self.assessment.assess(candidate, evidence, context)
+            try:
+                opportunity = await self.assessment.assess(candidate, evidence, context)
+            except PolicyUnavailableError:
+                _block(records, active_stage, "assessment.policy_unavailable")
+                return _result(
+                    request,
+                    PipelineOutcome.POLICY_BLOCKED,
+                    records,
+                    market,
+                    features,
+                    context,
+                    attempt,
+                    candidate=candidate,
+                    evidence=evidence,
+                )
+            except ServiceContractError:
+                _block(records, active_stage, "assessment.contract_unavailable")
+                return _result(
+                    request,
+                    PipelineOutcome.UNAVAILABLE,
+                    records,
+                    market,
+                    features,
+                    context,
+                    attempt,
+                    candidate=candidate,
+                    evidence=evidence,
+                )
+            except ServiceUnavailableError:
+                _block(records, active_stage, "assessment.input_unavailable")
+                return _result(
+                    request,
+                    PipelineOutcome.UNAVAILABLE,
+                    records,
+                    market,
+                    features,
+                    context,
+                    attempt,
+                    candidate=candidate,
+                    evidence=evidence,
+                )
+            except RepositoryError:
+                _block(records, active_stage, "assessment.persistence_unavailable")
+                return _result(
+                    request,
+                    PipelineOutcome.UNAVAILABLE,
+                    records,
+                    market,
+                    features,
+                    context,
+                    attempt,
+                    candidate=candidate,
+                    evidence=evidence,
+                )
             _complete(records, active_stage, opportunity.opportunity_version_id)
 
             active_stage = PipelineStage.QUALIFICATION
-            qualification = await self.qualification.qualify(
-                opportunity,
-                evidence,
-                context,
-            )
+            try:
+                qualification = await self.qualification.qualify(
+                    opportunity,
+                    evidence,
+                    context,
+                )
+            except PolicyUnavailableError:
+                _block(records, active_stage, "qualification.policy_unavailable")
+                return _result(
+                    request,
+                    PipelineOutcome.POLICY_BLOCKED,
+                    records,
+                    market,
+                    features,
+                    context,
+                    attempt,
+                    candidate=candidate,
+                    evidence=evidence,
+                    opportunity=opportunity,
+                )
+            except ServiceContractError:
+                _block(records, active_stage, "qualification.contract_unavailable")
+                return _result(
+                    request,
+                    PipelineOutcome.UNAVAILABLE,
+                    records,
+                    market,
+                    features,
+                    context,
+                    attempt,
+                    candidate=candidate,
+                    evidence=evidence,
+                    opportunity=opportunity,
+                )
+            except ServiceUnavailableError:
+                _block(records, active_stage, "qualification.input_unavailable")
+                return _result(
+                    request,
+                    PipelineOutcome.UNAVAILABLE,
+                    records,
+                    market,
+                    features,
+                    context,
+                    attempt,
+                    candidate=candidate,
+                    evidence=evidence,
+                    opportunity=opportunity,
+                )
+            except RepositoryError:
+                _block(records, active_stage, "qualification.persistence_unavailable")
+                return _result(
+                    request,
+                    PipelineOutcome.UNAVAILABLE,
+                    records,
+                    market,
+                    features,
+                    context,
+                    attempt,
+                    candidate=candidate,
+                    evidence=evidence,
+                    opportunity=opportunity,
+                )
             _complete(records, active_stage, qualification.qualification_id)
             if qualification.outcome is not QualificationOutcome.QUALIFIED:
                 outcome = (
@@ -150,10 +276,55 @@ class OpportunityIntelligencePipeline:
                     context,
                 )
             except PolicyUnavailableError:
-                _block(records, active_stage, "policy.unavailable")
+                _block(records, active_stage, "scoring.policy_unavailable")
                 return _result(
                     request,
                     PipelineOutcome.POLICY_BLOCKED,
+                    records,
+                    market,
+                    features,
+                    context,
+                    attempt,
+                    candidate=candidate,
+                    evidence=evidence,
+                    opportunity=opportunity,
+                    qualification=qualification,
+                )
+            except ServiceContractError:
+                _block(records, active_stage, "scoring.contract_unavailable")
+                return _result(
+                    request,
+                    PipelineOutcome.UNAVAILABLE,
+                    records,
+                    market,
+                    features,
+                    context,
+                    attempt,
+                    candidate=candidate,
+                    evidence=evidence,
+                    opportunity=opportunity,
+                    qualification=qualification,
+                )
+            except ServiceUnavailableError:
+                _block(records, active_stage, "scoring.input_unavailable")
+                return _result(
+                    request,
+                    PipelineOutcome.UNAVAILABLE,
+                    records,
+                    market,
+                    features,
+                    context,
+                    attempt,
+                    candidate=candidate,
+                    evidence=evidence,
+                    opportunity=opportunity,
+                    qualification=qualification,
+                )
+            except RepositoryError:
+                _block(records, active_stage, "scoring.persistence_unavailable")
+                return _result(
+                    request,
+                    PipelineOutcome.UNAVAILABLE,
                     records,
                     market,
                     features,

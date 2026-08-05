@@ -7,12 +7,14 @@ import {
   type IChartApi,
   type UTCTimestamp,
 } from "lightweight-charts";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
+import { Skeleton } from "@/components/ui/skeleton";
 
 import type { MarketCandle } from "@/lib/types";
 
 export function MarketCandlestickChart({ candles }: { candles: MarketCandle[] }) {
   const container = useRef<HTMLDivElement>(null);
+  const [ready, setReady] = useState(false);
 
   useEffect(() => {
     if (!container.current || candles.length === 0) return;
@@ -57,15 +59,20 @@ export function MarketCandlestickChart({ candles }: { candles: MarketCandle[] })
       .filter((point, index, values) => index === 0 || point.time !== values[index - 1]?.time);
     series.setData(points);
     chart.timeScale().fitContent();
+    setReady(true);
     return () => {
       chart?.remove();
       chart = null;
+      setReady(false);
     };
   }, [candles]);
 
   return (
     <div>
-      <div ref={container} className="w-full" aria-label="BTCUSDT candlestick chart" />
+      <div className="relative">
+        <div ref={container} className="w-full" aria-label="BTCUSDT candlestick chart" />
+        {(!ready || candles.length === 0) && <div className="absolute inset-0"><Skeleton className="h-80 w-full" /></div>}
+      </div>
       <p className="mt-2 text-right text-[10px] text-muted-foreground">
         Charts by{" "}
         <a href="https://www.tradingview.com" className="hover:text-primary">

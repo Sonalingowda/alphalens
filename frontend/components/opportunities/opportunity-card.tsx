@@ -38,7 +38,7 @@ export function OpportunityCard({ item }: { item: OpportunityDashboardItem }) {
                   : "bg-rose-400/10 text-rose-400"
               }`}
             >
-              <DirectionIcon className="size-3.5" />
+              <DirectionIcon className="size-3.5" aria-hidden="true" />
               {item.stance}
             </span>
           </div>
@@ -58,7 +58,7 @@ export function OpportunityCard({ item }: { item: OpportunityDashboardItem }) {
             </div>
             <div className="flex items-center justify-between text-xs text-muted-foreground">
               <span className="flex items-center gap-1.5">
-                <Clock3 className="size-3.5" />
+                <Clock3 className="size-3.5" aria-hidden="true" />
                 {formatTimestamp(item.available_at)}
               </span>
               <span>{titleCase(item.freshness_state)}</span>

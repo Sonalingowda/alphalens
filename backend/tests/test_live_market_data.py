@@ -4,6 +4,7 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 import json
 import unittest
+from unittest.mock import patch
 
 from app.live_market_data import (
     BinanceKlineParser,
@@ -247,6 +248,29 @@ class LiveIngestionServiceTests(unittest.IsolatedAsyncioTestCase):
         metrics = service.metrics.snapshot()
         self.assertEqual(metrics.gaps_detected, 1)
         self.assertEqual(metrics.missing_intervals, 1)
+
+    async def test_production_lifespan_starts_and_stops_live_ingestion(self) -> None:
+        from app import prediction_api
+
+        started = asyncio.Event()
+        stopped = asyncio.Event()
+
+        async def run(stop_event: asyncio.Event) -> None:
+            started.set()
+            try:
+                await stop_event.wait()
+            finally:
+                stopped.set()
+
+        with patch.object(prediction_api.live_market_ingestion, "run", run):
+            async with prediction_api._infrastructure_lifespan(prediction_api.app):
+                await asyncio.wait_for(started.wait(), timeout=1)
+                self.assertIs(
+                    prediction_api.app.state.live_market_ingestion,
+                    prediction_api.live_market_ingestion,
+                )
+
+        self.assertTrue(stopped.is_set())
 
 
 class BinanceWebSocketClientTests(unittest.IsolatedAsyncioTestCase):
