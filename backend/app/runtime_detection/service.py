@@ -36,7 +36,7 @@ RUNTIME_DETECTION_POLICY_HASH = (
 )
 _CONTRACT_VERSION = "1.0.0"
 _INSTRUMENT = "BTCUSDT"
-_TIMEFRAME = "5m"
+_TIMEFRAMES = ("5m", "10m", "15m")
 _BUY_RSI_MINIMUM = "55.000000000000000000"
 _SELL_RSI_MAXIMUM = "45.000000000000000000"
 _REQUIRED_FEATURES = (
@@ -196,10 +196,10 @@ def _validate_inputs(inputs: _PersistedInputs) -> str | None:
     market, features, context = inputs.market, inputs.features, inputs.context
     if (
         market.scope.instrument != _INSTRUMENT
-        or market.scope.timeframe != _TIMEFRAME
+        or market.scope.timeframe not in _TIMEFRAMES
         or features.scope != market.scope
         or context.scope != market.scope
-        or context.context_timeframes != (_TIMEFRAME,)
+        or context.context_timeframes != (market.scope.timeframe,)
         or not market.complete
         or len(market.candles) != 1
     ):

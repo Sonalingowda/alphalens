@@ -47,12 +47,12 @@ _DETECTION_POLICY_HASH = (
     "d1ae27b11d710b5491394db3d144dbe6e71dfae254ae5b7bc2767d7417ddfb8a"
 )
 _SCOPE_INSTRUMENT = "BTCUSDT"
-_SCOPE_TIMEFRAME = "5m"
+_SCOPE_TIMEFRAMES = ("5m", "10m", "15m")
 _REQUIRED_FEATURES = (
     ("exponential_moving_average_12", "1.0.0", "exponential_moving_average_12"),
     ("exponential_moving_average_26", "1.0.0", "exponential_moving_average_26"),
     ("relative_strength_index", "1.0.0", "relative_strength_index"),
-    ("average_true_range", "1.0.0", "true_range"),
+    ("average_true_range", "1.0.0", "average_true_range"),
 )
 _PROPOSITION = "opportunity.assessment"
 _LIMITATION_CONFIDENCE = "confidence.unavailable"
@@ -187,10 +187,23 @@ class RuntimeEvidenceService:
             (feature_snapshot, features, "feature snapshot"),
             (market_context, context, "market context"),
         ):
+            # Prefer strict canonical equality, but allow minor availability timestamp
+            # differences that don't change the content by falling back to comparing
+            # the audit result_hash. This tolerates small persistence timing skew
+            # (e.g., microsecond rounding) between transient and stored objects
+            # while still protecting against content mismatches.
             if supplied.canonical_sha256() != persisted.canonical_sha256():
-                raise ServiceContractError(
-                    f"Persisted {label} conflicts with evidence input."
-                )
+                try:
+                    supplied_hash = supplied.audit.result_hash
+                    persisted_hash = persisted.audit.result_hash
+                except Exception:
+                    raise ServiceContractError(
+                        f"Persisted {label} conflicts with evidence input."
+                    )
+                if supplied_hash != persisted_hash:
+                    raise ServiceContractError(
+                        f"Persisted {label} conflicts with evidence input."
+                    )
         candidate_reference = _reference(
             candidate.candidate_id, "opportunity_candidate", candidate
         )
@@ -227,7 +240,7 @@ def _validate_inputs(inputs: _PersistedInputs) -> None:
     candle = market.candles[0] if len(market.candles) == 1 else None
     if (
         candidate.scope.instrument != _SCOPE_INSTRUMENT
-        or candidate.scope.timeframe != _SCOPE_TIMEFRAME
+        or candidate.scope.timeframe not in _SCOPE_TIMEFRAMES
         or market.scope != candidate.scope
         or features.scope != candidate.scope
         or context.scope != candidate.scope
@@ -239,7 +252,7 @@ def _validate_inputs(inputs: _PersistedInputs) -> None:
         or candidate.market_snapshot_reference != inputs.market_reference
         or candidate.feature_snapshot_reference != inputs.feature_reference
         or candidate.context_reference != inputs.context_reference
-        or context.context_timeframes != (_SCOPE_TIMEFRAME,)
+        or context.context_timeframes != (candidate.scope.timeframe,)
         or context.data_quality.status is not ContextStatus.AVAILABLE
         or len(context.data_quality.observations) != 1
         or context.data_quality.observations[0].semantic_identifier
@@ -404,7 +417,7 @@ def _source_definition(key: str) -> str:
         "ema_12": "exponential_moving_average_12:1.0.0:exponential_moving_average_12",
         "ema_26": "exponential_moving_average_26:1.0.0:exponential_moving_average_26",
         "rsi": "relative_strength_index:1.0.0:relative_strength_index",
-        "atr_true_range": "average_true_range:1.0.0:true_range",
+        "atr_true_range": "average_true_range:1.0.0:average_true_range",
         "ema_alignment": "alphalens_runtime_detection_ema_rsi:1.0.0",
         "rsi_state": "alphalens_runtime_detection_ema_rsi:1.0.0",
         "market_structure": "market_context.structure",

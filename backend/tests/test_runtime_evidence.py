@@ -234,7 +234,7 @@ async def _fixture(ema_12: str, ema_26: str, rsi: str) -> _Fixture:
             "average_true_range",
             "1.000000000000000000",
         ),
-        output_name="true_range",
+            output_name="average_true_range",
     )
     feature = replace(
         feature,

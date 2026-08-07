@@ -1,5 +1,6 @@
 """Repository-backed implementation of Assessment Policy v1.0.1."""
 
+import logging
 from dataclasses import dataclass, replace
 
 from app.opportunity_intelligence.domain import (
@@ -51,7 +52,7 @@ _EVIDENCE_POLICY_HASH = (
     "9159b3d43cbfeafdbe11f0a9e748119f5ddbac762e2bb89c62fd937dacd913c8"
 )
 _SCOPE_INSTRUMENT = "BTCUSDT"
-_SCOPE_TIMEFRAME = "5m"
+_SCOPE_TIMEFRAMES = ("5m", "10m", "15m")
 _REQUIRED_EVIDENCE = {
     "market_price_close": (
         EvidenceCategory.MARKET_PRICE,
@@ -72,7 +73,7 @@ _REQUIRED_EVIDENCE = {
     ),
     "atr_true_range": (
         EvidenceCategory.FEATURE_VOLATILITY,
-        "average_true_range:1.0.0:true_range",
+        "average_true_range:1.0.0:average_true_range",
     ),
     "ema_alignment": (
         EvidenceCategory.POLICY_TRACE,
@@ -240,7 +241,7 @@ def _validate_inputs(inputs: _PersistedInputs) -> None:
     evidence_policy = evidence.audit.provenance.policy_references
     if (
         candidate.scope.instrument != _SCOPE_INSTRUMENT
-        or candidate.scope.timeframe != _SCOPE_TIMEFRAME
+        or candidate.scope.timeframe not in _SCOPE_TIMEFRAMES
         or market.scope != candidate.scope
         or features.scope != candidate.scope
         or context.scope != candidate.scope
@@ -260,7 +261,7 @@ def _validate_inputs(inputs: _PersistedInputs) -> None:
         or candidate.feature_snapshot_reference != inputs.feature_reference
         or candidate.context_reference != inputs.context_reference
         or features.market_snapshot != inputs.market_reference
-        or context.context_timeframes != (_SCOPE_TIMEFRAME,)
+        or context.context_timeframes != (candidate.scope.timeframe,)
         or context.data_quality.status is not ContextStatus.AVAILABLE
         or len(context.data_quality.observations) != 1
         or context.data_quality.observations[0].semantic_identifier
@@ -319,7 +320,10 @@ def _validate_evidence(inputs: _PersistedInputs) -> None:
             ("exponential_moving_average_26", "1.0.0", "exponential_moving_average_26"),
         ),
         ("rsi", ("relative_strength_index", "1.0.0", "relative_strength_index")),
-        ("atr_true_range", ("average_true_range", "1.0.0", "true_range")),
+        (
+            "atr_true_range",
+            ("average_true_range", "1.0.0", "average_true_range"),
+        ),
     ):
         try:
             expected_sources[key] = feature_values[feature_key].feature_record
@@ -340,7 +344,7 @@ def _validate_evidence(inputs: _PersistedInputs) -> None:
             ("relative_strength_index", "1.0.0", "relative_strength_index")
         ].value,
         "atr_true_range": feature_values[
-            ("average_true_range", "1.0.0", "true_range")
+            ("average_true_range", "1.0.0", "average_true_range")
         ].value,
         "ema_alignment": True,
         "rsi_state": _expected_rsi_state(inputs.candidate.reason_codes),

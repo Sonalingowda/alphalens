@@ -70,7 +70,8 @@ _ASSESSMENT_POLICY = PolicyReference(
 _DETECTION_POLICY_HASH = (
     "d1ae27b11d710b5491394db3d144dbe6e71dfae254ae5b7bc2767d7417ddfb8a"
 )
-_SCOPE = MarketScope(instrument="BTCUSDT", timeframe="5m")
+_SCOPE_INSTRUMENT = "BTCUSDT"
+_SCOPE_TIMEFRAMES = ("5m", "10m", "15m")
 
 # Rolling window: ScoreResult.available_at must be strictly after (cutoff - 15 min).
 _WINDOW_MINUTES = 15
@@ -313,7 +314,7 @@ class RuntimeRankingService:
         cutoff_epoch_ms = int(ranking_cutoff.timestamp() * 1000)
         snapshot_id = (
             f"ranking.runtime_ema_rsi."
-            f"{_SCOPE.instrument}.{_SCOPE.timeframe}.{cutoff_epoch_ms}"
+            f"{_SCOPE_INSTRUMENT}.{triggering_opportunity.scope.timeframe}.{cutoff_epoch_ms}"
         )
 
         # --- Hashes required by policy §10 ---
@@ -346,7 +347,7 @@ class RuntimeRankingService:
             policy=self._policy,
             as_of=ranking_cutoff,
             generated_at=ranking_cutoff,
-            scope=_SCOPE,
+            scope=MarketScope(instrument=_SCOPE_INSTRUMENT, timeframe=triggering_opportunity.scope.timeframe),
             eligible_candidate_references=eligible_refs,
             qualified_opportunity_references=qualified_refs,
             memberships=tuple(memberships),
@@ -384,12 +385,10 @@ def _validate_score_lineage(
         )
     # 2. Scope
     if (
-        opportunity.scope.instrument != _SCOPE.instrument
-        or opportunity.scope.timeframe != _SCOPE.timeframe
+        opportunity.scope.instrument != _SCOPE_INSTRUMENT
+        or opportunity.scope.timeframe not in _SCOPE_TIMEFRAMES
     ):
-        raise ServiceContractError(
-            "Ranking: opportunity scope does not match BTCUSDT/5m."
-        )
+        raise ServiceContractError("Ranking: opportunity scope is not supported.")
     # 3. Required component
     component = next(
         (c for c in score.components if c.component_id == "opportunity_quality"),
@@ -496,8 +495,8 @@ async def _validate_member_lineage(
 
     # Scope
     if (
-        opportunity.scope.instrument != _SCOPE.instrument
-        or opportunity.scope.timeframe != _SCOPE.timeframe
+        opportunity.scope.instrument != _SCOPE_INSTRUMENT
+        or opportunity.scope.timeframe not in _SCOPE_TIMEFRAMES
     ):
         return "ranking.lineage_validation_failed"
 

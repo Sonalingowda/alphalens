@@ -52,7 +52,8 @@ _EVIDENCE_POLICY = PolicyReference(
     "1.0.0",
     "9159b3d43cbfeafdbe11f0a9e748119f5ddbac762e2bb89c62fd937dacd913c8",
 )
-_SCOPE = ("BTCUSDT", "5m")
+_SCOPE = ("BTCUSDT",)
+_SCOPE_TIMEFRAMES = ("5m", "10m", "15m")
 _REQUIRED_EVIDENCE_KEYS = {
     "market_price_close",
     "market_volume",
@@ -183,7 +184,7 @@ def _validate(
     )
     if (
         opportunity.scope.instrument != _SCOPE[0]
-        or opportunity.scope.timeframe != _SCOPE[1]
+        or opportunity.scope.timeframe not in _SCOPE_TIMEFRAMES
         or opportunity.stance not in {OpportunityStance.BUY, OpportunityStance.SELL}
         or opportunity.decision_policy != _ASSESSMENT_POLICY
         or opportunity.audit.provenance.policy_references != (_ASSESSMENT_POLICY,)
