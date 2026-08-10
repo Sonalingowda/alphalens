@@ -3,7 +3,7 @@
 from collections.abc import Callable, Mapping
 from dataclasses import MISSING, dataclass, fields, is_dataclass
 from datetime import datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from enum import Enum
 from types import UnionType
 from typing import Any, Generic, TypeVar, Union, get_args, get_origin, get_type_hints
@@ -12,8 +12,11 @@ from sqlalchemy import Select, select, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.market_data.models import CandleTimeframe
+from app.market_data.validation import timeframe_duration
 from app.opportunity_intelligence.domain import (
     CanonicalModel,
+    ContextObservation,
     DashboardPage,
     DeliveryAttempt,
     DetectionAttempt,
@@ -249,10 +252,17 @@ class PostgreSQLImmutableRepository(Generic[T]):
     def _ordered(
         self,
         statement: Select[tuple[ImmutableAggregateRecord]],
+        *,
+        descending: bool = True,
     ) -> Select[tuple[ImmutableAggregateRecord]]:
+        direction = ImmutableAggregateRecord.available_at.desc()
+        identity_direction = ImmutableAggregateRecord.entity_id.desc()
+        if not descending:
+            direction = ImmutableAggregateRecord.available_at.asc()
+            identity_direction = ImmutableAggregateRecord.entity_id.asc()
         return statement.order_by(
-            ImmutableAggregateRecord.available_at.desc(),
-            ImmutableAggregateRecord.entity_id.desc(),
+            direction,
+            identity_direction,
         )
 
     async def _one(
@@ -275,13 +285,18 @@ class PostgreSQLImmutableRepository(Generic[T]):
         as_of: datetime,
         limit: int,
         cursor: str | None,
+        *,
+        descending: bool = True,
     ) -> RepositoryPage[T]:
         offset = _cursor_offset(cursor)
         try:
             async with self._sessions() as session:
                 rows = (
                     await session.scalars(
-                        self._ordered(statement).offset(offset).limit(limit + 1)
+                        self._ordered(
+                            statement,
+                            descending=descending,
+                        ).offset(offset).limit(limit + 1)
                     )
                 ).all()
         except SQLAlchemyError as error:
@@ -310,6 +325,55 @@ class PostgreSQLImmutableRepository(Generic[T]):
 class MarketSnapshotPostgreSQLRepository(PostgreSQLImmutableRepository[MarketSnapshot]):
     def __init__(self, sessions: async_sessionmaker[AsyncSession]) -> None:
         super().__init__(sessions, MarketSnapshot, lambda item: item.snapshot_id, scope=lambda item: item.scope)
+
+    async def get_latest(self, query: ScopedRepositoryQuery) -> MarketSnapshot:
+        self._require(query, ScopedRepositoryQuery, "get_latest")
+        statement = self._base_select().where(
+            *_scope_predicates(query.scope),
+            ImmutableAggregateRecord.available_at <= query.as_of,
+        )
+        page = await self._page(
+            statement,
+            query.as_of,
+            query.limit,
+            query.cursor,
+            descending=True,
+        )
+        if not page.items:
+            raise EntityNotFoundError("No entity exists in the requested scope.")
+        return page.items[0]
+
+    async def get_by_scope(
+        self,
+        query: ScopedRepositoryQuery,
+    ) -> RepositoryPage[MarketSnapshot]:
+        self._require(query, ScopedRepositoryQuery, "get_by_scope")
+        statement = self._base_select().where(
+            *_scope_predicates(query.scope),
+            ImmutableAggregateRecord.available_at <= query.as_of,
+        )
+        try:
+            async with self._sessions() as session:
+                rows = (
+                    await session.scalars(
+                        self._ordered(statement, descending=False)
+                    )
+                ).all()
+        except SQLAlchemyError as error:
+            raise StorageUnavailableError("PostgreSQL page query failed.") from error
+        ordered = tuple(self._decode(row) for row in rows)
+        selected = _latest_contiguous_suffix(
+            ordered,
+            CandleTimeframe(query.scope.timeframe),
+        )
+        offset = _cursor_offset(query.cursor)
+        page_items = selected[offset : offset + query.limit]
+        next_offset = offset + len(page_items)
+        return RepositoryPage(
+            items=page_items,
+            as_of=query.as_of,
+            next_cursor=str(next_offset) if next_offset < len(selected) else None,
+        )
 
 
 class FeatureSnapshotPostgreSQLRepository(PostgreSQLImmutableRepository[FeatureSnapshot]):
@@ -666,13 +730,15 @@ def _decode_value(expected: Any, value: Any) -> Any:
     if origin in {Union, UnionType}:
         if value is None and type(None) in arguments:
             return None
+        if isinstance(value, bool) and bool in arguments:
+            return value
         failures: list[Exception] = []
         for member in arguments:
             if member is type(None):
                 continue
             try:
                 return _decode_value(member, value)
-            except (TypeError, ValueError) as error:
+            except (InvalidOperation, TypeError, ValueError) as error:
                 failures.append(error)
         raise TypeError(f"Canonical union value cannot be decoded: {failures!r}")
     if origin is tuple:
@@ -700,7 +766,14 @@ def _decode_value(expected: Any, value: Any) -> Any:
         for field in fields(expected):
             field_type = hints[field.name]
             if field.name in value:
-                kwargs[field.name] = _decode_value(field_type, value[field.name])
+                raw_value = value[field.name]
+                if expected is ContextObservation and field.name == "value":
+                    kwargs[field.name] = _decode_context_observation_value(
+                        value,
+                        raw_value,
+                    )
+                else:
+                    kwargs[field.name] = _decode_value(field_type, raw_value)
             elif field.default is not MISSING or field.default_factory is not MISSING:
                 continue
             elif type(None) in get_args(field_type):
@@ -713,6 +786,29 @@ def _decode_value(expected: Any, value: Any) -> Any:
             raise TypeError(f"Expected {expected.__name__} canonical value.")
         return value
     return value
+
+
+def _decode_context_observation_value(
+    payload: Mapping[str, Any],
+    value: Any,
+) -> Any:
+    """Decode the one runtime context value whose contract is boolean.
+
+    Context values intentionally support Decimal, string, and boolean values.
+    Their canonical JSON representation does not globally tag those variants,
+    so coercing strings such as ``"1"`` or ``"0"`` at the union level would
+    change unrelated context semantics.  The persisted-input verification
+    observation is the sole currently approved boolean context definition.
+    """
+    if payload.get("semantic_identifier") != "data_quality.persisted_inputs_verified":
+        return _decode_value(Decimal | str | bool, value)
+    if isinstance(value, bool):
+        return value
+    if value == "1":
+        return True
+    if value == "0":
+        return False
+    raise TypeError("Persisted-input verification value must be a boolean.")
 
 
 def _audit_availability(entity: T) -> datetime:
@@ -740,3 +836,24 @@ def _cursor_offset(cursor: str | None) -> int:
     if offset < 0 or str(offset) != cursor:
         raise ValidationError("Repository cursor is invalid.")
     return offset
+
+def _latest_contiguous_suffix(
+    items: tuple[MarketSnapshot, ...],
+    timeframe: CandleTimeframe,
+) -> tuple[MarketSnapshot, ...]:
+    if not items:
+        return items
+
+    step = timeframe_duration(timeframe)
+    start = len(items) - 1
+
+    while start > 0:
+        previous = items[start - 1].candles[0].timestamp
+        current = items[start].candles[0].timestamp
+
+        if current - previous != step:
+            break
+
+        start -= 1
+
+    return items[start:]
