@@ -175,7 +175,7 @@ def build_runtime_pipeline(
         lifecycle=_StubLifecycleService(),
         notifications=notification_service,
         dashboard=dashboard_service,
-        indicators=_StubIndicatorService(),
+        indicators=RuntimeIndicatorService(),
         explanation=_StubExplanationService(),
         detail=detail_service,
     )
