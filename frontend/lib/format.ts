@@ -13,6 +13,18 @@ export function formatCurrency(
   }).format(parsed);
 }
 
+export function formatPrice(
+  value: string | number | null | undefined,
+): string {
+  if (value === null || value === undefined) return "Unavailable";
+  const parsed = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(parsed)) return "Unavailable";
+  return new Intl.NumberFormat("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 6,
+  }).format(parsed);
+}
+
 export function formatPercent(
   value: string | number | null | undefined,
   digits = 2,

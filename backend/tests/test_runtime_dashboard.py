@@ -29,6 +29,7 @@ from app.opportunity_intelligence.orchestration import (
 from app.opportunity_intelligence.persistence import (
     DashboardProjectionMemoryRepository,
     RankingMemoryRepository,
+    OpportunityPlanMemoryRepository,
 )
 from app.opportunity_intelligence.repositories import StorageUnavailableError
 from app.opportunity_intelligence.services import (
@@ -74,19 +75,32 @@ async def _dashboard_fixture():
     )
 
     dashboard_repo = DashboardProjectionMemoryRepository()
-    dashboard_service = _make_service(rankings=rankings, dashboard=dashboard_repo)
+    plans_repo = OpportunityPlanMemoryRepository()
+    dashboard_service = _make_service(
+        rankings=rankings,
+        dashboard=dashboard_repo,
+        plans=plans_repo,
+    )
 
     fixture.rankings = rankings
     fixture.ranking = ranking
     fixture.opportunity = opportunity
+    fixture.plans = plans_repo
 
     return fixture, opportunity, lifecycle, ranking, dashboard_service, dashboard_repo
 
 
-def _make_service(*, rankings, dashboard, code_version="git:dashboardtest100"):
+def _make_service(
+    *,
+    rankings,
+    dashboard,
+    plans=None,
+    code_version="git:dashboardtest100",
+):
     return RuntimeDashboardProjectionService(
         rankings=rankings,
         dashboard=dashboard,
+        plans=plans,
         code_version=code_version,
     )
 
@@ -103,6 +117,7 @@ class RuntimeDashboardProjectionServiceTests(unittest.IsolatedAsyncioTestCase):
         fixture, opportunity, lifecycle, ranking, service, dashboard_repo = (
             await _dashboard_fixture()
         )
+        opportunity = replace(opportunity, plan=None)
 
         page = await service.project(ranking, (opportunity,), (lifecycle,))
 
@@ -117,9 +132,23 @@ class RuntimeDashboardProjectionServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             page.items[0].lifecycle_state, LifecycleState.RANKED
         )
+        self.assertFalse(page.items[0].has_plan)
         self.assertEqual(page.coverage_status, "complete")
         self.assertEqual(page.sort, "canonical.rank")
         self.assertEqual(len(dashboard_repo._records), 1)
+
+    async def test_populated_dashboard_resolves_persisted_plan(self) -> None:
+        fixture, opportunity, lifecycle, ranking, service, _ = (
+            await _dashboard_fixture()
+        )
+        opportunity = replace(opportunity, plan=None)
+        plan = fixture.opportunity.plan
+        self.assertIsNotNone(plan)
+        await fixture.plans.save(plan)
+
+        page = await service.project(ranking, (opportunity,), (lifecycle,))
+
+        self.assertTrue(page.items[0].has_plan)
 
     async def test_dashboard_item_rank_order_is_ascending(self) -> None:
         fixture, opportunity, lifecycle, ranking, service, _ = (
@@ -325,6 +354,7 @@ class RuntimeDashboardProjectionServiceTests(unittest.IsolatedAsyncioTestCase):
             assessment_id="assessment.runtime_ema_rsi.candidate.other",
             decision_id="decision.runtime_ema_rsi.candidate.other",
             candidate_id="candidate.other",
+            plan=None,
             audit=replace(opportunity.audit, result_hash="0" * 64),
         )
         with self.assertRaises((ServiceUnavailableError, ServiceContractError)):

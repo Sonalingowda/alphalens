@@ -108,9 +108,11 @@ export function getOpportunities(
 
 export function getOpportunityDetail(
   opportunityId: string,
+  asOf?: string,
 ): Promise<ApiResult<OpportunityDetail>> {
+  const query = asOf ? `?${queryString({ as_of: asOf })}` : "";
   return requestEnvelope<OpportunityDetail>(
-    `/opportunities/${encodeURIComponent(opportunityId)}`,
+    `/api/v1/opportunities/${encodeURIComponent(opportunityId)}${query}`,
   );
 }
 

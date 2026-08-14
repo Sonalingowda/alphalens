@@ -35,8 +35,10 @@ from app.opportunity_intelligence.domain import (
 )
 from app.opportunity_intelligence.repositories import (
     DashboardProjectionRepository,
+    EntityAsOfQuery,
     EntityId,
     EntityNotFoundError,
+    OpportunityPlanRepository,
     RankingRepository,
 )
 from app.opportunity_intelligence.services import (
@@ -81,6 +83,7 @@ class RuntimeDashboardProjectionService:
         *,
         rankings: RankingRepository,
         dashboard: DashboardProjectionRepository,
+        plans: OpportunityPlanRepository | None = None,
         code_version: str,
     ) -> None:
         if not code_version.strip():
@@ -89,6 +92,7 @@ class RuntimeDashboardProjectionService:
             )
         self._rankings = rankings
         self._dashboard = dashboard
+        self._plans = plans
         self._code_version = code_version
 
     async def project(
@@ -152,25 +156,30 @@ class RuntimeDashboardProjectionService:
                     f"Dashboard: opportunity or lifecycle missing for "
                     f"ranked member {membership.opportunity_id!r}."
                 )
+            resolved_opp = await _resolve_persisted_plan(
+                opp=opp,
+                plans=self._plans,
+                as_of=persisted_ranking.audit.evidence_cutoff,
+            )
             score_ref = membership.score_reference
             items.append(
                 DashboardItem(
-                    opportunity_id=opp.opportunity_id,
-                    opportunity_version_id=opp.opportunity_version_id,
-                    scope=opp.scope,
-                    stance=opp.stance,
+                    opportunity_id=resolved_opp.opportunity_id,
+                    opportunity_version_id=resolved_opp.opportunity_version_id,
+                    scope=resolved_opp.scope,
+                    stance=resolved_opp.stance,
                     lifecycle_state=lc.current_state,
-                    evidence_cutoff=opp.audit.evidence_cutoff,
-                    available_at=opp.audit.available_at,
+                    evidence_cutoff=resolved_opp.audit.evidence_cutoff,
+                    available_at=resolved_opp.audit.available_at,
                     freshness_state=_FRESHNESS_STATE_CURRENT,
                     rank=membership.rank,
                     ranking_snapshot_reference=ranking_ref,
                     score_reference=score_ref,
                     confidence_reference=None,
-                    reason_codes=opp.reason_codes,
-                    has_plan=opp.plan is not None,
-                    limitations=opp.limitations,
-                    detail_reference=opp.opportunity_version_id,
+                    reason_codes=resolved_opp.reason_codes,
+                    has_plan=resolved_opp.plan is not None,
+                    limitations=resolved_opp.limitations,
+                    detail_reference=resolved_opp.opportunity_version_id,
                 )
             )
 
@@ -257,6 +266,27 @@ def _validate_inputs(
         raise ServiceUnavailableError(
             f"Dashboard: ranked members without lifecycles: {missing_lcs}."
         )
+
+
+async def _resolve_persisted_plan(
+    *,
+    opp: Opportunity,
+    plans: OpportunityPlanRepository | None,
+    as_of,
+) -> Opportunity:
+    """Return the persisted plan for one opportunity when the repository is wired."""
+    if plans is None:
+        return opp
+    try:
+        plan = await plans.get_latest_for_opportunity(
+            EntityAsOfQuery(
+                EntityId(opp.opportunity_id),
+                as_of,
+            )
+        )
+    except EntityNotFoundError:
+        return replace(opp, plan=None)
+    return replace(opp, plan=plan)
 
 
 # ---------------------------------------------------------------------------

@@ -12,7 +12,7 @@ export function OpportunityCard({ item }: { item: OpportunityDashboardItem }) {
 
   return (
     <Link
-      href={`/opportunities/${encodeURIComponent(item.opportunity_id)}`}
+      href={`/opportunities/${encodeURIComponent(item.opportunity_id)}?as_of=${encodeURIComponent(item.available_at)}`}
       className="group block focus-visible:outline-none"
     >
       <Card className="overflow-hidden border-border/80 bg-card/95 transition group-hover:-translate-y-0.5 group-hover:border-primary/40 group-hover:shadow-lg group-hover:shadow-primary/5 group-focus-visible:ring-2 group-focus-visible:ring-primary">
@@ -43,6 +43,19 @@ export function OpportunityCard({ item }: { item: OpportunityDashboardItem }) {
             </span>
           </div>
           <div className="space-y-4 p-5">
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge
+                variant={item.has_plan ? "secondary" : "outline"}
+                className="font-mono text-[10px]"
+              >
+                {item.has_plan ? "Plan available" : "Plan unavailable"}
+              </Badge>
+              {item.detail_reference ? (
+                <Badge variant="outline" className="font-mono text-[10px]">
+                  {item.detail_reference}
+                </Badge>
+              ) : null}
+            </div>
             <div className="flex flex-wrap gap-1.5">
               {item.reason_codes.length ? (
                 item.reason_codes.slice(0, 3).map((code) => (

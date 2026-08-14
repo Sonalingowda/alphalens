@@ -27,9 +27,11 @@ from app.opportunity_intelligence.repositories import (
     FeatureSnapshotRepository,
     MarketContextRepository,
     MarketSnapshotRepository,
+    OpportunityPlanRepository,
     OpportunityRepository,
 )
 from app.opportunity_intelligence.services import (
+    OpportunityPlanService,
     PolicyUnavailableError,
     ServiceContractError,
     ServiceUnavailableError,
@@ -126,7 +128,9 @@ class RuntimeAssessmentService:
         feature_snapshots: FeatureSnapshotRepository,
         market_contexts: MarketContextRepository,
         opportunities: OpportunityRepository,
+        plans_repository: OpportunityPlanRepository,
         code_version: str,
+        plans: OpportunityPlanService,
         policy: PolicyReference | None = None,
     ) -> None:
         if not code_version.strip():
@@ -137,6 +141,8 @@ class RuntimeAssessmentService:
         self._feature_snapshots = feature_snapshots
         self._market_contexts = market_contexts
         self._opportunities = opportunities
+        self._plans_repository = plans_repository
+        self._plans = plans
         self._code_version = code_version
         self._policy = policy if policy is not None else _assessment_policy()
 
@@ -158,6 +164,23 @@ class RuntimeAssessmentService:
             policy=self._policy,
             code_version=self._code_version,
         )
+        plan = await self._plans.create_plan(
+            opportunity,
+            inputs.evidence,
+            inputs.context,
+        )
+        if plan is not None:
+            plan = await self._plans_repository.save(plan)
+            opportunity = replace(opportunity, plan=plan)
+            opportunity = replace(
+                opportunity,
+                audit=replace(
+                    opportunity.audit,
+                    result_hash=canonical_sha256(
+                        opportunity, exclude=frozenset({"result_hash"})
+                    ),
+                ),
+            )
         return await self._opportunities.save(opportunity)
 
     async def _load_persisted_inputs(

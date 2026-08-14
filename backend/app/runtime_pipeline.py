@@ -32,6 +32,7 @@ from app.opportunity_intelligence.persistence import (
     NotificationPostgreSQLRepository,
     OpportunityDetailPostgreSQLRepository,
     OpportunityPostgreSQLRepository,
+    OpportunityPlanPostgreSQLRepository,
     QualificationPostgreSQLRepository,
     RankingPostgreSQLRepository,
     ScoringPostgreSQLRepository,
@@ -44,7 +45,9 @@ from app.runtime_detail import RuntimeOpportunityDetailProjectionService
 from app.runtime_detection import RuntimeOpportunityDetectionService
 from app.runtime_evidence import RuntimeEvidenceService
 from app.runtime_features import RuntimeFeatureEngine
+from app.runtime_indicators import RuntimeIndicatorService
 from app.runtime_notification import RuntimeNotificationService
+from app.runtime_opportunity_plan import RuntimeOpportunityPlanService
 from app.runtime_qualification import RuntimeQualificationService
 from app.runtime_ranking import RuntimeRankingService
 from app.runtime_scoring import RuntimeScoringService
@@ -73,6 +76,7 @@ def build_runtime_pipeline(
     detections = DetectionPostgreSQLRepository(session_factory)
     evidence_repo = EvidencePostgreSQLRepository(session_factory)
     opportunities = OpportunityPostgreSQLRepository(session_factory)
+    plans = OpportunityPlanPostgreSQLRepository(session_factory)
     qualifications = QualificationPostgreSQLRepository(session_factory)
     scores = ScoringPostgreSQLRepository(session_factory)
     rankings = RankingPostgreSQLRepository(session_factory)
@@ -108,6 +112,7 @@ def build_runtime_pipeline(
         evidence=evidence_repo,
         code_version=_CODE_VERSION,
     )
+    plan_service = RuntimeOpportunityPlanService(code_version=_CODE_VERSION)
     assessment_service = RuntimeAssessmentService(
         candidates=detections,
         evidence=evidence_repo,
@@ -115,6 +120,8 @@ def build_runtime_pipeline(
         feature_snapshots=feature_snapshots,
         market_contexts=market_contexts,
         opportunities=opportunities,
+        plans_repository=plans,
+        plans=plan_service,
         code_version=_CODE_VERSION,
     )
     qualification_service = RuntimeQualificationService(
@@ -150,6 +157,7 @@ def build_runtime_pipeline(
     dashboard_service = RuntimeDashboardProjectionService(
         rankings=rankings,
         dashboard=dashboard_repo,
+        plans=plans,
         code_version=_CODE_VERSION,
     )
     detail_service = RuntimeOpportunityDetailProjectionService(
@@ -176,7 +184,7 @@ def build_runtime_pipeline(
         notifications=notification_service,
         dashboard=dashboard_service,
         indicators=RuntimeIndicatorService(),
-        explanation=_StubExplanationService(),
+        explanation=_StubExplanationService(explanations),
         detail=detail_service,
     )
 
@@ -429,7 +437,10 @@ class _StubIndicatorService:
 
 
 class _StubExplanationService:
-    """Returns a minimal deterministic explanation — full service not yet implemented."""
+    """Returns and persists a minimal deterministic explanation."""
+
+    def __init__(self, explanations):
+        self._explanations = explanations
 
     async def explain(
         self,
@@ -523,7 +534,8 @@ class _StubExplanationService:
         result_hash = canonical_sha256(
             explanation, exclude=frozenset({"result_hash"})
         )
-        return dr(
+        explanation = dr(
             explanation,
             audit=dr(audit, result_hash=result_hash),
         )
+        return await self._explanations.save(explanation)

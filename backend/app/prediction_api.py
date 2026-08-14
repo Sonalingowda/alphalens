@@ -18,6 +18,7 @@ from app.opportunity_intelligence.persistence import (
     DashboardProjectionPostgreSQLRepository,
     MarketSnapshotPostgreSQLRepository,
     OpportunityDetailPostgreSQLRepository,
+    OpportunityPlanPostgreSQLRepository,
     RuntimeGovernancePostgreSQLRepository,
 )
 from app.opportunity_intelligence.repositories import RepositoryError
@@ -41,16 +42,39 @@ class _PipelineAwareLiveMarketIngestionService(LiveMarketIngestionService):
 
     async def _persist(self, candle) -> MarketSnapshot | None:
         snapshot = await super()._persist(candle)
+
         if snapshot is not None:
-            # Fire-and-forget: pipeline errors are logged inside run_for_snapshot
-            # and must never crash the ingestion loop.
+            logger.info(
+                "pipeline_task_scheduled snapshot_id=%s",
+                snapshot.snapshot_id,
+            )
+
+            async def _run_pipeline() -> None:
+                logger.info(
+                    "pipeline_task_started snapshot_id=%s",
+                    snapshot.snapshot_id,
+                )
+                try:
+                    await _runtime_pipeline.run_for_snapshot(
+                        snapshot,
+                        snapshot.audit.available_at,
+                    )
+                except Exception:
+                    logger.exception(
+                        "pipeline_task_crashed snapshot_id=%s",
+                        snapshot.snapshot_id,
+                    )
+                else:
+                    logger.info(
+                        "pipeline_task_finished snapshot_id=%s",
+                        snapshot.snapshot_id,
+                    )
+
             asyncio.create_task(
-                _runtime_pipeline.run_for_snapshot(
-                    snapshot,
-                    snapshot.audit.available_at,
-                ),
+                _run_pipeline(),
                 name=f"alphalens-runtime-pipeline-{snapshot.snapshot_id}",
             )
+
         return snapshot
 
 
@@ -65,6 +89,7 @@ app = create_prediction_app(
 opportunity_app = create_opportunity_intelligence_app(
     dashboard_repository=DashboardProjectionPostgreSQLRepository(session_factory),
     detail_repository=OpportunityDetailPostgreSQLRepository(session_factory),
+    plans_repository=OpportunityPlanPostgreSQLRepository(session_factory),
     governance_repository=RuntimeGovernancePostgreSQLRepository(session_factory),
     market_repository=market_snapshot_repository,
 )

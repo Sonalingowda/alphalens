@@ -207,7 +207,7 @@ describe("AlphaLens MVP API integration", () => {
         },
         response_hash: "c".repeat(64),
       },
-      "/opportunities/opportunity.1": {
+      "/api/v1/opportunities/opportunity.1": {
         contract_version: "1.0.0",
         data: { contract_version: "1.0.0", detail_id: "detail.1" },
         response_hash: "d".repeat(64),

@@ -15,6 +15,7 @@ from app.opportunity_intelligence.orchestration import (
 from app.opportunity_intelligence.persistence import (
     EvidenceMemoryRepository,
     OpportunityMemoryRepository,
+    OpportunityPlanMemoryRepository,
 )
 from app.opportunity_intelligence.repositories import (
     ScopedRepositoryQuery,
@@ -32,6 +33,7 @@ from app.runtime_assessment import (
     RUNTIME_ASSESSMENT_POLICY_VERSION,
     RuntimeAssessmentService,
 )
+from app.runtime_opportunity_plan import RuntimeOpportunityPlanService
 from tests.test_opportunity_domain_models import CUTOFF
 from tests.test_runtime_evidence import _fixture
 
@@ -243,6 +245,10 @@ def _service(
         feature_snapshots=fixture.features,
         market_contexts=fixture.contexts,
         opportunities=opportunities or OpportunityMemoryRepository(),
+        plans_repository=OpportunityPlanMemoryRepository(),
+        plans=RuntimeOpportunityPlanService(
+            code_version="git:runtimeopportunityplan-test"
+        ),
         code_version="git:runtimeassessment101",
         policy=policy,
     )

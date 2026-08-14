@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from fastapi.testclient import TestClient
 
 from app.opportunity_intelligence.api import create_opportunity_intelligence_app
+from app.opportunity_intelligence.domain import OpportunityStance
 from app.opportunity_intelligence.repositories import EntityNotFoundError
 
 
@@ -18,6 +19,7 @@ def _client(
     *,
     dashboard: object | None = None,
     detail: object | None = None,
+    plans: object | None = None,
     include_market: bool = False,
 ) -> tuple[TestClient, SimpleNamespace, SimpleNamespace, SimpleNamespace]:
     dashboard_value = dashboard or SimpleNamespace(
@@ -54,6 +56,7 @@ def _client(
     app = create_opportunity_intelligence_app(
         dashboard_repository,  # type: ignore[arg-type]
         detail_repository,  # type: ignore[arg-type]
+        plans_repository=plans,  # type: ignore[arg-type]
         market_repository=(
             market_repository if include_market else None  # type: ignore[arg-type]
         ),
@@ -180,6 +183,103 @@ class OpportunityAPITests(unittest.TestCase):
         self.assertEqual(detail_response.status_code, 200)
         self.assertEqual(dashboard.get_latest.await_count, 1)
         self.assertEqual(detail.get_current.await_count, 1)
+
+    def test_dashboard_response_overlays_persisted_plan_presence(self) -> None:
+        dashboard_item = SimpleNamespace(
+            opportunity_id="opportunity.1",
+            opportunity_version_id="opportunity.1.v1",
+            scope=SimpleNamespace(instrument="BTCUSDT", timeframe="5m"),
+            stance=OpportunityStance.SELL,
+            lifecycle_state="DETECTED",
+            evidence_cutoff=datetime(2025, 1, 1, 0, 5, 1, tzinfo=timezone.utc),
+            available_at=datetime(2025, 1, 1, 0, 5, 1, tzinfo=timezone.utc),
+            freshness_state="current",
+            rank=1,
+            ranking_snapshot_reference=SimpleNamespace(
+                artifact_id="ranking.1",
+                artifact_type="ranking_snapshot",
+                artifact_version="1.0.0",
+                available_at=datetime(2025, 1, 1, 0, 5, 1, tzinfo=timezone.utc),
+                integrity_digest="a" * 64,
+            ),
+            score_reference=SimpleNamespace(
+                artifact_id="score.1",
+                artifact_type="score_result",
+                artifact_version="1.0.0",
+                available_at=datetime(2025, 1, 1, 0, 5, 1, tzinfo=timezone.utc),
+                integrity_digest="b" * 64,
+            ),
+            confidence_reference=None,
+            reason_codes=("assessment.persisted_inputs_verified",),
+            has_plan=False,
+            limitations=("confidence.unavailable",),
+            detail_reference="opportunity.1.v1",
+            to_dict=lambda: {
+                "opportunity_id": "opportunity.1",
+                "opportunity_version_id": "opportunity.1.v1",
+                "scope": {
+                    "instrument": "BTCUSDT",
+                    "timeframe": "5m",
+                },
+                "stance": OpportunityStance.SELL.value,
+                "lifecycle_state": "DETECTED",
+                "evidence_cutoff": "2025-01-01T00:05:01+00:00",
+                "available_at": "2025-01-01T00:05:01+00:00",
+                "freshness_state": "current",
+                "rank": 1,
+                "ranking_snapshot_reference": {
+                    "artifact_id": "ranking.1",
+                    "artifact_type": "ranking_snapshot",
+                    "artifact_version": "1.0.0",
+                    "available_at": "2025-01-01T00:05:01+00:00",
+                    "integrity_digest": "a" * 64,
+                },
+                "score_reference": {
+                    "artifact_id": "score.1",
+                    "artifact_type": "score_result",
+                    "artifact_version": "1.0.0",
+                    "available_at": "2025-01-01T00:05:01+00:00",
+                    "integrity_digest": "b" * 64,
+                },
+                "confidence_reference": None,
+                "reason_codes": ("assessment.persisted_inputs_verified",),
+                "has_plan": False,
+                "limitations": ("confidence.unavailable",),
+                "detail_reference": "opportunity.1.v1",
+            },
+        )
+        dashboard_page = SimpleNamespace(
+            items=(dashboard_item,),
+            to_dict=lambda: {
+                "contract_version": "1.0.0",
+                "items": (dashboard_item.to_dict(),),
+                "applied_filters": [],
+                "sort": "canonical.rank",
+                "coverage_status": "complete",
+                "partial_failures": (),
+            },
+        )
+        plans_repository = SimpleNamespace(
+            get_latest_for_opportunity=AsyncMock(return_value=SimpleNamespace())
+        )
+        client, _, _, _ = _client(
+            dashboard=dashboard_page,
+            plans=plans_repository,
+        )
+
+        response = client.get(
+            "/api/v1/opportunities",
+            params={
+                "instrument": "BTCUSDT",
+                "timeframe": "5m",
+                "as_of": AS_OF,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["data"]["items"][0]["has_plan"])
+        query = plans_repository.get_latest_for_opportunity.await_args.args[0]
+        self.assertEqual(query.entity_id.value, "opportunity.1")
 
     def test_health_is_deterministic_and_reports_unwired_market_repository(self) -> None:
         client, _, _, _ = _client()

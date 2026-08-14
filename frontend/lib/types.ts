@@ -277,6 +277,162 @@ export type OpportunityDashboardItem = {
   detail_reference: string;
 };
 
+export type IntegrityReference = {
+  artifact_id: string;
+  artifact_type: string;
+  artifact_version: string;
+  integrity_digest: string;
+  available_at: string;
+};
+
+export type PolicyReference = {
+  policy_id: string;
+  policy_version: string;
+  integrity_digest: string;
+};
+
+export type AuditProvenance = {
+  source_references: IntegrityReference[];
+  policy_references: PolicyReference[];
+  code_version: string;
+  configuration_hash: string;
+  lineage_hash: string;
+};
+
+export type AuditMetadata = {
+  created_at?: string;
+  evidence_cutoff: string;
+  available_at: string;
+  provenance?: AuditProvenance;
+  result_hash: string;
+};
+
+export type PriceRange = {
+  lower: string;
+  upper: string;
+};
+
+export type PlanTarget = {
+  target_id: string;
+  price: string;
+  potential_reward: string;
+  risk_reward: string;
+  evidence_references: IntegrityReference[];
+};
+
+export type OpportunityPlan = {
+  contract_version: string;
+  plan_id: string;
+  opportunity_id: string;
+  assessment_id: string;
+  decision_id: string;
+  policy: PolicyReference;
+  scope: MarketScope;
+  direction: "BUY" | "SELL";
+  reference_price: string;
+  reference_price_source: IntegrityReference;
+  entry_zone: PriceRange;
+  entry_semantics: string;
+  invalidation_price: string;
+  invalidation_condition: string;
+  targets: PlanTarget[];
+  risk: string;
+  risk_unit: string;
+  assumptions: string[];
+  limitations: string[];
+  valid_until?: string | null;
+  audit: AuditMetadata;
+};
+
+export type ConfidenceRecord = {
+  contract_version: string;
+  confidence_id: string;
+  value: string;
+  meaning: string;
+  population_scope: string;
+  calibration_reference: IntegrityReference;
+  approval_reference: PolicyReference;
+  audit: AuditMetadata;
+};
+
+export type EvidenceItem = {
+  taxonomy_version: string;
+  evidence_id: string;
+  evidence_type: string;
+  category: string;
+  description_code: string;
+  source_reference: IntegrityReference;
+  source_definition: string;
+  polarity: string;
+  proposition: string;
+  severity: string;
+  observed_value: string | number | boolean;
+  unit?: string | null;
+  scope: MarketScope;
+  time_start: string;
+  time_end: string;
+  available_at: string;
+  price_scope?: PriceRange | null;
+  limitations: string[];
+  integrity_digest: string;
+};
+
+export type EvidencePackage = {
+  contract_version: string;
+  package_id: string;
+  candidate_id: string;
+  assessment_id?: string | null;
+  items: EvidenceItem[];
+  limitations: string[];
+  audit: AuditMetadata;
+};
+
+export type ExplanationSentence = {
+  sentence_id: string;
+  template_id: string;
+  rendered_text: string;
+  evidence_references: IntegrityReference[];
+  bindings?: Array<{ name: string; value: string | number | boolean }>;
+};
+
+export type ExplanationSection = {
+  section_id: string;
+  ordinal: number;
+  sentences: ExplanationSentence[];
+};
+
+export type ExplanationArtifact = {
+  contract_version: string;
+  explanation_id: string;
+  opportunity_version_id: string;
+  language: string;
+  locale: string;
+  taxonomy_version: string;
+  template_set_version: string;
+  sections: ExplanationSection[];
+  limitations: string[];
+  audit: AuditMetadata;
+  summary?: string;
+  text?: string;
+  narrative?: string;
+  sentences?: string[];
+};
+
+export type OpportunityDetailOpportunity = {
+  opportunity_id: string;
+  opportunity_version_id: string;
+  scope: MarketScope;
+  stance: "BUY" | "SELL" | "WAIT";
+  detected_at?: string;
+  available_at?: string;
+  reason_codes?: string[];
+  limitations?: string[];
+  has_plan?: boolean;
+  plan?: OpportunityPlan | null;
+  confidence?: ConfidenceRecord | null;
+  audit?: AuditMetadata;
+};
+
 export type OpportunityPage = {
   contract_version: string;
   as_of?: string;
@@ -294,15 +450,7 @@ export type OpportunityPage = {
 export type OpportunityDetail = {
   contract_version: string;
   detail_id: string;
-  opportunity: {
-    opportunity_id: string;
-    opportunity_version_id: string;
-    scope: MarketScope;
-    stance: "BUY" | "SELL" | "WAIT";
-    detected_at?: string;
-    available_at?: string;
-    [key: string]: unknown;
-  };
+  opportunity: OpportunityDetailOpportunity;
   market_snapshot: LiveMarketSnapshot;
   indicators: Array<{
     feature_identifier: string;
@@ -315,21 +463,20 @@ export type OpportunityDetail = {
   }>;
   evidence: {
     package_id: string;
-    [key: string]: unknown;
+    candidate_id?: string;
+    assessment_id?: string | null;
+    items?: EvidenceItem[];
+    limitations?: string[];
+    audit?: AuditMetadata;
   };
-  explanation: {
-    [key: string]: unknown;
-  };
+  explanation: ExplanationArtifact;
   lifecycle: {
     current_state?: string;
-    [key: string]: unknown;
+    current_event_id?: string;
+    events?: unknown[];
   };
   verification_status: string;
-  audit: {
-    evidence_cutoff: string;
-    available_at: string;
-    result_hash: string;
-  };
+  audit: AuditMetadata;
 };
 
 export type MvpHealth = {

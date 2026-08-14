@@ -22,6 +22,7 @@ from app.opportunity_intelligence.repositories import (
     EntityId,
     EntityNotFoundError,
     OpportunityDetailRepository,
+    OpportunityPlanRepository,
     MarketSnapshotRepository,
     RepositoryError,
     RuntimeGovernanceRepository,
@@ -41,6 +42,7 @@ Clock = Callable[[], datetime]
 def create_opportunity_intelligence_app(
     dashboard_repository: DashboardProjectionRepository,
     detail_repository: OpportunityDetailRepository,
+    plans_repository: OpportunityPlanRepository | None = None,
     governance_repository: RuntimeGovernanceRepository | None = None,
     market_repository: MarketSnapshotRepository | None = None,
     clock: Clock | None = None,
@@ -94,6 +96,17 @@ def create_opportunity_intelligence_app(
         next_offset = offset + len(items)
         payload = page.to_dict()
         payload["items"] = tuple(item.to_dict() for item in items)
+        if plans_repository is not None:
+            resolved_items: list[dict[str, object]] = []
+            for item in payload["items"]:
+                resolved_items.append(
+                    await _overlay_plan_presence(
+                        item,
+                        plans_repository=plans_repository,
+                        as_of=as_of,
+                    )
+                )
+            payload["items"] = tuple(resolved_items)
         payload["applied_filters"] = _applied_filters(stance, search)
         payload["sort"] = sort
         payload["next_cursor"] = (
@@ -272,6 +285,21 @@ def _filter_items(
             or any(needle in code.casefold() for code in item.reason_codes)
         )
     )
+
+
+async def _overlay_plan_presence(
+    item: dict[str, object],
+    *,
+    plans_repository: OpportunityPlanRepository,
+    as_of: datetime,
+) -> dict[str, object]:
+    """Mark a dashboard item as having a persisted plan when one exists."""
+    query = EntityAsOfQuery(EntityId(str(item["opportunity_id"])), as_of)
+    try:
+        await plans_repository.get_latest_for_opportunity(query)
+    except EntityNotFoundError:
+        return {**item, "has_plan": False}
+    return {**item, "has_plan": True}
 
 
 def _applied_filters(

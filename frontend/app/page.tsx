@@ -111,7 +111,7 @@ export default async function DashboardPage({
           ) : (
             <div className="grid gap-4 md:grid-cols-2 2xl:grid-cols-3">
               {opportunities.data.items.map((item) => (
-                <OpportunityCard key={item.opportunity_version_id} item={item} />
+                <OpportunityCard key={item.opportunity_id} item={item} />
               ))}
             </div>
           )}
