@@ -362,17 +362,18 @@ class MarketSnapshotPostgreSQLRepository(PostgreSQLImmutableRepository[MarketSna
         except SQLAlchemyError as error:
             raise StorageUnavailableError("PostgreSQL page query failed.") from error
         ordered = tuple(self._decode(row) for row in rows)
-        selected = _latest_contiguous_suffix(
-            ordered,
-            CandleTimeframe(query.scope.timeframe),
-        )
+        # Return the complete available immutable history in stable
+        # chronological order. Feature computation requires sufficient
+        # historical candles for recursive indicators such as EMA/RSI/MACD.
+        # Do not truncate the history to the latest contiguous suffix here;
+        # the feature engine owns warmup/readiness decisions.
         offset = _cursor_offset(query.cursor)
-        page_items = selected[offset : offset + query.limit]
+        page_items = ordered[offset : offset + query.limit]
         next_offset = offset + len(page_items)
         return RepositoryPage(
             items=page_items,
             as_of=query.as_of,
-            next_cursor=str(next_offset) if next_offset < len(selected) else None,
+            next_cursor=str(next_offset) if next_offset < len(ordered) else None,
         )
 
 

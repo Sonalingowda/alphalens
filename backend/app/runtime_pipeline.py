@@ -30,6 +30,7 @@ from app.opportunity_intelligence.persistence import (
     MarketContextPostgreSQLRepository,
     MarketSnapshotPostgreSQLRepository,
     NotificationPostgreSQLRepository,
+    LifecyclePostgreSQLRepository,
     OpportunityDetailPostgreSQLRepository,
     OpportunityPostgreSQLRepository,
     OpportunityPlanPostgreSQLRepository,
@@ -47,6 +48,7 @@ from app.runtime_evidence import RuntimeEvidenceService
 from app.runtime_features import RuntimeFeatureEngine
 from app.runtime_indicators import RuntimeIndicatorService
 from app.runtime_notification import RuntimeNotificationService
+from app.runtime_lifecycle import RuntimeLifecycleService
 from app.runtime_opportunity_plan import RuntimeOpportunityPlanService
 from app.runtime_qualification import RuntimeQualificationService
 from app.runtime_ranking import RuntimeRankingService
@@ -84,7 +86,7 @@ def build_runtime_pipeline(
     detail_repo = OpportunityDetailPostgreSQLRepository(session_factory)
     explanations = ExplanationPostgreSQLRepository(session_factory)
     notifications = NotificationPostgreSQLRepository(session_factory)
-    # LifecyclePostgreSQLRepository is reserved for a full lifecycle service.
+    lifecycles = LifecyclePostgreSQLRepository(session_factory)
 
     feature_engine = RuntimeFeatureEngine(
         market_snapshots=market_snapshots,
@@ -180,7 +182,7 @@ def build_runtime_pipeline(
         qualification=qualification_service,
         scoring=scoring_service,
         ranking=ranking_service,
-        lifecycle=_StubLifecycleService(),
+        lifecycle=RuntimeLifecycleService(lifecycles=lifecycles),
         notifications=notification_service,
         dashboard=dashboard_service,
         indicators=RuntimeIndicatorService(),
@@ -314,119 +316,6 @@ class _MarketScannerAdapter:
 
     async def scan(self, query: ScopedRepositoryQuery) -> MarketSnapshot:
         return await self._repository.get_latest(query)
-
-
-class _StubLifecycleService:
-    """Minimal lifecycle stub — advances to DETECTED without persistence.
-
-    A full RuntimeLifecycleService is not implemented yet.  This stub
-    returns a simple in-memory lifecycle so the pipeline can continue to
-    Dashboard and Detail Projection.
-    """
-
-    async def advance(
-        self,
-        opportunity,
-        qualification,
-        ranking,
-        previous,
-    ):
-        from app.opportunity_intelligence.domain import (
-            AuditMetadata,
-            LifecycleEvent,
-            LifecycleState,
-            OpportunityLifecycle,
-            PolicyReference,
-            Provenance,
-            canonical_sha256,
-        )
-        from app.opportunity_intelligence.domain import IntegrityReference
-
-        cutoff = opportunity.audit.evidence_cutoff
-        policy = PolicyReference(
-            "alphalens_runtime_lifecycle_stub",
-            "1.0.0",
-            "0" * 64,
-        )
-        assessment_ref = IntegrityReference(
-            artifact_id=opportunity.opportunity_version_id,
-            artifact_type="opportunity",
-            artifact_version="1.0.0",
-            integrity_digest=opportunity.canonical_sha256(),
-            available_at=cutoff,
-        )
-        source_refs = (assessment_ref,)
-        audit = AuditMetadata(
-            created_at=cutoff,
-            evidence_cutoff=cutoff,
-            available_at=cutoff,
-            provenance=Provenance(
-                source_references=source_refs,
-                policy_references=(policy,),
-                code_version=_CODE_VERSION,
-                configuration_hash="0" * 64,
-                lineage_hash=canonical_sha256(source_refs),
-            ),
-            result_hash="0" * 64,
-        )
-        event_id = (
-            f"lifecycle.event.{opportunity.opportunity_id}.1"
-        )
-        event = LifecycleEvent(
-            contract_version="1.0.0",
-            event_id=event_id,
-            opportunity_id=opportunity.opportunity_id,
-            opportunity_version_id=opportunity.opportunity_version_id,
-            prior_state=None,
-            resulting_state=LifecycleState.DETECTED,
-            sequence=1,
-            policy=policy,
-            reason_code="candidate.detected",
-            occurred_at=cutoff,
-            available_at=cutoff,
-            assessment_reference=assessment_ref,
-            evidence_references=(assessment_ref,),
-            predecessor_event_id=None,
-            successor_opportunity_version_id=None,
-            audit=audit,
-        )
-        from dataclasses import replace
-        from app.opportunity_intelligence.domain import canonical_sha256 as cs
-        result_hash = cs(event, exclude=frozenset({"result_hash"}))
-        event = replace(event, audit=replace(audit, result_hash=result_hash))
-
-        lifecycle_audit = replace(
-            audit,
-            result_hash=cs(
-                OpportunityLifecycle(
-                    contract_version="1.0.0",
-                    opportunity_id=opportunity.opportunity_id,
-                    scope=opportunity.scope,
-                    direction=opportunity.stance,
-                    identity_policy=policy,
-                    originating_candidate_id=opportunity.candidate_id,
-                    initial_evidence_cutoff=cutoff,
-                    events=(event,),
-                    current_event_id=event.event_id,
-                    current_state=LifecycleState.DETECTED,
-                    audit=audit,
-                ),
-                exclude=frozenset({"result_hash"}),
-            ),
-        )
-        return OpportunityLifecycle(
-            contract_version="1.0.0",
-            opportunity_id=opportunity.opportunity_id,
-            scope=opportunity.scope,
-            direction=opportunity.stance,
-            identity_policy=policy,
-            originating_candidate_id=opportunity.candidate_id,
-            initial_evidence_cutoff=cutoff,
-            events=(event,),
-            current_event_id=event.event_id,
-            current_state=LifecycleState.DETECTED,
-            audit=lifecycle_audit,
-        )
 
 
 class _StubIndicatorService:

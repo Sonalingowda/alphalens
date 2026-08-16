@@ -7,8 +7,12 @@ import { ApiUnavailable, EmptyState } from "@/components/dashboard/data-states";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { MetricCard } from "@/components/dashboard/metric-card";
 import { Badge } from "@/components/ui/badge";
-import { getLiveMarket, getMvpHealth, getOpportunities } from "@/lib/api";
-import type { OpportunityFilters as Filters } from "@/lib/types";
+import { getLiveMarket, getMvpHealth, getOpportunities, getOpportunityDetail } from "@/lib/api";
+import type {
+  OpportunityDashboardItem,
+  OpportunityFilters as Filters,
+  OpportunityPlan,
+} from "@/lib/types";
 
 type DashboardSearchParams = Promise<{
   instrument?: string;
@@ -39,6 +43,9 @@ export default async function DashboardPage({
     getLiveMarket(filters.instrument, filters.timeframe),
     getOpportunities(filters),
   ]);
+  const planByOpportunityId = await loadOpportunityPlans(
+    opportunities.ok ? opportunities.data.items : [],
+  );
 
   return (
     <>
@@ -111,7 +118,11 @@ export default async function DashboardPage({
           ) : (
             <div className="grid gap-4 md:grid-cols-2 2xl:grid-cols-3">
               {opportunities.data.items.map((item) => (
-                <OpportunityCard key={item.opportunity_id} item={item} />
+                <OpportunityCard
+                  key={item.opportunity_id}
+                  item={item}
+                  plan={planByOpportunityId.get(item.opportunity_id) ?? null}
+                />
               ))}
             </div>
           )}
@@ -119,4 +130,28 @@ export default async function DashboardPage({
       </div>
     </>
   );
+}
+
+async function loadOpportunityPlans(
+  items: OpportunityDashboardItem[],
+): Promise<Map<string, OpportunityPlan | null>> {
+  const planEntries = await Promise.all(
+    items.map(async (item) => {
+      if (!item.has_plan) {
+        return [item.opportunity_id, null] as const;
+      }
+
+      const detailResult = await getOpportunityDetail(
+        item.opportunity_id,
+        item.available_at,
+      );
+
+      return [
+        item.opportunity_id,
+        detailResult.ok ? detailResult.data.opportunity.plan ?? null : null,
+      ] as const;
+    }),
+  );
+
+  return new Map(planEntries);
 }

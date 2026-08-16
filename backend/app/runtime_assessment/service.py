@@ -1,6 +1,5 @@
 """Repository-backed implementation of Assessment Policy v1.0.1."""
 
-import logging
 from dataclasses import dataclass, replace
 
 from app.opportunity_intelligence.domain import (

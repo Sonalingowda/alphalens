@@ -421,15 +421,25 @@ export type ExplanationArtifact = {
 export type OpportunityDetailOpportunity = {
   opportunity_id: string;
   opportunity_version_id: string;
+  assessment_id?: string;
+  decision_id?: string;
+  candidate_id?: string;
   scope: MarketScope;
   stance: "BUY" | "SELL" | "WAIT";
+  decision_policy?: PolicyReference;
+  evidence_package_reference?: IntegrityReference;
+  context_reference?: IntegrityReference;
   detected_at?: string;
   available_at?: string;
   reason_codes?: string[];
   limitations?: string[];
+  qualification_reference?: IntegrityReference | null;
+  score_reference?: IntegrityReference | null;
   has_plan?: boolean;
   plan?: OpportunityPlan | null;
   confidence?: ConfidenceRecord | null;
+  valid_until?: string | null;
+  supersedes_opportunity_version_id?: string | null;
   audit?: AuditMetadata;
 };
 

@@ -58,7 +58,6 @@ def make_value(
     value: str,
     feature_id: str | None = None,
 ) -> FeatureSnapshotValue:
-    market = reference("market.snapshot.test", "market_snapshot")
     feature_record = reference(
         feature_id or f"feature.{output_name}",
         "feature_definition",

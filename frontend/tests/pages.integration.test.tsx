@@ -26,7 +26,7 @@ describe("Page integration: Dashboard", () => {
     const envelopeByPath: Record<string, unknown> = {
       "/health": { contract_version: "1.0.0", data: { status: "ready", data: {} }, response_hash: "a".repeat(64) },
       "/markets/live": { contract_version: "1.0.0", data: { snapshot_id: "market.1", scope: { instrument: "BTCUSDT", timeframe: "5m" }, candles: [], complete: true, audit: { created_at: "2026-08-01T00:00:00Z", evidence_cutoff: "2026-08-01T00:00:00Z", available_at: "2026-08-01T00:00:00Z", result_hash: "b".repeat(64) } }, response_hash: "b".repeat(64) },
-      "/opportunities": {
+      "/api/v1/opportunities": {
         contract_version: "1.0.0",
         data: {
           contract_version: "1.0.0",
@@ -35,13 +35,20 @@ describe("Page integration: Dashboard", () => {
               opportunity_id: "opportunity.1",
               opportunity_version_id: "opportunity.1.v1",
               scope: { instrument: "BTCUSDT", timeframe: "5m" },
-              stance: "BUY",
+              stance: "SELL",
               lifecycle_state: "PUBLISHED",
               evidence_cutoff: "2026-08-01T00:00:00Z",
               available_at: "2026-08-01T00:00:00Z",
               freshness_state: "CURRENT",
               rank: 1,
               reason_codes: ["ema.alignment"],
+              score_reference: {
+                artifact_id: "score.1",
+                artifact_type: "score_result",
+                artifact_version: "1.0.0",
+                integrity_digest: "s".repeat(64),
+                available_at: "2026-08-01T00:00:00Z",
+              },
               has_plan: true,
               limitations: ["Confidence was not published."],
               detail_reference: "detail.1",
@@ -51,6 +58,153 @@ describe("Page integration: Dashboard", () => {
           sort: "canonical.rank",
         },
         response_hash: "c".repeat(64),
+      },
+      "/api/v1/opportunities/opportunity.1": {
+        contract_version: "1.0.0",
+        data: {
+          detail_id: "detail.1",
+          opportunity: {
+            opportunity_id: "opportunity.1",
+            opportunity_version_id: "opportunity.1.v1",
+            scope: { instrument: "BTCUSDT", timeframe: "5m" },
+            stance: "SELL",
+            available_at: "2026-08-01T00:00:00Z",
+            reason_codes: ["ema.alignment"],
+            limitations: ["Confidence was not published."],
+            has_plan: true,
+            plan: {
+              contract_version: "1.0.0",
+              plan_id: "plan.1",
+              opportunity_id: "opportunity.1",
+              assessment_id: "assessment.1",
+              decision_id: "decision.1",
+              policy: {
+                policy_id: "policy.1",
+                policy_version: "v1",
+                integrity_digest: "a".repeat(64),
+              },
+              scope: { instrument: "BTCUSDT", timeframe: "5m" },
+              direction: "SELL",
+              reference_price: "63908.82",
+              reference_price_source: {
+                artifact_id: "market.1",
+                artifact_type: "market_snapshot",
+                artifact_version: "1.0.0",
+                integrity_digest: "b".repeat(64),
+                available_at: "2026-08-01T00:00:00Z",
+              },
+              entry_zone: { lower: "63908.82", upper: "63927.99" },
+              entry_semantics: "Enter on confirmation.",
+              invalidation_price: "63927.992646",
+              invalidation_condition: "Invalidated on close above the threshold.",
+              targets: [
+                {
+                  target_id: "tp.1",
+                  price: "63880.061031",
+                  potential_reward: "42.0",
+                  risk_reward: "1.5",
+                  evidence_references: [
+                    {
+                      artifact_id: "evidence.1",
+                      artifact_type: "evidence_item",
+                      artifact_version: "1.0.0",
+                      integrity_digest: "c".repeat(64),
+                      available_at: "2026-08-01T00:00:00Z",
+                    },
+                  ],
+                },
+                {
+                  target_id: "tp.2",
+                  price: "63852.000000",
+                  potential_reward: "70.0",
+                  risk_reward: "2.0",
+                  evidence_references: [
+                    {
+                      artifact_id: "evidence.2",
+                      artifact_type: "evidence_item",
+                      artifact_version: "1.0.0",
+                      integrity_digest: "d".repeat(64),
+                      available_at: "2026-08-01T00:00:00Z",
+                    },
+                  ],
+                },
+                {
+                  target_id: "tp.3",
+                  price: "63820.000000",
+                  potential_reward: "102.0",
+                  risk_reward: "3.0",
+                  evidence_references: [
+                    {
+                      artifact_id: "evidence.3",
+                      artifact_type: "evidence_item",
+                      artifact_version: "1.0.0",
+                      integrity_digest: "e".repeat(64),
+                      available_at: "2026-08-01T00:00:00Z",
+                    },
+                  ],
+                },
+              ],
+              risk: "28.76",
+              risk_unit: "points",
+              assumptions: ["Trend continuation remains intact."],
+              limitations: ["Order execution latency not modeled."],
+              audit: {
+                evidence_cutoff: "2026-08-01T00:00:00Z",
+                available_at: "2026-08-01T00:00:00Z",
+                result_hash: "d".repeat(64),
+                provenance: {
+                  source_references: [
+                    {
+                      artifact_id: "market.1",
+                      artifact_type: "market_snapshot",
+                      artifact_version: "1.0.0",
+                      integrity_digest: "b".repeat(64),
+                      available_at: "2026-08-01T00:00:00Z",
+                    },
+                  ],
+                  policy_references: [
+                    {
+                      policy_id: "policy.1",
+                      policy_version: "v1",
+                      integrity_digest: "a".repeat(64),
+                    },
+                  ],
+                  code_version: "frontend-test",
+                  configuration_hash: "e".repeat(64),
+                  lineage_hash: "f".repeat(64),
+                },
+              },
+            },
+            confidence: null,
+            audit: {
+              evidence_cutoff: "2026-08-01T00:00:00Z",
+              available_at: "2026-08-01T00:00:00Z",
+              result_hash: "e".repeat(64),
+              provenance: {
+                source_references: [
+                  {
+                    artifact_id: "market.1",
+                    artifact_type: "market_snapshot",
+                    artifact_version: "1.0.0",
+                    integrity_digest: "b".repeat(64),
+                    available_at: "2026-08-01T00:00:00Z",
+                  },
+                ],
+                policy_references: [
+                  {
+                    policy_id: "policy.1",
+                    policy_version: "v1",
+                    integrity_digest: "a".repeat(64),
+                  },
+                ],
+                code_version: "frontend-test",
+                configuration_hash: "e".repeat(64),
+                lineage_hash: "f".repeat(64),
+              },
+            },
+          },
+        },
+        response_hash: "e".repeat(64),
       },
     };
     const fetchMock = vi.fn(async (input: string | URL | Request) => {
@@ -121,6 +275,13 @@ describe("Page integration: Opportunity detail", () => {
           detected_at: "2026-08-01T00:00:00Z",
           available_at: "2026-08-01T00:00:00Z",
           reason_codes: ["ema.alignment"],
+          score_reference: {
+            artifact_id: "score.1",
+            artifact_type: "score_result",
+            artifact_version: "1.0.0",
+            integrity_digest: "s".repeat(64),
+            available_at: "2026-08-01T00:00:00Z",
+          },
           limitations: ["Confidence was not published."],
           has_plan: true,
           plan: {
@@ -373,8 +534,19 @@ describe("Page integration: Opportunity detail", () => {
     render(element as unknown as ReactElement);
 
     expect(screen.getByText("Opportunity detail")).toBeInTheDocument();
-    expect(screen.getByText("Persisted plan")).toBeInTheDocument();
-    expect(screen.getByText("EMA alignment supports the BUY stance.")).toBeInTheDocument();
+    expect(screen.getAllByText("Trade plan").length).toBeGreaterThan(0);
+    expect(screen.getByText("Quality / score")).toBeInTheDocument();
+    expect(screen.getByText("Reason codes")).toBeInTheDocument();
+    expect(screen.getByText("score_result · 1.0.0")).toBeInTheDocument();
+    expect(screen.getAllByText("ema.alignment").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("ema.alignment").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Entry").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("63908.82 - 63927.99").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("63927.992646").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("63880.061031").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("63852.000000").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("63820.000000").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("1.5").length).toBeGreaterThan(0);
     expect(screen.getByText("Verified")).toBeInTheDocument();
     expect(screen.getByText("Market snapshot")).toBeInTheDocument();
   });

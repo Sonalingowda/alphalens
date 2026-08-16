@@ -16,7 +16,6 @@ import {
 import { getOpportunityDetail } from "@/lib/api";
 import {
   formatNumber,
-  formatPrice,
   formatTimestamp,
   shortHash,
   titleCase,
@@ -50,7 +49,10 @@ export default async function OpportunityDetailPage({
   const detail = result.data;
   const opportunity = detail.opportunity;
   const plan = opportunity.plan ?? null;
+  const hasPlan = opportunity.has_plan && plan !== null;
   const confidence = opportunity.confidence ?? null;
+  const reasonCodes = opportunity.reason_codes ?? [];
+  const scoreReference = opportunity.score_reference ?? null;
   const explanation = extractExplanation(detail.explanation);
   const planTargets = plan?.targets ?? [];
   const evidenceItems = detail.evidence.items ?? [];
@@ -119,6 +121,58 @@ export default async function OpportunityDetailPage({
           />
         </section>
 
+        <section className="grid gap-4 xl:grid-cols-2">
+          <Card className="bg-card/95">
+            <CardHeader>
+              <CardTitle>Quality / score</CardTitle>
+              <CardDescription>
+                Persisted score reference returned by the opportunity detail API.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <PlanFact
+                label="Score reference"
+                value={
+                  scoreReference
+                    ? shortHash(scoreReference.artifact_id)
+                    : "Unavailable"
+                }
+                mono
+              />
+              <p className="text-sm text-muted-foreground">
+                {scoreReference
+                  ? `${scoreReference.artifact_type} · ${scoreReference.artifact_version}`
+                  : "No score reference was published for this opportunity."}
+              </p>
+            </CardContent>
+          </Card>
+
+          <Card className="bg-card/95">
+            <CardHeader>
+              <CardTitle>Reason codes</CardTitle>
+              <CardDescription>
+                Evidence-backed assessment reasons returned by the backend.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {reasonCodes.length ? (
+                <div className="flex flex-wrap gap-2">
+                  {reasonCodes.map((code) => (
+                    <Badge key={code} variant="outline" className="font-mono text-[10px]">
+                      {code}
+                    </Badge>
+                  ))}
+                </div>
+              ) : (
+                <EmptyState
+                  title="No reason codes"
+                  description="The backend did not publish assessment reason codes for this opportunity."
+                />
+              )}
+            </CardContent>
+          </Card>
+        </section>
+
         <section className="grid gap-4 xl:grid-cols-[1.1fr_.9fr]">
           <Card className="bg-card/95">
             <CardHeader>
@@ -134,13 +188,13 @@ export default async function OpportunityDetailPage({
 
           <Card className="bg-card/95">
             <CardHeader>
-              <CardTitle>Persisted plan</CardTitle>
+              <CardTitle>Trade plan</CardTitle>
               <CardDescription>
                 Hydrated directly from the stored OpportunityPlan, if one exists.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-5">
-              {plan ? (
+              {hasPlan ? (
                 <>
                   <div className="flex flex-wrap gap-2">
                     <Badge variant="secondary" className="font-mono text-[10px]">
@@ -159,20 +213,34 @@ export default async function OpportunityDetailPage({
 
                   <div className="grid gap-3 sm:grid-cols-2">
                     <PlanFact
-                      label="Reference price"
-                      value={formatPrice(plan.reference_price)}
+                      label="Direction"
+                      value={plan.direction}
+                      mono
                     />
                     <PlanFact
-                      label="Entry zone"
-                      value={`${formatPrice(plan.entry_zone.lower)} - ${formatPrice(plan.entry_zone.upper)}`}
+                      label="Entry"
+                      value={formatPlanRange(plan.entry_zone.lower, plan.entry_zone.upper)}
+                      mono
                     />
                     <PlanFact
-                      label="Invalidation"
-                      value={formatPrice(plan.invalidation_price)}
+                      label="Stop / Invalidation"
+                      value={displayPlanValue(plan.invalidation_price)}
+                      mono
                     />
                     <PlanFact
-                      label="Risk / reward"
-                      value={formatRiskReward(plan.targets[0]?.risk_reward ?? null)}
+                      label="Target 1"
+                      value={displayPlanValue(plan.targets[0]?.price)}
+                      mono
+                    />
+                    <PlanFact
+                      label="Target 2"
+                      value={displayPlanValue(plan.targets[1]?.price)}
+                      mono
+                    />
+                    <PlanFact
+                      label="Risk / Reward"
+                      value={displayPlanValue(plan.targets[0]?.risk_reward)}
+                      mono
                     />
                   </div>
 
@@ -182,28 +250,28 @@ export default async function OpportunityDetailPage({
                     </p>
                     {planTargets.length ? (
                       <div className="mt-3 space-y-3">
-                        {planTargets.map((target) => (
+                        {planTargets.map((target, index) => (
                           <div
                             key={target.target_id}
                             className="rounded-lg border bg-background/60 p-3"
                           >
                             <div className="flex flex-wrap items-center justify-between gap-2">
                               <p className="font-mono text-xs font-medium">
+                                Target {index + 1}
+                              </p>
+                              <p className="font-mono text-xs text-muted-foreground">
                                 {target.target_id}
                               </p>
-                              <Badge variant="outline" className="font-mono text-[10px]">
-                                {formatRiskReward(target.risk_reward)}
-                              </Badge>
                             </div>
                             <div className="mt-2 grid gap-2 text-sm sm:grid-cols-3">
-                              <PlanFact label="Price" value={formatPrice(target.price)} />
+                              <PlanFact label="Price" value={displayPlanValue(target.price)} />
                               <PlanFact
                                 label="Potential reward"
-                                value={formatPrice(target.potential_reward)}
+                                value={displayPlanValue(target.potential_reward)}
                               />
                               <PlanFact
-                                label="Evidence refs"
-                                value={String(target.evidence_references.length)}
+                                label="Risk / Reward"
+                                value={displayPlanValue(target.risk_reward)}
                               />
                             </div>
                           </div>
@@ -223,7 +291,7 @@ export default async function OpportunityDetailPage({
                 </>
               ) : (
                 <EmptyState
-                  title="No persisted plan"
+                  title="Plan unavailable"
                   description="This opportunity was published without a stored OpportunityPlan."
                 />
               )}
@@ -489,11 +557,6 @@ function ReferencesPanel({
   );
 }
 
-function formatRiskReward(value: string | null): string {
-  if (!value) return "Unavailable";
-  return `${formatNumber(value, 2)}x`;
-}
-
 function extractExplanation(value: ExplanationArtifact): string[] {
   const candidates = [value.summary, value.text, value.narrative, value.sentences];
   for (const candidate of candidates) {
@@ -509,4 +572,18 @@ function extractExplanation(value: ExplanationArtifact): string[] {
     section.sentences.map((sentence) => sentence.rendered_text),
   );
   return rendered.filter((line) => line.trim().length > 0);
+}
+
+function displayPlanValue(value: string | null | undefined): string {
+  if (value === null || value === undefined || value.trim() === "") {
+    return "Unavailable";
+  }
+  return value;
+}
+
+function formatPlanRange(
+  lower: string | null | undefined,
+  upper: string | null | undefined,
+): string {
+  return `${displayPlanValue(lower)} - ${displayPlanValue(upper)}`;
 }

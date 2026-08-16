@@ -4,11 +4,18 @@ import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { formatTimestamp, titleCase } from "@/lib/format";
-import type { OpportunityDashboardItem } from "@/lib/types";
+import type { OpportunityDashboardItem, OpportunityPlan } from "@/lib/types";
 
-export function OpportunityCard({ item }: { item: OpportunityDashboardItem }) {
+export function OpportunityCard({
+  item,
+  plan,
+}: {
+  item: OpportunityDashboardItem;
+  plan?: OpportunityPlan | null;
+}) {
   const bullish = item.stance === "BUY";
   const DirectionIcon = bullish ? ArrowUpRight : ArrowDownRight;
+  const planTargets = plan?.targets ?? [];
 
   return (
     <Link
@@ -69,6 +76,82 @@ export function OpportunityCard({ item }: { item: OpportunityDashboardItem }) {
                 </span>
               )}
             </div>
+            <div className="rounded-xl border border-border/70 bg-muted/20 p-4">
+              <p className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
+                Trade plan
+              </p>
+              {item.has_plan && plan ? (
+                <div className="mt-3 space-y-3">
+                  <div className="flex flex-wrap gap-2">
+                    <Badge variant="secondary" className="font-mono text-[10px]">
+                      {plan.direction}
+                    </Badge>
+                  </div>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <PlanFact
+                      label="Entry"
+                      value={formatPlanRange(plan.entry_zone.lower, plan.entry_zone.upper)}
+                    />
+                    <PlanFact
+                      label="Stop / Invalidation"
+                      value={displayPlanValue(plan.invalidation_price)}
+                    />
+                    <PlanFact
+                      label="Target 1"
+                      value={displayPlanValue(plan.targets[0]?.price)}
+                    />
+                    <PlanFact
+                      label="Target 2"
+                      value={displayPlanValue(plan.targets[1]?.price)}
+                    />
+                    <PlanFact
+                      label="Risk / Reward"
+                      value={displayPlanValue(plan.targets[0]?.risk_reward)}
+                    />
+                  </div>
+                  {planTargets.length ? (
+                    <div className="space-y-2">
+                      <p className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
+                        Targets
+                      </p>
+                      <div className="space-y-2">
+                        {planTargets.map((target, index) => (
+                          <div
+                            key={target.target_id}
+                            className="rounded-lg border border-border/70 bg-background/70 p-3"
+                          >
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <p className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
+                                Target {index + 1}
+                              </p>
+                              <p className="font-mono text-xs text-muted-foreground">
+                                {target.target_id}
+                              </p>
+                            </div>
+                            <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                              <PlanFact
+                                label="Price"
+                                value={displayPlanValue(target.price)}
+                              />
+                              <PlanFact
+                                label="Potential reward"
+                                value={displayPlanValue(target.potential_reward)}
+                              />
+                              <PlanFact
+                                label="Risk / Reward"
+                                value={displayPlanValue(target.risk_reward)}
+                              />
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              ) : (
+                <p className="mt-2 text-sm text-muted-foreground">Plan unavailable</p>
+              )}
+            </div>
             <div className="flex items-center justify-between text-xs text-muted-foreground">
               <span className="flex items-center gap-1.5">
                 <Clock3 className="size-3.5" aria-hidden="true" />
@@ -86,4 +169,32 @@ export function OpportunityCard({ item }: { item: OpportunityDashboardItem }) {
       </Card>
     </Link>
   );
+}
+
+function PlanFact({
+  label,
+  value,
+}: {
+  label: string;
+  value: string;
+}) {
+  return (
+    <div className="rounded-lg border border-border/70 bg-background/60 p-3">
+      <p className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
+        {label}
+      </p>
+      <p className="mt-1 text-sm font-medium">{value}</p>
+    </div>
+  );
+}
+
+function displayPlanValue(value: string | null | undefined): string {
+  if (value === null || value === undefined || value.trim() === "") {
+    return "Unavailable";
+  }
+  return value;
+}
+
+function formatPlanRange(lower: string | null | undefined, upper: string | null | undefined): string {
+  return `${displayPlanValue(lower)} - ${displayPlanValue(upper)}`;
 }

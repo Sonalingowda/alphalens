@@ -1,7 +1,7 @@
 """PostgreSQL repository parity tests enabled by integration environments."""
 
 from dataclasses import replace
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 import os
 from unittest import IsolatedAsyncioTestCase, skipUnless
 

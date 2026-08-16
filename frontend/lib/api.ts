@@ -96,21 +96,23 @@ export function getLiveMarket(
 
 export function getOpportunities(
   filters: OpportunityFilters,
+  asOf: string = new Date().toISOString(),
 ): Promise<ApiResult<OpportunityPage>> {
   const query = queryString({
+    as_of: asOf,
     instrument: filters.instrument,
     timeframe: filters.timeframe,
     stance: filters.stance,
     search: filters.search,
   });
-  return requestEnvelope<OpportunityPage>(`/opportunities?${query}`);
+  return requestEnvelope<OpportunityPage>(`/api/v1/opportunities?${query}`);
 }
 
 export function getOpportunityDetail(
   opportunityId: string,
-  asOf?: string,
+  asOf: string = new Date().toISOString(),
 ): Promise<ApiResult<OpportunityDetail>> {
-  const query = asOf ? `?${queryString({ as_of: asOf })}` : "";
+  const query = `?${queryString({ as_of: asOf })}`;
   return requestEnvelope<OpportunityDetail>(
     `/api/v1/opportunities/${encodeURIComponent(opportunityId)}${query}`,
   );
