@@ -37,8 +37,10 @@ from app.opportunity_intelligence.domain import (
     canonical_sha256,
 )
 from app.opportunity_intelligence.repositories import (
+    EntityAsOfQuery,
     EntityId,
     EntityNotFoundError,
+    LifecycleRepository,
     NotificationRepository,
     OpportunityRepository,
     RankingRepository,
@@ -77,6 +79,7 @@ class RuntimeNotificationService:
         *,
         rankings: RankingRepository,
         opportunities: OpportunityRepository,
+        lifecycles: LifecycleRepository,
         notifications: NotificationRepository,
         code_version: str,
     ) -> None:
@@ -84,6 +87,7 @@ class RuntimeNotificationService:
             raise ValueError("Runtime notification code version must be non-empty.")
         self._rankings = rankings
         self._opportunities = opportunities
+        self._lifecycles = lifecycles
         self._notifications = notifications
         self._code_version = code_version
 
@@ -119,50 +123,40 @@ class RuntimeNotificationService:
         if not persisted_ranking.memberships:
             return ()
 
-        # --- Index opportunities and lifecycles by opportunity_id ---
-        opp_index: dict[str, Opportunity] = {
-            o.opportunity_id: o for o in opportunities
-        }
-        lc_index: dict[str, OpportunityLifecycle] = {
-            lc.opportunity_id: lc for lc in lifecycles
-        }
+        as_of = persisted_ranking.audit.evidence_cutoff
 
         results: list[Notification] = []
 
         for membership in persisted_ranking.memberships:
-            opp = opp_index.get(membership.opportunity_id)
-            lc = lc_index.get(membership.opportunity_id)
-
-            if opp is None:
-                raise ServiceUnavailableError(
-                    f"Notification: opportunity {membership.opportunity_id!r} "
-                    "not supplied for ranked member."
-                )
-            if lc is None:
-                raise ServiceUnavailableError(
-                    f"Notification: lifecycle {membership.opportunity_id!r} "
-                    "not supplied for ranked member."
-                )
-
-            # --- Verify opportunity is persisted ---
+            # --- Fetch opportunity from repository ---
             try:
-                persisted_opp = await self._opportunities.get_by_id(
-                    EntityId(opp.opportunity_version_id)
+                opp = await self._opportunities.get_current(
+                    EntityAsOfQuery(
+                        EntityId(membership.opportunity_id), as_of,
+                    )
                 )
             except EntityNotFoundError as error:
                 raise ServiceUnavailableError(
-                    f"Notification: Opportunity {opp.opportunity_version_id!r} "
+                    f"Notification: opportunity {membership.opportunity_id!r} "
                     "is not persisted."
                 ) from error
 
-            if persisted_opp.canonical_sha256() != opp.canonical_sha256():
-                raise ServiceContractError(
-                    "Notification: persisted Opportunity conflicts with pipeline input."
+            # --- Fetch lifecycle from repository ---
+            try:
+                lc = await self._lifecycles.get_current(
+                    EntityAsOfQuery(
+                        EntityId(membership.opportunity_id), as_of,
+                    )
                 )
+            except EntityNotFoundError as error:
+                raise ServiceUnavailableError(
+                    f"Notification: lifecycle {membership.opportunity_id!r} "
+                    "is not persisted."
+                ) from error
 
             notification = _build(
                 persisted_ranking,
-                persisted_opp,
+                opp,
                 lc,
                 membership.rank,
                 membership.score_reference,

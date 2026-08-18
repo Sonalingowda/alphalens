@@ -28,6 +28,8 @@ from app.opportunity_intelligence.orchestration import (
 )
 from app.opportunity_intelligence.persistence import (
     DashboardProjectionMemoryRepository,
+    LifecycleMemoryRepository,
+    OpportunityMemoryRepository,
     RankingMemoryRepository,
     OpportunityPlanMemoryRepository,
 )
@@ -38,6 +40,7 @@ from app.opportunity_intelligence.services import (
 )
 from app.runtime_dashboard import RuntimeDashboardProjectionService
 from tests.test_runtime_ranking import _ranking_fixture, _as_of, _request
+from tests.test_runtime_detail import _make_lifecycle
 
 
 # ---------------------------------------------------------------------------
@@ -74,10 +77,18 @@ async def _dashboard_fixture():
         current_state=LifecycleState.RANKED,
     )
 
+    # Build and persist a real lifecycle for repository-based lookup
+    from tests.test_runtime_detail import _make_lifecycle
+    real_lifecycle = _make_lifecycle(opportunity)
+    lifecycles_repo = LifecycleMemoryRepository()
+    await lifecycles_repo.save(real_lifecycle)
+
     dashboard_repo = DashboardProjectionMemoryRepository()
     plans_repo = OpportunityPlanMemoryRepository()
     dashboard_service = _make_service(
         rankings=rankings,
+        opportunities=fixture.opportunities,
+        lifecycles=lifecycles_repo,
         dashboard=dashboard_repo,
         plans=plans_repo,
     )
@@ -86,19 +97,24 @@ async def _dashboard_fixture():
     fixture.ranking = ranking
     fixture.opportunity = opportunity
     fixture.plans = plans_repo
+    fixture.lifecycles_repo = lifecycles_repo
 
-    return fixture, opportunity, lifecycle, ranking, dashboard_service, dashboard_repo
+    return fixture, opportunity, real_lifecycle, ranking, dashboard_service, dashboard_repo
 
 
 def _make_service(
     *,
     rankings,
+    opportunities,
+    lifecycles,
     dashboard,
     plans=None,
     code_version="git:dashboardtest100",
 ):
     return RuntimeDashboardProjectionService(
         rankings=rankings,
+        opportunities=opportunities,
+        lifecycles=lifecycles,
         dashboard=dashboard,
         plans=plans,
         code_version=code_version,
@@ -130,7 +146,7 @@ class RuntimeDashboardProjectionServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(page.items[0].rank, 1)
         self.assertEqual(page.items[0].stance, opportunity.stance)
         self.assertEqual(
-            page.items[0].lifecycle_state, LifecycleState.RANKED
+            page.items[0].lifecycle_state, LifecycleState.DETECTED
         )
         self.assertFalse(page.items[0].has_plan)
         self.assertEqual(page.coverage_status, "complete")
@@ -259,6 +275,8 @@ class RuntimeDashboardProjectionServiceTests(unittest.IsolatedAsyncioTestCase):
         await empty_rankings.save(empty_snapshot)
         service = _make_service(
             rankings=empty_rankings,
+            opportunities=fixture.opportunities,
+            lifecycles=fixture.lifecycles_repo,
             dashboard=empty_dashboard_repo,
         )
 
@@ -288,7 +306,7 @@ class RuntimeDashboardProjectionServiceTests(unittest.IsolatedAsyncioTestCase):
             await _dashboard_fixture()
         )
         empty_rankings = RankingMemoryRepository()
-        service = _make_service(rankings=empty_rankings, dashboard=dashboard_repo)
+        service = _make_service(rankings=empty_rankings, opportunities=fixture.opportunities, lifecycles=fixture.lifecycles_repo, dashboard=dashboard_repo)
 
         with self.assertRaises(ServiceUnavailableError):
             await service.project(ranking, (opportunity,), (lifecycle,))
@@ -331,6 +349,8 @@ class RuntimeDashboardProjectionServiceTests(unittest.IsolatedAsyncioTestCase):
         )
         service = _make_service(
             rankings=fixture.rankings,
+            opportunities=fixture.opportunities,
+            lifecycles=fixture.lifecycles_repo,
             dashboard=failing_dashboard,
         )
 
@@ -342,38 +362,35 @@ class RuntimeDashboardProjectionServiceTests(unittest.IsolatedAsyncioTestCase):
     async def test_ranked_member_without_opportunity_raises_unavailable(
         self,
     ) -> None:
-        fixture, opportunity, lifecycle, ranking, service, dashboard_repo = (
+        fixture, opportunity, lifecycle, ranking, _, dashboard_repo = (
             await _dashboard_fixture()
         )
-        # Pass a lifecycle that references the ranked opportunity_id, but pass
-        # an opportunity with a DIFFERENT id so the lookup fails.
-        wrong_opp = replace(
-            opportunity,
-            opportunity_id="opportunity.runtime_ema_rsi.candidate.other",
-            opportunity_version_id="opportunity.runtime_ema_rsi.candidate.other.v1",
-            assessment_id="assessment.runtime_ema_rsi.candidate.other",
-            decision_id="decision.runtime_ema_rsi.candidate.other",
-            candidate_id="candidate.other",
-            plan=None,
-            audit=replace(opportunity.audit, result_hash="0" * 64),
+        empty_opps = OpportunityMemoryRepository()
+        service = _make_service(
+            rankings=fixture.rankings,
+            opportunities=empty_opps,
+            lifecycles=fixture.lifecycles_repo,
+            dashboard=dashboard_repo,
         )
-        with self.assertRaises((ServiceUnavailableError, ServiceContractError)):
-            await service.project(ranking, (wrong_opp,), (lifecycle,))
+        with self.assertRaises(ServiceUnavailableError):
+            await service.project(ranking, (opportunity,), (lifecycle,))
         self.assertEqual(len(dashboard_repo._records), 0)
 
     async def test_ranked_member_without_lifecycle_raises_unavailable(
         self,
     ) -> None:
-        fixture, opportunity, lifecycle, ranking, service, dashboard_repo = (
+        fixture, opportunity, lifecycle, ranking, _, dashboard_repo = (
             await _dashboard_fixture()
         )
-        # Pass a lifecycle with the WRONG opportunity_id so the lookup fails.
-        wrong_lc = SimpleNamespace(
-            opportunity_id="opportunity.runtime_ema_rsi.candidate.other",
-            current_state=LifecycleState.RANKED,
+        empty_lc = LifecycleMemoryRepository()
+        service = _make_service(
+            rankings=fixture.rankings,
+            opportunities=fixture.opportunities,
+            lifecycles=empty_lc,
+            dashboard=dashboard_repo,
         )
-        with self.assertRaises((ServiceUnavailableError, ServiceContractError)):
-            await service.project(ranking, (opportunity,), (wrong_lc,))
+        with self.assertRaises(ServiceUnavailableError):
+            await service.project(ranking, (opportunity,), (lifecycle,))
         self.assertEqual(len(dashboard_repo._records), 0)
 
     # --- Pipeline handoff ---
@@ -393,7 +410,10 @@ class RuntimeDashboardProjectionServiceTests(unittest.IsolatedAsyncioTestCase):
         ) = await _ranking_fixture()
 
         dashboard_repo = DashboardProjectionMemoryRepository()
-        dashboard_service = _make_service(rankings=rankings, dashboard=dashboard_repo)
+        lifecycles_repo = LifecycleMemoryRepository()
+        real_lifecycle_for_pipeline = _make_lifecycle(opportunity)
+        await lifecycles_repo.save(real_lifecycle_for_pipeline)
+        dashboard_service = _make_service(rankings=rankings, opportunities=fixture.opportunities, lifecycles=lifecycles_repo, dashboard=dashboard_repo)
 
         fake_lifecycle = SimpleNamespace(
             current_event_id="lifecycle.event.stub.1",

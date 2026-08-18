@@ -153,11 +153,14 @@ def build_runtime_pipeline(
     notification_service = RuntimeNotificationService(
         rankings=rankings,
         opportunities=opportunities,
+        lifecycles=lifecycles,
         notifications=notifications,
         code_version=_CODE_VERSION,
     )
     dashboard_service = RuntimeDashboardProjectionService(
         rankings=rankings,
+        opportunities=opportunities,
+        lifecycles=lifecycles,
         dashboard=dashboard_repo,
         plans=plans,
         code_version=_CODE_VERSION,

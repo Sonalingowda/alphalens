@@ -38,7 +38,9 @@ from app.opportunity_intelligence.repositories import (
     EntityAsOfQuery,
     EntityId,
     EntityNotFoundError,
+    LifecycleRepository,
     OpportunityPlanRepository,
+    OpportunityRepository,
     RankingRepository,
 )
 from app.opportunity_intelligence.services import (
@@ -82,6 +84,8 @@ class RuntimeDashboardProjectionService:
         self,
         *,
         rankings: RankingRepository,
+        opportunities: OpportunityRepository,
+        lifecycles: LifecycleRepository,
         dashboard: DashboardProjectionRepository,
         plans: OpportunityPlanRepository | None = None,
         code_version: str,
@@ -91,6 +95,8 @@ class RuntimeDashboardProjectionService:
                 "Runtime dashboard code version must be non-empty."
             )
         self._rankings = rankings
+        self._opportunities = opportunities
+        self._lifecycles = lifecycles
         self._dashboard = dashboard
         self._plans = plans
         self._code_version = code_version
@@ -130,16 +136,7 @@ class RuntimeDashboardProjectionService:
                 "Dashboard: persisted RankingSnapshot conflicts with pipeline input."
             )
 
-        # --- Validate opportunities and lifecycles against the ranking ---
-        _validate_inputs(persisted_ranking, opportunities, lifecycles)
-
-        # --- Build an index of opportunity_id → Opportunity and Lifecycle ---
-        opp_index: dict[str, Opportunity] = {
-            o.opportunity_id: o for o in opportunities
-        }
-        lc_index: dict[str, OpportunityLifecycle] = {
-            lc.opportunity_id: lc for lc in lifecycles
-        }
+        as_of = persisted_ranking.audit.evidence_cutoff
 
         # --- Build DashboardItems in rank order (ascending) ---
         ranking_ref = _integrity_reference(
@@ -149,13 +146,31 @@ class RuntimeDashboardProjectionService:
         )
         items: list[DashboardItem] = []
         for membership in persisted_ranking.memberships:
-            opp = opp_index.get(membership.opportunity_id)
-            lc = lc_index.get(membership.opportunity_id)
-            if opp is None or lc is None:
-                raise ServiceUnavailableError(
-                    f"Dashboard: opportunity or lifecycle missing for "
-                    f"ranked member {membership.opportunity_id!r}."
+            # --- Fetch opportunity from repository ---
+            try:
+                opp = await self._opportunities.get_current(
+                    EntityAsOfQuery(
+                        EntityId(membership.opportunity_id), as_of,
+                    )
                 )
+            except EntityNotFoundError as error:
+                raise ServiceUnavailableError(
+                    f"Dashboard: opportunity {membership.opportunity_id!r} "
+                    "is not persisted."
+                ) from error
+
+            # --- Fetch lifecycle from repository ---
+            try:
+                lc = await self._lifecycles.get_current(
+                    EntityAsOfQuery(
+                        EntityId(membership.opportunity_id), as_of,
+                    )
+                )
+            except EntityNotFoundError as error:
+                raise ServiceUnavailableError(
+                    f"Dashboard: lifecycle {membership.opportunity_id!r} "
+                    "is not persisted."
+                ) from error
             resolved_opp = await _resolve_persisted_plan(
                 opp=opp,
                 plans=self._plans,
@@ -237,35 +252,8 @@ class RuntimeDashboardProjectionService:
 
 
 # ---------------------------------------------------------------------------
-# Validation helpers
+# Utility helpers
 # ---------------------------------------------------------------------------
-
-def _validate_inputs(
-    ranking: RankingSnapshot,
-    opportunities: tuple[Opportunity, ...],
-    lifecycles: tuple[OpportunityLifecycle, ...],
-) -> None:
-    """Verify that every ranked member has a matching opportunity and lifecycle."""
-    if len(opportunities) != len(lifecycles):
-        raise ServiceContractError(
-            "Dashboard: opportunities and lifecycles counts must match."
-        )
-
-    opp_ids = {o.opportunity_id for o in opportunities}
-    lc_ids = {lc.opportunity_id for lc in lifecycles}
-    ranked_ids = {m.opportunity_id for m in ranking.memberships}
-
-    # Every ranked member must have a corresponding opportunity and lifecycle.
-    missing_opps = ranked_ids - opp_ids
-    missing_lcs = ranked_ids - lc_ids
-    if missing_opps:
-        raise ServiceUnavailableError(
-            f"Dashboard: ranked members without opportunities: {missing_opps}."
-        )
-    if missing_lcs:
-        raise ServiceUnavailableError(
-            f"Dashboard: ranked members without lifecycles: {missing_lcs}."
-        )
 
 
 async def _resolve_persisted_plan(

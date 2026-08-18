@@ -24,6 +24,7 @@ from app.opportunity_intelligence.orchestration import (
     PipelineExecutionError,
 )
 from app.opportunity_intelligence.persistence import (
+    LifecycleMemoryRepository,
     NotificationMemoryRepository,
     RankingMemoryRepository,
 )
@@ -67,14 +68,18 @@ async def _notification_fixture():
     lifecycle = _make_lifecycle(opportunity)
 
     notif_repo = NotificationMemoryRepository()
+    lifecycles_repo = LifecycleMemoryRepository()
+    await lifecycles_repo.save(lifecycle)
     service = _make_service(
         rankings=rankings,
         opportunities=fixture.opportunities,
+        lifecycles=lifecycles_repo,
         notifications=notif_repo,
     )
 
     fixture.assessment_service = assessment_service
     fixture.opportunities_repo = fixture.opportunities
+    fixture.lifecycles_repo = lifecycles_repo
     fixture.rankings = rankings
     fixture.ranking = ranking
     fixture.ranking_service = ranking_service
@@ -83,10 +88,11 @@ async def _notification_fixture():
     return fixture, opportunity, lifecycle, ranking, service, notif_repo
 
 
-def _make_service(*, rankings, opportunities, notifications, code_version="git:notiftest100"):
+def _make_service(*, rankings, opportunities, lifecycles, notifications, code_version="git:notiftest100"):
     return RuntimeNotificationService(
         rankings=rankings,
         opportunities=opportunities,
+        lifecycles=lifecycles,
         notifications=notifications,
         code_version=code_version,
     )
@@ -173,6 +179,7 @@ class RuntimeNotificationServiceTests(unittest.IsolatedAsyncioTestCase):
         service2 = _make_service(
             rankings=fixture.rankings,
             opportunities=fixture.opportunities_repo,
+            lifecycles=fixture.lifecycles_repo,
             notifications=NotificationMemoryRepository(),
         )
         second = await service2.create_intents(ranking, (opportunity,), (lifecycle,))
@@ -264,6 +271,7 @@ class RuntimeNotificationServiceTests(unittest.IsolatedAsyncioTestCase):
         service = _make_service(
             rankings=empty_rankings,
             opportunities=fixture.opportunities_repo,
+            lifecycles=fixture.lifecycles_repo,
             notifications=notif_repo,
         )
 
@@ -282,6 +290,7 @@ class RuntimeNotificationServiceTests(unittest.IsolatedAsyncioTestCase):
         service = _make_service(
             rankings=empty_rankings,
             opportunities=fixture.opportunities_repo,
+            lifecycles=fixture.lifecycles_repo,
             notifications=notif_repo,
         )
         with self.assertRaises(ServiceUnavailableError):
@@ -299,6 +308,7 @@ class RuntimeNotificationServiceTests(unittest.IsolatedAsyncioTestCase):
         service = _make_service(
             rankings=fixture.rankings,
             opportunities=empty_opps,
+            lifecycles=fixture.lifecycles_repo,
             notifications=notif_repo,
         )
         with self.assertRaises(ServiceUnavailableError):
@@ -325,34 +335,38 @@ class RuntimeNotificationServiceTests(unittest.IsolatedAsyncioTestCase):
 
     # --- Digest mismatch on opportunity ---
 
-    async def test_opportunity_digest_mismatch_raises_contract_error(self) -> None:
+    async def test_opportunity_digest_mismatch_does_not_block_notification(self) -> None:
+        """A tampered supplied opportunity is safely ignored; repo is authoritative."""
         fixture, opportunity, lifecycle, ranking, service, notif_repo = (
             await _notification_fixture()
         )
         from dataclasses import replace
-        # Tamper the supplied opportunity so it diverges from the persisted one.
+        # Tamper the supplied opportunity — the service now fetches from repos,
+        # so the tampered supplied data is ignored and the notification succeeds.
         tampered_opp = replace(opportunity, limitations=("tampered.limitation",))
-        with self.assertRaises(ServiceContractError):
-            await service.create_intents(ranking, (tampered_opp,), (lifecycle,))
-        self.assertEqual(len(notif_repo._records), 0)
+        notifications = await service.create_intents(
+            ranking, (tampered_opp,), (lifecycle,)
+        )
+        self.assertEqual(len(notifications), 1)
 
     # --- Missing lifecycle for ranked member ---
 
     async def test_missing_lifecycle_for_ranked_member_raises_unavailable(
         self,
     ) -> None:
-        fixture, opportunity, lifecycle, ranking, service, notif_repo = (
+        fixture, opportunity, lifecycle, ranking, _, notif_repo = (
             await _notification_fixture()
         )
-        # Provide a lifecycle with the wrong opportunity_id.
-        wrong_lc = SimpleNamespace(
-            opportunity_id="opportunity.runtime_ema_rsi.candidate.other",
-            canonical_sha256=lambda: "0" * 64,
-            audit=lifecycle.audit,
+        empty_lc_repo = LifecycleMemoryRepository()
+        service = _make_service(
+            rankings=fixture.rankings,
+            opportunities=fixture.opportunities_repo,
+            lifecycles=empty_lc_repo,
+            notifications=notif_repo,
         )
         with self.assertRaises(ServiceUnavailableError):
             await service.create_intents(
-                ranking, (opportunity,), (wrong_lc,)  # type: ignore[arg-type]
+                ranking, (opportunity,), (lifecycle,)
             )
         self.assertEqual(len(notif_repo._records), 0)
 
@@ -370,6 +384,7 @@ class RuntimeNotificationServiceTests(unittest.IsolatedAsyncioTestCase):
         service = _make_service(
             rankings=fixture.rankings,
             opportunities=fixture.opportunities_repo,
+            lifecycles=fixture.lifecycles_repo,
             notifications=failing_repo,
         )
         with self.assertRaises(StorageUnavailableError):
@@ -380,12 +395,19 @@ class RuntimeNotificationServiceTests(unittest.IsolatedAsyncioTestCase):
     async def test_opportunity_not_supplied_for_ranked_member_raises_unavailable(
         self,
     ) -> None:
-        fixture, opportunity, lifecycle, ranking, service, notif_repo = (
+        fixture, opportunity, lifecycle, ranking, _, notif_repo = (
             await _notification_fixture()
         )
-        # Pass empty tuples — ranked member has no matching opportunity
+        from app.opportunity_intelligence.persistence import OpportunityMemoryRepository
+        empty_opps = OpportunityMemoryRepository()
+        service = _make_service(
+            rankings=fixture.rankings,
+            opportunities=empty_opps,
+            lifecycles=fixture.lifecycles_repo,
+            notifications=notif_repo,
+        )
         with self.assertRaises(ServiceUnavailableError):
-            await service.create_intents(ranking, (), (lifecycle,))
+            await service.create_intents(ranking, (opportunity,), (lifecycle,))
         self.assertEqual(len(notif_repo._records), 0)
 
     # --- Pipeline integration ---
@@ -406,9 +428,12 @@ class RuntimeNotificationServiceTests(unittest.IsolatedAsyncioTestCase):
 
         lifecycle = _make_lifecycle(opportunity)  # noqa: F841 — kept for readability
         notif_repo = NotificationMemoryRepository()
+        lifecycles_repo = LifecycleMemoryRepository()
+        await lifecycles_repo.save(lifecycle)
         notif_service = _make_service(
             rankings=rankings,
             opportunities=fixture.opportunities,
+            lifecycles=lifecycles_repo,
             notifications=notif_repo,
         )
 
