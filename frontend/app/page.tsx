@@ -14,6 +14,11 @@ import type {
   OpportunityPlan,
 } from "@/lib/types";
 
+type OpportunityEnrichment = {
+  plan: OpportunityPlan | null;
+  confidence: string | null;
+};
+
 type DashboardSearchParams = Promise<{
   instrument?: string;
   timeframe?: string;
@@ -43,9 +48,12 @@ export default async function DashboardPage({
     getLiveMarket(filters.instrument, filters.timeframe),
     getOpportunities(filters),
   ]);
-  const planByOpportunityId = await loadOpportunityPlans(
+  const enrichments = await loadOpportunityEnrichments(
     opportunities.ok ? opportunities.data.items : [],
   );
+  const currentPrice = market.ok && market.data.candles.length
+    ? market.data.candles.at(-1)?.close ?? null
+    : null;
 
   return (
     <>
@@ -117,13 +125,18 @@ export default async function DashboardPage({
             />
           ) : (
             <div className="grid gap-4 md:grid-cols-2 2xl:grid-cols-3">
-              {opportunities.data.items.map((item) => (
-                <OpportunityCard
-                  key={item.opportunity_id}
-                  item={item}
-                  plan={planByOpportunityId.get(item.opportunity_id) ?? null}
-                />
-              ))}
+              {opportunities.data.items.map((item) => {
+                const enrich = enrichments.get(item.opportunity_id);
+                return (
+                  <OpportunityCard
+                    key={item.opportunity_id}
+                    item={item}
+                    plan={enrich?.plan ?? null}
+                    currentPrice={currentPrice}
+                    confidence={enrich?.confidence ?? null}
+                  />
+                );
+              })}
             </div>
           )}
         </section>
@@ -132,13 +145,13 @@ export default async function DashboardPage({
   );
 }
 
-async function loadOpportunityPlans(
+async function loadOpportunityEnrichments(
   items: OpportunityDashboardItem[],
-): Promise<Map<string, OpportunityPlan | null>> {
-  const planEntries = await Promise.all(
+): Promise<Map<string, OpportunityEnrichment>> {
+  const entries = await Promise.all(
     items.map(async (item) => {
       if (!item.has_plan) {
-        return [item.opportunity_id, null] as const;
+        return [item.opportunity_id, { plan: null, confidence: null }] as const;
       }
 
       const detailResult = await getOpportunityDetail(
@@ -146,12 +159,20 @@ async function loadOpportunityPlans(
         item.available_at,
       );
 
-      return [
-        item.opportunity_id,
-        detailResult.ok ? detailResult.data.opportunity.plan ?? null : null,
-      ] as const;
+      if (!detailResult.ok) {
+        return [item.opportunity_id, { plan: null, confidence: null }] as const;
+      }
+
+      const detail = detailResult.data;
+      const plan = detail.opportunity.plan ?? null;
+      const confidenceVal = detail.opportunity.confidence?.value ?? null;
+      const confidence = confidenceVal
+        ? `${confidenceVal}`
+        : null;
+
+      return [item.opportunity_id, { plan, confidence }] as const;
     }),
   );
 
-  return new Map(planEntries);
+  return new Map(entries);
 }

@@ -1,21 +1,92 @@
-import { ArrowDownRight, ArrowUpRight, Clock3 } from "lucide-react";
+"use client";
+
+import { useEffect, useState } from "react";
+import { ArrowDownRight, ArrowUpRight, Clock3, TriangleAlert } from "lucide-react";
 import Link from "next/link";
 
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
-import { formatTimestamp, titleCase } from "@/lib/format";
+import { formatPrice, signalAgeMinutes, titleCase } from "@/lib/format";
 import type { OpportunityDashboardItem, OpportunityPlan } from "@/lib/types";
+
+function deriveStatus(
+  stance: "BUY" | "SELL",
+  plan: OpportunityPlan | null | undefined,
+  currentPrice: number | null,
+): { label: string; tone: "green" | "amber" | "red" | "neutral" } {
+  if (!plan || currentPrice === null) {
+    return { label: titleCase("UNAVAILABLE"), tone: "neutral" };
+  }
+  const entryLow = Number(plan.entry_zone.lower);
+  const entryHigh = Number(plan.entry_zone.upper);
+  const stop = Number(plan.invalidation_price);
+  if (!Number.isFinite(entryLow) || !Number.isFinite(entryHigh)) {
+    return { label: "UNAVAILABLE", tone: "neutral" };
+  }
+  if (stance === "SELL") {
+    if (Number.isFinite(stop) && currentPrice >= stop) {
+      return { label: "INVALIDATED", tone: "red" };
+    }
+    if (currentPrice >= entryLow && currentPrice <= entryHigh) {
+      return { label: "ENTRY AVAILABLE", tone: "green" };
+    }
+    if (currentPrice < entryLow) {
+      return { label: "ENTRY MISSED / WAIT", tone: "amber" };
+    }
+    return { label: "WAITING FOR ENTRY", tone: "neutral" };
+  }
+  if (stance === "BUY") {
+    if (Number.isFinite(stop) && currentPrice <= stop) {
+      return { label: "INVALIDATED", tone: "red" };
+    }
+    if (currentPrice >= entryLow && currentPrice <= entryHigh) {
+      return { label: "ENTRY AVAILABLE", tone: "green" };
+    }
+    if (currentPrice > entryHigh) {
+      return { label: "ENTRY MISSED / WAIT", tone: "amber" };
+    }
+    return { label: "WAITING FOR ENTRY", tone: "neutral" };
+  }
+  return { label: titleCase("UNAVAILABLE"), tone: "neutral" };
+}
+
+const STATUS_STYLES = {
+  green: "border-emerald-400/40 bg-emerald-400/10 text-emerald-400",
+  amber: "border-amber-400/40 bg-amber-400/10 text-amber-300",
+  red: "border-rose-400/40 bg-rose-400/10 text-rose-400",
+  neutral: "border-border text-muted-foreground",
+} as const;
 
 export function OpportunityCard({
   item,
   plan,
+  currentPrice,
+  confidence,
 }: {
   item: OpportunityDashboardItem;
   plan?: OpportunityPlan | null;
+  currentPrice?: string | null;
+  confidence?: string | null;
 }) {
   const bullish = item.stance === "BUY";
   const DirectionIcon = bullish ? ArrowUpRight : ArrowDownRight;
-  const planTargets = plan?.targets ?? [];
+  const parsedCurrent = currentPrice ? Number(currentPrice) : null;
+  const numericCurrent = parsedCurrent !== null && Number.isFinite(parsedCurrent) ? parsedCurrent : null;
+
+  const [age, setAge] = useState(() => signalAgeMinutes(item.available_at));
+  useEffect(() => {
+    const id = setInterval(() => setAge(signalAgeMinutes(item.available_at)), 30_000);
+    return () => clearInterval(id);
+  }, [item.available_at]);
+
+  const status = deriveStatus(item.stance as "BUY" | "SELL", plan ?? null, numericCurrent);
+  const entryLow = plan?.entry_zone.lower ?? null;
+  const entryHigh = plan?.entry_zone.upper ?? null;
+  const stop = plan?.invalidation_price ?? null;
+  const target1 = plan?.targets?.[0]?.price ?? null;
+  const rr = plan?.targets?.[0]?.risk_reward ?? null;
+  const isEntryMissed = status.tone === "amber" && status.label.includes("MISSED");
+  const isInvalidated = status.label === "INVALIDATED";
 
   return (
     <Link
@@ -24,177 +95,89 @@ export function OpportunityCard({
     >
       <Card className="overflow-hidden border-border/80 bg-card/95 transition group-hover:-translate-y-0.5 group-hover:border-primary/40 group-hover:shadow-lg group-hover:shadow-primary/5 group-focus-visible:ring-2 group-focus-visible:ring-primary">
         <CardContent className="p-0">
-          <div className="flex items-start justify-between gap-4 border-b border-border/70 p-5">
-            <div>
-              <div className="mb-2 flex items-center gap-2">
-                <span className="font-mono text-base font-semibold tracking-tight">
-                  {item.scope.instrument}
-                </span>
-                <Badge variant="outline" className="font-mono text-[10px]">
-                  {item.scope.timeframe}
-                </Badge>
-              </div>
-              <p className="text-xs text-muted-foreground">
-                Rank {item.rank} · {titleCase(item.lifecycle_state)}
-              </p>
-            </div>
-            <span
-              className={`flex items-center gap-1 rounded-md px-2.5 py-1.5 text-xs font-semibold ${
-                bullish
-                  ? "bg-emerald-400/10 text-emerald-400"
-                  : "bg-rose-400/10 text-rose-400"
-              }`}
-            >
-              <DirectionIcon className="size-3.5" aria-hidden="true" />
-              {item.stance}
-            </span>
-          </div>
-          <div className="space-y-4 p-5">
-            <div className="flex flex-wrap items-center gap-2">
-              <Badge
-                variant={item.has_plan ? "secondary" : "outline"}
-                className="font-mono text-[10px]"
-              >
-                {item.has_plan ? "Plan available" : "Plan unavailable"}
-              </Badge>
-              {item.detail_reference ? (
-                <Badge variant="outline" className="font-mono text-[10px]">
-                  {item.detail_reference}
-                </Badge>
-              ) : null}
-            </div>
-            <div className="flex flex-wrap gap-1.5">
-              {item.reason_codes.length ? (
-                item.reason_codes.slice(0, 3).map((code) => (
-                  <Badge key={code} variant="secondary" className="font-mono text-[10px]">
-                    {code}
-                  </Badge>
-                ))
-              ) : (
-                <span className="text-xs text-muted-foreground">
-                  No evidence summary published
-                </span>
-              )}
-            </div>
-            <div className="rounded-xl border border-border/70 bg-muted/20 p-4">
-              <p className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
-                Trade plan
-              </p>
-              {item.has_plan && plan ? (
-                <div className="mt-3 space-y-3">
-                  <div className="flex flex-wrap gap-2">
-                    <Badge variant="secondary" className="font-mono text-[10px]">
-                      {plan.direction}
-                    </Badge>
-                  </div>
-                  <div className="grid gap-2 sm:grid-cols-2">
-                    <PlanFact
-                      label="Entry"
-                      value={formatPlanRange(plan.entry_zone.lower, plan.entry_zone.upper)}
-                    />
-                    <PlanFact
-                      label="Stop / Invalidation"
-                      value={displayPlanValue(plan.invalidation_price)}
-                    />
-                    <PlanFact
-                      label="Target 1"
-                      value={displayPlanValue(plan.targets[0]?.price)}
-                    />
-                    <PlanFact
-                      label="Target 2"
-                      value={displayPlanValue(plan.targets[1]?.price)}
-                    />
-                    <PlanFact
-                      label="Risk / Reward"
-                      value={displayPlanValue(plan.targets[0]?.risk_reward)}
-                    />
-                  </div>
-                  {planTargets.length ? (
-                    <div className="space-y-2">
-                      <p className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
-                        Targets
-                      </p>
-                      <div className="space-y-2">
-                        {planTargets.map((target, index) => (
-                          <div
-                            key={target.target_id}
-                            className="rounded-lg border border-border/70 bg-background/70 p-3"
-                          >
-                            <div className="flex flex-wrap items-center justify-between gap-2">
-                              <p className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
-                                Target {index + 1}
-                              </p>
-                              <p className="font-mono text-xs text-muted-foreground">
-                                {target.target_id}
-                              </p>
-                            </div>
-                            <div className="mt-2 grid gap-2 sm:grid-cols-2">
-                              <PlanFact
-                                label="Price"
-                                value={displayPlanValue(target.price)}
-                              />
-                              <PlanFact
-                                label="Potential reward"
-                                value={displayPlanValue(target.potential_reward)}
-                              />
-                              <PlanFact
-                                label="Risk / Reward"
-                                value={displayPlanValue(target.risk_reward)}
-                              />
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  ) : null}
-                </div>
-              ) : (
-                <p className="mt-2 text-sm text-muted-foreground">Plan unavailable</p>
-              )}
-            </div>
-            <div className="flex items-center justify-between text-xs text-muted-foreground">
-              <span className="flex items-center gap-1.5">
-                <Clock3 className="size-3.5" aria-hidden="true" />
-                {formatTimestamp(item.available_at)}
+          <div className="flex items-center justify-between gap-3 border-b border-border/70 px-4 py-3">
+            <div className="flex items-center gap-2">
+              <span className="font-mono text-sm font-semibold tracking-tight">
+                {item.scope.instrument}
               </span>
-              <span>{titleCase(item.freshness_state)}</span>
+              <Badge variant="outline" className="font-mono text-[9px]">
+                {item.scope.timeframe}
+              </Badge>
             </div>
-            {item.limitations.length ? (
-              <p className="border-l-2 border-amber-400/50 pl-3 text-xs leading-5 text-amber-200/80">
-                {item.limitations[0]}
-              </p>
-            ) : null}
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] text-muted-foreground">
+                Rank {item.rank}
+              </span>
+              <span
+                className={`flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-semibold ${
+                  bullish
+                    ? "bg-emerald-400/10 text-emerald-400"
+                    : "bg-rose-400/10 text-rose-400"
+                }`}
+              >
+                <DirectionIcon className="size-3" aria-hidden="true" />
+                {item.stance}
+              </span>
+            </div>
           </div>
+
+          <div className="grid grid-cols-3 gap-px bg-border/50">
+            <Cell label="ENTRY" value={entryLow && entryHigh ? `${formatPrice(entryLow)} – ${formatPrice(entryHigh)}` : "Unavailable"} />
+            <Cell label="CURRENT" value={numericCurrent !== null ? formatPrice(numericCurrent) : "Unavailable"} />
+            <Cell
+              label="STATUS"
+              value={status.label}
+              className={STATUS_STYLES[status.tone]}
+            />
+            <Cell label="STOP / INVALIDATION" value={stop ? formatPrice(stop) : "Unavailable"} />
+            <Cell label="TARGET 1" value={target1 ? formatPrice(target1) : "Unavailable"} />
+            <Cell label="RISK / REWARD" value={rr ?? "Unavailable"} />
+          </div>
+
+          <div className="flex items-center justify-between border-t border-border/70 px-4 py-2.5">
+            <div className="flex items-center gap-3 text-[10px] text-muted-foreground">
+              <span className="flex items-center gap-1">
+                <Clock3 className="size-3" aria-hidden="true" />
+                {age}
+              </span>
+              <span>
+                Confidence: {confidence ?? "Unavailable"}
+              </span>
+              <span>Quality: Unavailable</span>
+            </div>
+          </div>
+
+          {(isEntryMissed || isInvalidated) && (
+            <div className="flex items-center gap-1.5 border-t border-amber-400/20 bg-amber-400/5 px-4 py-2 text-[11px] text-amber-300/90">
+              <TriangleAlert className="size-3 shrink-0" aria-hidden="true" />
+              {isInvalidated
+                ? "Signal invalidated at current price."
+                : "Do not enter at current price."}
+            </div>
+          )}
         </CardContent>
       </Card>
     </Link>
   );
 }
 
-function PlanFact({
+function Cell({
   label,
   value,
+  className,
 }: {
   label: string;
   value: string;
+  className?: string;
 }) {
   return (
-    <div className="rounded-lg border border-border/70 bg-background/60 p-3">
-      <p className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
+    <div className={`bg-card/95 px-3 py-2.5 ${className ?? ""}`}>
+      <p className="text-[9px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
         {label}
       </p>
-      <p className="mt-1 text-sm font-medium">{value}</p>
+      <p className="mt-0.5 truncate font-mono text-xs font-medium tabular">
+        {value}
+      </p>
     </div>
   );
-}
-
-function displayPlanValue(value: string | null | undefined): string {
-  if (value === null || value === undefined || value.trim() === "") {
-    return "Unavailable";
-  }
-  return value;
-}
-
-function formatPlanRange(lower: string | null | undefined, upper: string | null | undefined): string {
-  return `${displayPlanValue(lower)} - ${displayPlanValue(upper)}`;
 }

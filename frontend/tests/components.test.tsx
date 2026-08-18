@@ -77,8 +77,9 @@ describe("MVP market intelligence components", () => {
 
     expect(screen.getByText("BTCUSDT")).toBeInTheDocument();
     expect(screen.getAllByText("BUY").length).toBeGreaterThan(0);
-    expect(screen.getByText("ema.alignment")).toBeInTheDocument();
-    expect(screen.getByText("Confidence policy is not approved.")).toBeInTheDocument();
+    expect(screen.getByText("ENTRY")).toBeInTheDocument();
+    expect(screen.getByText("STATUS")).toBeInTheDocument();
+    expect(screen.getByText("TARGET 1")).toBeInTheDocument();
   });
 
   it("renders market values exactly from the API snapshot", () => {

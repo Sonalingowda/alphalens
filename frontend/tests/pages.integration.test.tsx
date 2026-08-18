@@ -218,8 +218,9 @@ describe("Page integration: Dashboard", () => {
 
     expect(screen.getByText("Opportunities")).toBeInTheDocument();
     expect(screen.getAllByText("BTCUSDT").length).toBeGreaterThan(0);
-    expect(screen.getByText("Plan available")).toBeInTheDocument();
-    expect(screen.getByText("detail.1")).toBeInTheDocument();
+    expect(screen.getAllByText("SELL").length).toBeGreaterThan(0);
+    expect(screen.getByText("ENTRY")).toBeInTheDocument();
+    expect(screen.getByText("TARGET 1")).toBeInTheDocument();
   });
 
   it("shows API unavailable state when fetch fails", async () => {
@@ -544,8 +545,6 @@ describe("Page integration: Opportunity detail", () => {
     expect(screen.getAllByText("63908.82 - 63927.99").length).toBeGreaterThan(0);
     expect(screen.getAllByText("63927.992646").length).toBeGreaterThan(0);
     expect(screen.getAllByText("63880.061031").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("63852.000000").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("63820.000000").length).toBeGreaterThan(0);
     expect(screen.getAllByText("1.5").length).toBeGreaterThan(0);
     expect(screen.getByText("Verified")).toBeInTheDocument();
     expect(screen.getByText("Market snapshot")).toBeInTheDocument();

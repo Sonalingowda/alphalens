@@ -91,3 +91,16 @@ export function formatBytes(value: number): string {
   }
   return `${size.toFixed(unit === 0 ? 0 : 1)} ${units[unit]}`;
 }
+
+export function signalAgeMinutes(availableAt: string | null | undefined): string {
+  if (!availableAt) return "Unavailable";
+  const then = new Date(availableAt).getTime();
+  if (!Number.isFinite(then)) return "Unavailable";
+  const now = Date.now();
+  const diffMs = now - then;
+  if (diffMs < 0) return "0 min";
+  const minutes = Math.floor(diffMs / 60_000);
+  if (minutes < 1) return "<1 min";
+  if (minutes === 1) return "1 min";
+  return `${minutes} min`;
+}
