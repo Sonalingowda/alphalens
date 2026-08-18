@@ -162,7 +162,7 @@ class RuntimeFeatureEngineTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(len(features._records), 0)
 
-    async def test_gap_in_market_prefix_fails_closed(self) -> None:
+    async def test_gap_in_market_prefix_uses_contiguous_suffix(self) -> None:
         markets = MarketSnapshotMemoryRepository()
         features = FeatureSnapshotMemoryRepository()
         first = _market_snapshot(0)
@@ -174,7 +174,7 @@ class RuntimeFeatureEngineTests(unittest.IsolatedAsyncioTestCase):
             code_version=CODE_VERSION,
         )
 
-        with self.assertRaisesRegex(ValueError, "consecutive"):
+        with self.assertRaises(FeatureWarmupIncompleteError):
             await engine.resolve(third)
 
         self.assertEqual(len(features._records), 0)

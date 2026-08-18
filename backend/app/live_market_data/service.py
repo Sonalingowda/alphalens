@@ -2,7 +2,13 @@
 
 import asyncio
 from datetime import datetime, timezone
+from decimal import Decimal
+from hashlib import sha256
+from json import dumps
 import logging
+from typing import Sequence
+
+import httpx
 
 from app.live_market_data.binance import BinanceKlineParser, BinanceWebSocketClient
 from app.live_market_data.metrics import LiveIngestionMetrics
@@ -19,8 +25,10 @@ from app.live_market_data.processing import (
     TenMinuteCandleAggregator,
 )
 from app.live_market_data.snapshots import build_market_snapshot
+from app.market_data.models import CandleTimeframe
 from app.opportunity_intelligence.domain import MarketScope, MarketSnapshot
 from app.opportunity_intelligence.repositories import (
+    DuplicateEntityError,
     EntityId,
     EntityNotFoundError,
     MarketSnapshotRepository,
@@ -58,6 +66,7 @@ class LiveMarketIngestionService:
         self._gaps = CandleGapDetector()
         self._ten_minute = TenMinuteCandleAggregator()
         self._initialized = False
+        self._warmup_history_fetched = False
 
     @property
     def metrics(self) -> LiveIngestionMetrics:
@@ -66,6 +75,59 @@ class LiveMarketIngestionService:
     @property
     def client(self) -> BinanceWebSocketClient:
         return self._client
+
+    async def warmup_history(
+        self,
+        *,
+        symbol: str = SUPPORTED_SYMBOL,
+        timeframe: CandleTimeframe = CandleTimeframe.MINUTE_5,
+        limit: int = 1000,
+    ) -> int:
+        """Fetch historical completed candles from Binance REST and persist them.
+
+        Populates the market snapshot repository with sufficient historical
+        completed candles for the feature engine warmup prefix.  Idempotent:
+        existing candles are skipped.  Returns the number of newly persisted
+        snapshots.
+        """
+        if self._warmup_history_fetched:
+            return 0
+        self._warmup_history_fetched = True
+        now = datetime.now(timezone.utc)
+        floor_minutes = (now.minute // 5) * 5
+        end = now.replace(minute=floor_minutes, second=0, microsecond=0)
+        end_ms = int(end.timestamp() * 1000)
+        params = {
+            "symbol": symbol,
+            "interval": timeframe.value,
+            "limit": min(limit, 1000),
+            "endTime": end_ms,
+        }
+        url = "https://api.binance.com/api/v3/klines"
+        persisted = 0
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, params=params, timeout=30)
+            response.raise_for_status()
+            klines = response.json()
+        for kline in klines:
+            candle = _completed_candle_from_rest_kline(kline)
+            snapshot = build_market_snapshot(
+                candle, code_version=self._code_version
+            )
+            try:
+                await self._repository.save(snapshot)
+            except DuplicateEntityError:
+                pass
+            else:
+                persisted += 1
+        logger.info(
+            "warmup_history_complete symbol=%s timeframe=%s fetched=%s persisted=%s",
+            symbol,
+            timeframe.value,
+            len(klines),
+            persisted,
+        )
+        return persisted
 
     async def run(self, stop_event: asyncio.Event) -> None:
         await self.initialize()
@@ -226,4 +288,31 @@ def _same_market_content(first: MarketSnapshot, second: MarketSnapshot) -> bool:
         right.low,
         right.close,
         right.volume,
+    )
+
+
+def _completed_candle_from_rest_kline(kline: Sequence[object]) -> CompletedCandle:
+    """Convert a Binance REST API kline array to a CompletedCandle."""
+    open_ms = int(kline[0])
+    open_time = datetime.fromtimestamp(open_ms / 1000, tz=timezone.utc)
+    close_ms = int(kline[6])
+    close_time = datetime.fromtimestamp(close_ms / 1000, tz=timezone.utc)
+    event_time = datetime.fromtimestamp((close_ms + 1000) / 1000, tz=timezone.utc)
+    payload = dumps(kline, separators=(",", ":"), sort_keys=True)
+    source_hash = sha256(payload.encode("utf-8")).hexdigest()
+    return CompletedCandle(
+        provider="binance_spot",
+        symbol=SUPPORTED_SYMBOL,
+        timeframe=CandleTimeframe.MINUTE_5,
+        event_time=event_time,
+        open_time=open_time,
+        close_time=close_time,
+        open=Decimal(kline[1]),
+        high=Decimal(kline[2]),
+        low=Decimal(kline[3]),
+        close=Decimal(kline[4]),
+        volume=Decimal(kline[5]),
+        number_of_trades=int(kline[8]),
+        source_payload_hash=source_hash,
+        source_candle_hashes=(),
     )

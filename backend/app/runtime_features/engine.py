@@ -172,6 +172,9 @@ class RuntimeFeatureEngine:
             raise ServiceContractError(
                 "Market history contains multiple snapshots for one candle."
             )
+        prefix = _contiguous_suffix(
+            prefix, CandleTimeframe(current.scope.timeframe)
+        )
         return prefix
 
 
@@ -200,6 +203,29 @@ def _validate_market_snapshot(snapshot: MarketSnapshot) -> None:
         raise ServiceContractError(
             "Runtime features cannot execute before the candle closes."
         )
+
+
+def _contiguous_suffix(
+    prefix: tuple[MarketSnapshot, ...],
+    timeframe: CandleTimeframe,
+) -> tuple[MarketSnapshot, ...]:
+    """Return the longest contiguous suffix ending at the last item.
+
+    The feature pipeline requires consecutive observations with no gaps.
+    Database contamination or ingestion gaps can introduce non-consecutive
+    records.  This function walks backward from the current candle and
+    returns the longest suffix where each consecutive pair of candle
+    timestamps differs by exactly one timeframe step.
+    """
+    if len(prefix) <= 1:
+        return prefix
+    step = timeframe_duration(timeframe)
+    end = len(prefix)
+    for i in range(len(prefix) - 1, 0, -1):
+        if prefix[i].candles[0].timestamp - prefix[i - 1].candles[0].timestamp != step:
+            break
+        end = i
+    return prefix[end - 1:]
 
 
 def _build_source(

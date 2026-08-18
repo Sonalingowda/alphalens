@@ -249,6 +249,75 @@ class LiveIngestionServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(metrics.gaps_detected, 1)
         self.assertEqual(metrics.missing_intervals, 1)
 
+    async def test_warmup_history_persists_historical_klines(self) -> None:
+        repository = MarketSnapshotMemoryRepository()
+        service = LiveMarketIngestionService(
+            repository=repository,
+            code_version="git:abcdef123456",
+        )
+        klines = _fake_binance_klines(200)
+
+        with patch("app.live_market_data.service.httpx") as mock_httpx:
+            mock_response = _make_mock_response(klines)
+            mock_httpx.AsyncClient.return_value.__aenter__.return_value.get.return_value = mock_response
+            count = await service.warmup_history(limit=200)
+
+        self.assertEqual(count, 200)
+        page = await repository.get_by_scope(_scope_query("5m", limit=200))
+        self.assertEqual(len(page.items), 200)
+
+    async def test_warmup_history_is_idempotent(self) -> None:
+        repository = MarketSnapshotMemoryRepository()
+        service = LiveMarketIngestionService(
+            repository=repository,
+            code_version="git:abcdef123456",
+        )
+        klines = _fake_binance_klines(100)
+
+        with patch("app.live_market_data.service.httpx") as mock_httpx:
+            mock_response = _make_mock_response(klines)
+            mock_httpx.AsyncClient.return_value.__aenter__.return_value.get.return_value = mock_response
+            first_count = await service.warmup_history(limit=100)
+            second_count = await service.warmup_history(limit=100)
+
+        self.assertEqual(first_count, 100)
+        self.assertEqual(second_count, 0)
+        page = await repository.get_by_scope(_scope_query("5m", limit=200))
+        self.assertEqual(len(page.items), 100)
+
+    async def test_warmup_history_skips_existing_duplicates(self) -> None:
+        repository = MarketSnapshotMemoryRepository()
+        service = LiveMarketIngestionService(
+            repository=repository,
+            code_version="git:abcdef123456",
+        )
+        klines = _fake_binance_klines(10)
+
+        with patch("app.live_market_data.service.httpx") as mock_httpx:
+            mock_response = _make_mock_response(klines)
+            mock_httpx.AsyncClient.return_value.__aenter__.return_value.get.return_value = mock_response
+            await service.warmup_history(limit=10)
+
+        # Count before second warmup
+        page_before = await repository.get_by_scope(_scope_query("5m", limit=20))
+        count_before = len(page_before.items)
+
+        # Run again with a new service (resetting the idempotency flag)
+        service2 = LiveMarketIngestionService(
+            repository=repository,
+            code_version="git:abcdef123456",
+        )
+        with patch("app.live_market_data.service.httpx") as mock_httpx:
+            mock_response = _make_mock_response(klines)
+            mock_httpx.AsyncClient.return_value.__aenter__.return_value.get.return_value = mock_response
+            count = await service2.warmup_history(limit=10)
+
+        # Repository should not have grown
+        page_after = await repository.get_by_scope(_scope_query("5m", limit=20))
+        self.assertEqual(len(page_after.items), count_before)
+        # All 10 klines from the first warmup should be present
+        self.assertEqual(len(page_after.items), 10)
+
     async def test_production_lifespan_starts_and_stops_live_ingestion(self) -> None:
         from app import prediction_api
 
@@ -399,15 +468,32 @@ class _FakeConnector:
         return _FakeContext(self._sessions.pop(0))
 
 
+class _FakeHttpResponse:
+    """Mock for httpx.Response with synchronous json() and raise_for_status()."""
+
+    def __init__(self, json_data: object) -> None:
+        self._json_data = json_data
+
+    def raise_for_status(self) -> None:
+        pass
+
+    def json(self) -> object:
+        return self._json_data
+
+
+def _make_mock_response(json_data: object) -> _FakeHttpResponse:
+    return _FakeHttpResponse(json_data)
+
+
 async def _unused_handler(message: str | bytes) -> None:
     raise AssertionError(f"Unexpected message: {message!r}")
 
 
-def _scope_query(timeframe: str) -> ScopedRepositoryQuery:
+def _scope_query(timeframe: str, *, limit: int = 20) -> ScopedRepositoryQuery:
     return ScopedRepositoryQuery(
         scope=MarketScope(instrument="BTCUSDT", timeframe=timeframe),
         as_of=START + timedelta(hours=1),
-        limit=20,
+        limit=limit,
     )
 
 
@@ -449,6 +535,30 @@ def _message(
         },
     }
     return json.dumps(payload, sort_keys=True, separators=(",", ":"))
+
+
+def _fake_binance_klines(count: int) -> list[list]:
+    """Build fake Binance REST API kline arrays for testing."""
+    base = START - timedelta(minutes=5 * count)
+    klines = []
+    for i in range(count):
+        open_ms = int((base + timedelta(minutes=5 * i)).timestamp() * 1000)
+        close_ms = int((base + timedelta(minutes=5 * (i + 1)) - timedelta(milliseconds=1)).timestamp() * 1000)
+        klines.append([
+            open_ms,              # 0: open time
+            "100.00000000",       # 1: open
+            "112.00000000",       # 2: high
+            "95.00000000",        # 3: low
+            "108.00000000",       # 4: close
+            "2.50000000",         # 5: volume
+            close_ms,             # 6: close time
+            "42.00000000",        # 7: quote asset volume
+            42,                   # 8: number of trades
+            "21.00000000",        # 9: taker buy base asset volume
+            "20.00000000",        # 10: taker buy quote asset volume
+            "0",                  # 11: ignore
+        ])
+    return klines
 
 
 if __name__ == "__main__":

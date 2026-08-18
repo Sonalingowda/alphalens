@@ -56,18 +56,14 @@ class RuntimeLifecycleService:
                 "WAIT cannot acquire an opportunity lifecycle."
             )
 
-        if qualification.assessment_reference.artifact_id != opportunity.assessment_id:
+        if qualification.assessment_reference.artifact_id != opportunity.opportunity_version_id:
             raise ServiceContractError(
                 "Lifecycle qualification assessment does not match opportunity."
             )
 
-        if opportunity.qualification_reference is None:
-            raise ServiceContractError(
-                "Qualified lifecycle requires opportunity qualification reference."
-            )
-
         if (
-            opportunity.qualification_reference.artifact_id
+            opportunity.qualification_reference is not None
+            and opportunity.qualification_reference.artifact_id
             != qualification.qualification_id
         ):
             raise ServiceContractError(

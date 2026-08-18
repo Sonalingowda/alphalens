@@ -119,6 +119,10 @@ _application_lifespan = app.router.lifespan_context
 async def _infrastructure_lifespan(application):
     try:
         async with _application_lifespan(application):
+            try:
+                await live_market_ingestion.warmup_history()
+            except Exception:
+                logger.exception("warmup_history_failed")
             stop_event = asyncio.Event()
             ingestion_task = asyncio.create_task(
                 live_market_ingestion.run(stop_event),

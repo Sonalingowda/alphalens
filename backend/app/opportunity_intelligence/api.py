@@ -161,8 +161,13 @@ def create_opportunity_intelligence_app(
         opportunity_id: str,
         as_of: datetime,
     ) -> dict[str, object]:
+        logical_id = (
+            opportunity_id.removesuffix(".v1")
+            if opportunity_id.endswith(".v1")
+            else opportunity_id
+        )
         detail = await detail_repository.get_current(
-            EntityAsOfQuery(EntityId(opportunity_id), as_of)
+            EntityAsOfQuery(EntityId(logical_id), as_of)
         )
         return _success(detail.to_dict())
 
