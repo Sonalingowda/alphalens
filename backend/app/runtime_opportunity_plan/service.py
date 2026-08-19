@@ -24,18 +24,18 @@ from app.opportunity_intelligence.services import ServiceContractError
 RUNTIME_OPPORTUNITY_PLAN_POLICY_ID: Final[str] = (
     "alphalens_opportunity_plan_v1"
 )
-RUNTIME_OPPORTUNITY_PLAN_POLICY_VERSION: Final[str] = "1.0.0"
+RUNTIME_OPPORTUNITY_PLAN_POLICY_VERSION: Final[str] = "1.1.0"
 RUNTIME_OPPORTUNITY_PLAN_POLICY_HASH: Final[str] = (
-    "2bb18d75c02fa751556b27aa48713adb44a62c7261bf1ddb5155e8d0a891c7b7"
+    "145b25381be7912e3c363df5469e80fc1e1b9b64e787f07768c0feaee410a200"
 )
 
 _PLAN_CONTRACT_VERSION: Final[str] = "1.0.0"
 
-# Approved V1 policy:
-#   risk distance = reference price * 0.03%
+# Approved V1.1 policy:
+#   risk distance = ATR (average_true_range) from evidence
 #   target distance = risk distance * 1.5
-_PRICE_RISK_RATE: Final[Decimal] = Decimal("0.0003")
 _REWARD_MULTIPLE: Final[Decimal] = Decimal("1.5")
+_ATR_EVIDENCE_SUFFIX: Final[str] = "atr_true_range"
 
 _TARGET_ID_SUFFIX: Final[str] = "tp1"
 
@@ -45,15 +45,16 @@ class RuntimeOpportunityPlanService:
 
     WAIT produces no plan.
 
-    V1:
+    V1.1:
         reference price = market_price_close evidence
+        risk distance   = ATR (average_true_range) from evidence
         entry zone = exact reference price
         BUY:
-            invalidation = entry - 0.03%
-            target      = entry + 1.5R
+            invalidation = entry - ATR
+            target      = entry + 1.5 * ATR
         SELL:
-            invalidation = entry + 0.03%
-            target       = entry - 1.5R
+            invalidation = entry + ATR
+            target       = entry - 1.5 * ATR
 
     The resulting plan is informational only and is never an executable order.
     """
@@ -141,7 +142,7 @@ class RuntimeOpportunityPlanService:
         reference_price, reference_price_source = _reference_price(evidence)
 
         # ---------------------------------------------------------------
-        # 4. Deterministic V1 geometry
+        # 4. ATR-derived geometry
         # ---------------------------------------------------------------
 
         entry_zone = PriceRange(
@@ -149,7 +150,7 @@ class RuntimeOpportunityPlanService:
             upper=reference_price,
         )
 
-        risk_distance = reference_price * _PRICE_RISK_RATE
+        risk_distance = _atr_from_evidence(evidence)
         target_distance = risk_distance * _REWARD_MULTIPLE
 
         if risk_distance <= 0 or target_distance <= 0:
@@ -249,7 +250,7 @@ class RuntimeOpportunityPlanService:
         assumptions = (
             "reference_price_is_market_price_close",
             "entry_zone_collapses_to_reference_price",
-            "risk_distance_is_reference_price_times_0.03_percent",
+            "risk_distance_is_average_true_range",
             "target_distance_is_1.5_times_risk_distance",
             "plan_is_informational_not_executable",
         )
@@ -373,6 +374,43 @@ def _reference_price(
             available_at=item.available_at,
         ),
     )
+
+
+def _atr_from_evidence(evidence: EvidencePackage) -> Decimal:
+    """Extract ATR from the evidence package for risk-distance calculation."""
+
+    matches = [
+        item
+        for item in evidence.items
+        if item.evidence_id.rsplit(".", 1)[-1] == _ATR_EVIDENCE_SUFFIX
+    ]
+
+    if len(matches) != 1:
+        raise ServiceContractError(
+            "Opportunity plan requires exactly one atr_true_range evidence item."
+        )
+
+    item = matches[0]
+    value = getattr(item, "observed_value", None)
+
+    if isinstance(value, bool):
+        raise ServiceContractError(
+            "atr_true_range evidence must contain a positive numeric value."
+        )
+
+    try:
+        parsed = value if isinstance(value, Decimal) else Decimal(str(value))
+    except Exception as error:
+        raise ServiceContractError(
+            "atr_true_range evidence contains a non-numeric value."
+        ) from error
+
+    if parsed <= 0:
+        raise ServiceContractError(
+            "atr_true_range evidence must be positive."
+        )
+
+    return parsed
 
 
 def _reference(
