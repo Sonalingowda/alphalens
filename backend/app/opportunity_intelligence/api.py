@@ -1,7 +1,7 @@
 """Versioned contract-driven read API for Opportunity Intelligence."""
 
 from collections.abc import Callable
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 import json
 from typing import Annotated
@@ -36,6 +36,7 @@ from app.opportunity_intelligence.repositories import (
 OPPORTUNITY_API_VERSION = "1.0.0"
 DEFAULT_MVP_INSTRUMENT = "BTCUSDT"
 DEFAULT_MVP_TIMEFRAME = "5m"
+_ACTIVE_MAX_AGE_MINUTES: int = 10
 Clock = Callable[[], datetime]
 
 
@@ -91,6 +92,7 @@ def create_opportunity_intelligence_app(
             ScopedRepositoryQuery(scope=scope, as_of=as_of, limit=1)
         )
         filtered = _filter_items(page.items, stance=stance, search=search)
+        filtered = _filter_active_items(filtered, as_of=as_of)
         offset = _cursor_offset(cursor)
         items = filtered[offset : offset + limit]
         next_offset = offset + len(items)
@@ -289,6 +291,20 @@ def _filter_items(
             or needle in item.opportunity_id.casefold()
             or any(needle in code.casefold() for code in item.reason_codes)
         )
+    )
+
+
+def _filter_active_items(
+    items: tuple[DashboardItem, ...],
+    *,
+    as_of: datetime,
+) -> tuple[DashboardItem, ...]:
+    """Exclude opportunities whose signal age exceeds the active horizon."""
+    max_age = timedelta(minutes=_ACTIVE_MAX_AGE_MINUTES)
+    return tuple(
+        item
+        for item in items
+        if as_of - item.evidence_cutoff < max_age
     )
 
 
