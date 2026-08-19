@@ -297,4 +297,8 @@ class RuntimeLifecycleService:
         # Persist lifecycle events through the append-only repository.
         await self._lifecycles.save_event_batch(final_events)
 
+        # Persist the reconstructed OpportunityLifecycle so that
+        # LifecycleRepository.get_current() can retrieve it.
+        await self._lifecycles.save(lifecycle)
+
         return lifecycle

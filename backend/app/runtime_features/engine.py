@@ -44,6 +44,7 @@ from app.opportunity_intelligence.services import (
 
 RUNTIME_FEATURE_ENGINE_VERSION = "1.0.0"
 _PAGE_SIZE = 1000
+_MAX_PREFIX_LENGTH = 500
 _EMA_IDENTIFIERS = frozenset(item.identifier for item in EMA_FEATURE_METADATA)
 _ADX_IDENTIFIERS = frozenset(
     item.identifier for item in DIRECTIONAL_MOVEMENT_FEATURE_METADATA
@@ -175,6 +176,8 @@ class RuntimeFeatureEngine:
         prefix = _contiguous_suffix(
             prefix, CandleTimeframe(current.scope.timeframe)
         )
+        if len(prefix) > _MAX_PREFIX_LENGTH:
+            prefix = prefix[-_MAX_PREFIX_LENGTH:]
         return prefix
 
 
