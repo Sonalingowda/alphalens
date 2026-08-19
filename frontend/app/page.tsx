@@ -2,6 +2,7 @@ import { Activity, Radar, ShieldCheck, TriangleAlert } from "lucide-react";
 
 import { MarketStatus } from "@/components/markets/market-status";
 import { OpportunityCard } from "@/components/opportunities/opportunity-card";
+import { OpportunityFeed } from "@/components/opportunities/opportunity-feed";
 import { OpportunityFilters } from "@/components/opportunities/opportunity-filters";
 import { ApiUnavailable, EmptyState } from "@/components/dashboard/data-states";
 import { PageHeader } from "@/components/dashboard/page-header";
@@ -118,26 +119,13 @@ export default async function DashboardPage({
           <OpportunityFilters values={filters} />
           {!opportunities.ok ? (
             <ApiUnavailable message={opportunities.error} />
-          ) : opportunities.data.items.length === 0 ? (
-            <EmptyState
-              title="No qualified opportunities"
-              description="No immutable ranked opportunities match this scope. AlphaLens does not create placeholder signals."
-            />
           ) : (
-            <div className="grid gap-4 md:grid-cols-2 2xl:grid-cols-3">
-              {opportunities.data.items.map((item) => {
-                const enrich = enrichments.get(item.opportunity_id);
-                return (
-                  <OpportunityCard
-                    key={item.opportunity_id}
-                    item={item}
-                    plan={enrich?.plan ?? null}
-                    currentPrice={currentPrice}
-                    confidence={enrich?.confidence ?? null}
-                  />
-                );
-              })}
-            </div>
+            <OpportunityFeed
+              filters={filters}
+              initialItems={opportunities.data.items}
+              initialEnrichments={enrichments}
+              currentPrice={currentPrice}
+            />
           )}
         </section>
       </div>
