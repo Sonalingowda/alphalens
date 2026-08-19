@@ -28,7 +28,7 @@ from app.runtime_lifecycle import RuntimeLifecycleService
 from tests.test_runtime_ranking import _ranking_fixture
 
 
-async def _lifecycle_fixture(ema12="101", ema26="100", rsi="55"):
+async def _lifecycle_fixture(ema12="105", ema26="100", rsi="65"):
     """Build a complete fixture chain through ranking, returning lifecycle inputs."""
     fixture, assessment_service, opportunity, qualification, score, ranking_service, _ = (
         await _ranking_fixture(ema12, ema26, rsi)

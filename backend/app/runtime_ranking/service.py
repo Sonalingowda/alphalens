@@ -90,6 +90,13 @@ _EXPECTED_PROVENANCE_TYPES = (
 _COMPOSITE_MIN = 50
 _COMPOSITE_MAX = 100
 
+# Minimum composite quality score for admission to the ranking population.
+# Derived from scoring V1.1: quality = 50 + 50 * clamp(product, 0, 1).
+# A threshold of 55 requires product >= 0.1, filtering out opportunities with
+# negligible signal strength (RSI barely at detection threshold, low volatility,
+# weak trend).  This is a code-level quality gate, not a policy document change.
+_MINIMUM_QUALITY_SCORE = Decimal("55")
+
 
 def _policy() -> PolicyReference:
     return PolicyReference(
@@ -242,6 +249,10 @@ class RuntimeRankingService:
             else:
                 score_r, qual_r, opp_r = result
                 admitted.append((score_r, qual_r, opp_r))
+
+        # --- Apply quality threshold filter (code-level quality gate) ---
+        admitted, quality_excluded_pairs = _apply_quality_filter(admitted)
+        excluded_pairs.extend(quality_excluded_pairs)
 
         # --- Apply freshness filter iteratively (policy §4) ---
         admitted, freshness_excluded_pairs = _apply_freshness_filter(
@@ -594,6 +605,35 @@ def _apply_freshness_filter(
                 still_admitted.append((s, q, o))
         admitted = still_admitted
     return admitted, excluded_pairs
+
+
+# ---------------------------------------------------------------------------
+# Quality threshold filtering (code-level quality gate)
+# ---------------------------------------------------------------------------
+
+def _apply_quality_filter(
+    admitted: list[tuple[ScoreResult, QualificationRecord, Opportunity]],
+) -> tuple[
+    list[tuple[ScoreResult, QualificationRecord, Opportunity]],
+    list[tuple[ScoreResult, RankingExclusion]],
+]:
+    """Exclude members whose composite quality score is below the minimum threshold.
+
+    This is a code-level quality gate that prevents weak opportunities (negligible
+    signal strength, low volatility, weak trend) from being admitted to the ranking
+    population.  The threshold is derived from the scoring V1.1 formula and is
+    not a policy document change.
+    """
+    excluded_pairs: list[tuple[ScoreResult, RankingExclusion]] = []
+    still_admitted: list[tuple[ScoreResult, QualificationRecord, Opportunity]] = []
+    for s, q, o in admitted:
+        if _composite_value(s) < _MINIMUM_QUALITY_SCORE:
+            excluded_pairs.append(
+                (s, _build_exclusion(s, "ranking.below_quality_threshold"))
+            )
+        else:
+            still_admitted.append((s, q, o))
+    return still_admitted, excluded_pairs
 
 
 # ---------------------------------------------------------------------------

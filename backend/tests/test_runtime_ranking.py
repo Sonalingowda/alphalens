@@ -12,6 +12,7 @@ Covers every required scenario from INT-007:
 """
 
 from dataclasses import replace
+from decimal import Decimal
 from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock
@@ -42,6 +43,7 @@ from app.runtime_ranking import (
     RUNTIME_RANKING_POLICY_VERSION,
     RuntimeRankingService,
 )
+from app.runtime_ranking.service import _MINIMUM_QUALITY_SCORE, _apply_quality_filter
 from app.runtime_scoring import RuntimeScoringService
 from tests.test_runtime_assessment import _assessment_fixture, _request
 
@@ -50,7 +52,7 @@ from tests.test_runtime_assessment import _assessment_fixture, _request
 # Shared fixture builder
 # ---------------------------------------------------------------------------
 
-async def _ranking_fixture(ema12="101", ema26="100", rsi="55"):
+async def _ranking_fixture(ema12="105", ema26="100", rsi="65"):
     """Build a complete fixture chain through scoring and return ranking inputs.
 
     Returns:
@@ -502,3 +504,73 @@ class RuntimeRankingServiceTests(unittest.IsolatedAsyncioTestCase):
             len(ranking_snapshot.memberships) + len(ranking_snapshot.exclusions),
             len(ranking_snapshot.eligible_candidate_references),
         )
+
+    # --- Quality threshold filtering ---
+
+    def test_quality_threshold_constant(self) -> None:
+        self.assertEqual(_MINIMUM_QUALITY_SCORE, Decimal("55"))
+
+    async def test_weak_score_below_quality_threshold_is_excluded(self) -> None:
+        """A score with composite_value < 55 is excluded via quality filter."""
+        fixture, _, opportunity, qualification, score, service, rankings = (
+            await _ranking_fixture()
+        )
+        # The default fixture (ema12=105, ema26=100, rsi=65) produces a score
+        # above the threshold.  Save the strong score, then add a weak score
+        # with a component value of 52 (below 55 threshold).
+        strong_score = score
+        weak_component = replace(
+            score.components[0],
+            raw_value=Decimal("52"),
+            contribution=Decimal("52"),
+            component_hash="0" * 64,
+        )
+        # Build a mock weak score using SimpleNamespace to match _composite_value needs.
+        weak_score_mock = SimpleNamespace(
+            score_id="score.runtime_ema_rsi.qualification.runtime_ema_rsi.weak",
+            opportunity_id="opportunity.runtime_ema_rsi.candidate.weak",
+            components=(weak_component,),
+        )
+        # Test the filter function directly.
+        admitted = [
+            (strong_score, qualification, opportunity),
+            (weak_score_mock, qualification, opportunity),
+        ]
+        still_admitted, excluded = _apply_quality_filter(admitted)
+        self.assertEqual(len(still_admitted), 1)
+        self.assertEqual(len(excluded), 1)
+        self.assertEqual(
+            excluded[0][1].reason_codes, ("ranking.below_quality_threshold",)
+        )
+
+    async def test_triggering_score_at_quality_threshold_is_admitted(self) -> None:
+        """A score exactly at the quality threshold (55) is admitted."""
+        fixture, _, opportunity, qualification, score, service, rankings = (
+            await _ranking_fixture()
+        )
+        # Build a mock score at exactly 55.
+        at_threshold_component = replace(
+            score.components[0],
+            raw_value=Decimal("55"),
+            contribution=Decimal("55"),
+            component_hash="0" * 64,
+        )
+        at_threshold_mock = SimpleNamespace(
+            score_id="score.runtime_ema_rsi.at_threshold",
+            opportunity_id="opportunity.runtime_ema_rsi.candidate.at_threshold",
+            components=(at_threshold_component,),
+        )
+        admitted = [(at_threshold_mock, qualification, opportunity)]
+        still_admitted, excluded = _apply_quality_filter(admitted)
+        self.assertEqual(len(still_admitted), 1)
+        self.assertEqual(len(excluded), 0)
+
+    async def test_all_scores_above_threshold_are_admitted(self) -> None:
+        """Scores at or above 55 are all admitted."""
+        fixture, _, opportunity, qualification, score, service, rankings = (
+            await _ranking_fixture()
+        )
+        admitted = [(score, qualification, opportunity)]
+        still_admitted, excluded = _apply_quality_filter(admitted)
+        self.assertEqual(len(still_admitted), 1)
+        self.assertEqual(len(excluded), 0)
