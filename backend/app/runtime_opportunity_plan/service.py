@@ -17,6 +17,7 @@ from app.opportunity_intelligence.domain import (
     Provenance,
     canonical_sha256,
 )
+from app.opportunity_intelligence.domain.primitives import DECIMAL_QUANTUM
 from app.opportunity_intelligence.domain.stances import OpportunityStance
 from app.opportunity_intelligence.services import ServiceContractError
 
@@ -151,7 +152,9 @@ class RuntimeOpportunityPlanService:
         )
 
         risk_distance = _atr_from_evidence(evidence)
-        target_distance = risk_distance * _REWARD_MULTIPLE
+        target_distance = (risk_distance * _REWARD_MULTIPLE).quantize(
+            DECIMAL_QUANTUM
+        )
 
         if risk_distance <= 0 or target_distance <= 0:
             raise ServiceContractError(
@@ -159,13 +162,21 @@ class RuntimeOpportunityPlanService:
             )
 
         if opportunity.stance is OpportunityStance.BUY:
-            invalidation_price = reference_price - risk_distance
-            target_price = reference_price + target_distance
+            invalidation_price = (reference_price - risk_distance).quantize(
+                DECIMAL_QUANTUM
+            )
+            target_price = (reference_price + target_distance).quantize(
+                DECIMAL_QUANTUM
+            )
         else:
-            invalidation_price = reference_price + risk_distance
-            target_price = reference_price - target_distance
+            invalidation_price = (reference_price + risk_distance).quantize(
+                DECIMAL_QUANTUM
+            )
+            target_price = (reference_price - target_distance).quantize(
+                DECIMAL_QUANTUM
+            )
 
-        risk_reward = target_distance / risk_distance
+        risk_reward = (target_distance / risk_distance).quantize(DECIMAL_QUANTUM)
 
         # ---------------------------------------------------------------
         # 5. Evidence references
