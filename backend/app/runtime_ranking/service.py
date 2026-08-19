@@ -11,6 +11,7 @@ constant against the frozen value before executing any ranking logic.
 
 from dataclasses import replace
 from datetime import datetime, timedelta
+from decimal import Decimal
 
 from app.opportunity_intelligence.domain import (
     AuditMetadata,
@@ -54,8 +55,8 @@ RUNTIME_RANKING_POLICY_HASH = (
 
 _SCORING_POLICY = PolicyReference(
     "alphalens_runtime_scoring_ema_rsi",
-    "1.0.0",
-    "2e6b45f3d3f285b085677b647bfdb21bbf8359a4b184c84742025ec051f88328",
+    "1.1.0",
+    "454a8f2ba78347f37ee797f6d5a8c7f4406051c3fd35ba9256aa9f3f533955c0",
 )
 _QUALIFICATION_POLICY = PolicyReference(
     "alphalens_runtime_qualification_ema_rsi",
@@ -85,9 +86,9 @@ _EXPECTED_PROVENANCE_TYPES = (
     "market_context",
 )
 
-# Valid composite values produced by the scoring policy.
-_COMPOSITE_100 = 100
-_COMPOSITE_50 = 50
+# Valid composite value range produced by the scoring policy.
+_COMPOSITE_MIN = 50
+_COMPOSITE_MAX = 100
 
 
 def _policy() -> PolicyReference:
@@ -398,10 +399,8 @@ def _validate_score_lineage(
         raise ServiceContractError(
             "Ranking: ScoreResult is missing the required opportunity_quality component."
         )
-    if component.raw_value not in {
-        _COMPOSITE_100,
-        _COMPOSITE_50,
-    }:
+    raw = component.raw_value
+    if not (Decimal(str(_COMPOSITE_MIN)) <= raw <= Decimal(str(_COMPOSITE_MAX))):
         raise ServiceContractError(
             "Ranking: ScoreResult composite value is outside the approved domain."
         )
@@ -508,7 +507,11 @@ async def _validate_member_lineage(
     if (
         component is None
         or component.component_version != "1.0.0"
-        or component.raw_value not in {_COMPOSITE_100, _COMPOSITE_50}
+        or not (
+            Decimal(str(_COMPOSITE_MIN))
+            <= component.raw_value
+            <= Decimal(str(_COMPOSITE_MAX))
+        )
         or component.contribution != component.raw_value
     ):
         return "ranking.lineage_validation_failed"

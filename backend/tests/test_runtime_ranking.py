@@ -90,7 +90,7 @@ async def _ranking_fixture(ema12="101", ema26="100", rsi="55"):
         code_version="git:rankingtest100",
     )
     score = await scoring_service.score(
-        opportunity, qualification, evidence, fixture.context
+        opportunity, qualification, evidence, fixture.context, fixture.feature
     )
 
     rankings = RankingMemoryRepository()

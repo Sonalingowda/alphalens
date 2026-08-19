@@ -95,6 +95,7 @@ class ScoringService(Protocol):
         qualification: QualificationRecord,
         evidence: EvidencePackage,
         market_context: MarketContext,
+        feature_snapshot: FeatureSnapshot,
     ) -> ScoreResult:
         """Return a complete score result or raise PolicyUnavailableError."""
         ...

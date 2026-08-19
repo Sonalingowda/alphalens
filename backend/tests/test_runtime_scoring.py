@@ -1,7 +1,8 @@
-"""Tests for Runtime Scoring Policy v1.0."""
+"""Tests for Runtime Scoring Policy v1.1."""
 
 from dataclasses import replace
 from datetime import timedelta
+from decimal import Decimal
 from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock
@@ -50,6 +51,7 @@ class RuntimeScoringServiceTests(unittest.IsolatedAsyncioTestCase):
             qualification,
             evidence,
             fixture.context,
+            fixture.feature,
         )
 
         self.assertEqual(score.policy.policy_id, RUNTIME_SCORING_POLICY_ID)
@@ -78,7 +80,9 @@ class RuntimeScoringServiceTests(unittest.IsolatedAsyncioTestCase):
         )
 
         with self.assertRaises(ServiceUnavailableError):
-            await service.score(opportunity, qualification, evidence, fixture.context)
+            await service.score(
+                opportunity, qualification, evidence, fixture.context, fixture.feature
+            )
         self.assertEqual(len(scores._records), 0)
 
     async def test_missing_qualification_is_unavailable(self) -> None:
@@ -99,7 +103,9 @@ class RuntimeScoringServiceTests(unittest.IsolatedAsyncioTestCase):
         )
 
         with self.assertRaises(ServiceUnavailableError):
-            await service.score(opportunity, qualification, evidence, fixture.context)
+            await service.score(
+                opportunity, qualification, evidence, fixture.context, fixture.feature
+            )
         self.assertEqual(len(scores._records), 0)
 
     async def test_missing_evidence_is_unavailable(self) -> None:
@@ -120,7 +126,9 @@ class RuntimeScoringServiceTests(unittest.IsolatedAsyncioTestCase):
         )
 
         with self.assertRaises(ServiceUnavailableError):
-            await service.score(opportunity, qualification, evidence, fixture.context)
+            await service.score(
+                opportunity, qualification, evidence, fixture.context, fixture.feature
+            )
         self.assertEqual(len(scores._records), 0)
 
     async def test_invalid_lineage_is_rejected(self) -> None:
@@ -135,7 +143,9 @@ class RuntimeScoringServiceTests(unittest.IsolatedAsyncioTestCase):
         invalid = replace(evidence, candidate_id="candidate.invalid")
 
         with self.assertRaises(ServiceContractError):
-            await service.score(opportunity, qualification, invalid, fixture.context)
+            await service.score(
+                opportunity, qualification, invalid, fixture.context, fixture.feature
+            )
         self.assertEqual(len(scores._records), 0)
 
     async def test_stale_lineage_artifact_is_unavailable(self) -> None:
@@ -165,7 +175,9 @@ class RuntimeScoringServiceTests(unittest.IsolatedAsyncioTestCase):
         )
 
         with self.assertRaises(ServiceUnavailableError):
-            await service.score(opportunity, qualification, evidence, stale_context)
+            await service.score(
+                opportunity, qualification, evidence, stale_context, fixture.feature
+            )
         self.assertEqual(len(scores._records), 0)
 
     async def test_duplicate_execution_is_idempotent(self) -> None:
@@ -179,10 +191,10 @@ class RuntimeScoringServiceTests(unittest.IsolatedAsyncioTestCase):
         ) = await _fixture()
 
         first = await service.score(
-            opportunity, qualification, evidence, fixture.context
+            opportunity, qualification, evidence, fixture.context, fixture.feature
         )
         second = await service.score(
-            opportunity, qualification, evidence, fixture.context
+            opportunity, qualification, evidence, fixture.context, fixture.feature
         )
 
         self.assertEqual(first.canonical_sha256(), second.canonical_sha256())
@@ -202,7 +214,9 @@ class RuntimeScoringServiceTests(unittest.IsolatedAsyncioTestCase):
         )
 
         with self.assertRaises(StorageUnavailableError):
-            await service.score(opportunity, qualification, evidence, fixture.context)
+            await service.score(
+                opportunity, qualification, evidence, fixture.context, fixture.feature
+            )
 
     async def test_policy_blocked_fails_closed(self) -> None:
         (
@@ -223,7 +237,9 @@ class RuntimeScoringServiceTests(unittest.IsolatedAsyncioTestCase):
         )
 
         with self.assertRaises(PolicyUnavailableError):
-            await service.score(opportunity, qualification, evidence, fixture.context)
+            await service.score(
+                opportunity, qualification, evidence, fixture.context, fixture.feature
+            )
         self.assertEqual(len(scores._records), 0)
 
     async def test_pipeline_hands_score_to_injected_ranking_service(self) -> None:
@@ -262,12 +278,71 @@ class RuntimeScoringServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(call[1][0].qualification_id, qualification.qualification_id)
         self.assertEqual(call[2][0].aggregate_value, 50)
 
+    async def test_stronger_signal_produces_higher_score(self) -> None:
+        weak_fixture, weak_opp, weak_q, weak_ev, weak_svc, _ = await _fixture()
+        strong_fixture, strong_opp, strong_q, strong_ev, strong_svc, _ = (
+            await _fixture(
+                "105.000000000000000000",
+                "100.000000000000000000",
+                "65.000000000000000000",
+            )
+        )
+        weak_score = await weak_svc.score(
+            weak_opp, weak_q, weak_ev, weak_fixture.context, weak_fixture.feature,
+        )
+        strong_score = await strong_svc.score(
+            strong_opp, strong_q, strong_ev, strong_fixture.context,
+            strong_fixture.feature,
+        )
+        self.assertGreaterEqual(
+            strong_score.aggregate_value, weak_score.aggregate_value
+        )
 
-async def _fixture():
+    async def test_feature_snapshot_mismatch_is_rejected(self) -> None:
+        (
+            fixture,
+            opportunity,
+            qualification,
+            evidence,
+            service,
+            scores,
+        ) = await _fixture()
+
+        mismatched = replace(
+            fixture.feature,
+            snapshot_id="feature.snapshot.wrong",
+        )
+
+        with self.assertRaises(ServiceContractError):
+            await service.score(
+                opportunity, qualification, evidence, fixture.context, mismatched
+            )
+        self.assertEqual(len(scores._records), 0)
+
+    async def test_evidence_keys_unchanged(self) -> None:
+        fixture = await _fixture()
+        _, _, _, evidence, _, _ = fixture
+        keys = {item.evidence_id.rsplit(".", 1)[-1] for item in evidence.items}
+        self.assertEqual(
+            keys,
+            {
+                "market_price_close",
+                "market_volume",
+                "ema_12",
+                "ema_26",
+                "rsi",
+                "atr_true_range",
+                "ema_alignment",
+                "rsi_state",
+                "market_structure",
+            },
+        )
+
+
+async def _fixture(ema_12="101.000000000000000000", ema_26="100.000000000000000000",
+                    rsi="55.000000000000000000"):
     fixture, assessment, evidence, opportunities = await _assessment_fixture(
-        "101.000000000000000000",
-        "100.000000000000000000",
-        "55.000000000000000000",
+        ema_12, ema_26, rsi,
     )
     opportunity = await assessment.assess(fixture.candidate, evidence, fixture.context)
     qualifications = QualificationMemoryRepository()

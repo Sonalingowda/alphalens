@@ -1,4 +1,4 @@
-"""Repository-backed implementation of Runtime Scoring Policy v1.0."""
+"""Repository-backed implementation of Runtime Scoring Policy v1.1."""
 
 from dataclasses import replace
 from decimal import Decimal
@@ -7,9 +7,11 @@ from app.opportunity_intelligence.domain import (
     AuditMetadata,
     DecimalRange,
     EvidencePackage,
+    FeatureSnapshot,
     IntegrityReference,
     MarketContext,
     Opportunity,
+    OpportunityStance,
     PolicyReference,
     Provenance,
     QualificationOutcome,
@@ -38,9 +40,9 @@ from app.opportunity_intelligence.services import (
 
 
 RUNTIME_SCORING_POLICY_ID = "alphalens_runtime_scoring_ema_rsi"
-RUNTIME_SCORING_POLICY_VERSION = "1.0.0"
+RUNTIME_SCORING_POLICY_VERSION = "1.1.0"
 RUNTIME_SCORING_POLICY_HASH = (
-    "2e6b45f3d3f285b085677b647bfdb21bbf8359a4b184c84742025ec051f88328"
+    "454a8f2ba78347f37ee797f6d5a8c7f4406051c3fd35ba9256aa9f3f533955c0"
 )
 _QUALIFICATION_POLICY = PolicyReference(
     "alphalens_runtime_qualification_ema_rsi",
@@ -113,10 +115,11 @@ class RuntimeScoringService:
         qualification: QualificationRecord,
         evidence: EvidencePackage,
         market_context: MarketContext,
+        feature_snapshot: FeatureSnapshot,
     ) -> ScoreResult:
         """Validate persisted lineage and save one immutable ordinal score."""
         if self._policy != _policy():
-            raise PolicyUnavailableError("Scoring policy v1.0.0 is unavailable.")
+            raise PolicyUnavailableError("Scoring policy v1.1.0 is unavailable.")
         cutoff = qualification.audit.evidence_cutoff
         try:
             persisted_opportunity = await self._opportunities.get_by_id(
@@ -149,6 +152,11 @@ class RuntimeScoringService:
                 raise ServiceContractError(
                     f"Persisted {label} conflicts with scoring input."
                 )
+        feature_ref = opportunity.audit.provenance.source_references[3]
+        if feature_snapshot.canonical_sha256() != feature_ref.integrity_digest:
+            raise ServiceContractError(
+                "Persisted feature snapshot conflicts with scoring input."
+            )
         _validate(
             persisted_opportunity,
             persisted_qualification,
@@ -160,7 +168,11 @@ class RuntimeScoringService:
             persisted_qualification,
             persisted_evidence,
         )
-        value = Decimal("50") if limitations else Decimal("100")
+        value = _compute_opportunity_quality(
+            persisted_opportunity,
+            persisted_evidence,
+            feature_snapshot,
+        )
         record = _record(
             persisted_opportunity,
             persisted_qualification,
@@ -274,6 +286,104 @@ def _optional_limitations(
         if item.observed_value == "unavailable":
             limitations.extend(item.limitations)
     return tuple(dict.fromkeys(limitations))
+
+
+def _evidence_values(evidence: EvidencePackage) -> dict[str, object]:
+    return {
+        item.evidence_id.rsplit(".", 1)[-1]: item.observed_value
+        for item in evidence.items
+    }
+
+
+def _feature_snapshot_values(features: FeatureSnapshot) -> dict[str, object]:
+    return {
+        value.output_name: value.value
+        for value in features.values
+    }
+
+
+def _safe_decimal(
+    values: dict[str, object], key: str
+) -> Decimal | None:
+    raw = values.get(key)
+    if raw is None:
+        return None
+    try:
+        return Decimal(str(raw))
+    except Exception:
+        return None
+
+
+def _compute_opportunity_quality(
+    opportunity: Opportunity,
+    evidence: EvidencePackage,
+    features: FeatureSnapshot,
+) -> Decimal:
+    """Continuous opportunity quality from signal strength, trend, and volatility.
+
+    quality = 50 + 50 * clamp(product, 0, 1)
+
+    product = signal_score * vol_score * trend_bonus
+
+    signal_score = clamp(signal_strength / 25, 0, 1)
+    vol_score    = clamp(atr_pct / 0.005, 0, 1)
+    trend_bonus  = clamp(adx_score + macd_score + bb_score, 0.5, 1.5)
+
+    signal_strength = rsi_excess * (1 + ema_spread_bps / 10000)
+    rsi_excess      = max(0, rsi - 55)  for BUY
+                   = max(0, 45 - rsi)  for SELL
+    ema_spread_bps  = abs(ema_12 - ema_26) / ema_26 * 10000
+    atr_pct         = atr_true_range / market_price_close
+
+    adx_score  = clamp(adx / 50, 0, 1)  — higher ADX = stronger trend
+    macd_score = clamp(abs(macd_histogram) / atr, 0, 1)  — MACD momentum relative to volatility
+    bb_score   = clamp(bollinger_band_width * 100, 0, 1)  — wider bands = more opportunity
+    """
+    vals = _evidence_values(evidence)
+    rsi = Decimal(str(vals["rsi"]))
+    ema_12 = Decimal(str(vals["ema_12"]))
+    ema_26 = Decimal(str(vals["ema_26"]))
+    atr = Decimal(str(vals["atr_true_range"]))
+    price = Decimal(str(vals["market_price_close"]))
+
+    if opportunity.stance is OpportunityStance.BUY:
+        rsi_excess = max(Decimal("0"), rsi - Decimal("55"))
+    elif opportunity.stance is OpportunityStance.SELL:
+        rsi_excess = max(Decimal("0"), Decimal("45") - rsi)
+    else:
+        return Decimal("50")
+
+    ema_spread_bps = abs(ema_12 - ema_26) / ema_26 * Decimal("10000")
+    signal_strength = rsi_excess * (Decimal("1") + ema_spread_bps / Decimal("10000"))
+    signal_score = min(signal_strength / Decimal("25"), Decimal("1"))
+
+    atr_pct = atr / price if price > 0 else Decimal("0")
+    vol_score = min(atr_pct / Decimal("0.005"), Decimal("1"))
+
+    feat_vals = _feature_snapshot_values(features)
+    adx = _safe_decimal(feat_vals, "average_directional_index")
+    macd_hist = _safe_decimal(feat_vals, "macd_histogram")
+    bb_width = _safe_decimal(feat_vals, "bollinger_band_width")
+
+    adx_component = min(adx / Decimal("50"), Decimal("1")) if adx is not None else Decimal("0.5")
+    macd_component = (
+        min(abs(macd_hist) / atr, Decimal("1"))
+        if macd_hist is not None and atr > 0
+        else Decimal("0.5")
+    )
+    bb_component = (
+        min(bb_width * Decimal("100"), Decimal("1"))
+        if bb_width is not None
+        else Decimal("0.5")
+    )
+    trend_bonus = max(
+        Decimal("0.5"),
+        min(adx_component + macd_component + bb_component, Decimal("1.5")),
+    )
+
+    product = signal_score * vol_score * trend_bonus
+    quality = Decimal("50") + Decimal("50") * min(product, Decimal("1"))
+    return quality.quantize(Decimal("1"))
 
 
 def _record(

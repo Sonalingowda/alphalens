@@ -274,6 +274,7 @@ class OpportunityIntelligencePipeline:
                     qualification,
                     evidence,
                     context,
+                    features,
                 )
             except PolicyUnavailableError:
                 _block(records, active_stage, "scoring.policy_unavailable")
