@@ -201,6 +201,7 @@ def build_runtime_pipeline(
         evidence=evidence_repo,
         explanations=explanations,
         details=detail_repo,
+        scores=scores,
         code_version=_CODE_VERSION,
     )
 
@@ -358,7 +359,7 @@ class _StubIndicatorService:
 
 
 class _StubExplanationService:
-    """Returns and persists a minimal deterministic explanation."""
+    """Returns and persists a deterministic explanation from evidence data."""
 
     def __init__(self, explanations):
         self._explanations = explanations
@@ -385,7 +386,7 @@ class _StubExplanationService:
 
         cutoff = opportunity.audit.evidence_cutoff
         policy = PolicyReference(
-            "alphalens_runtime_explanation_stub",
+            "alphalens_runtime_explanation_deterministic",
             "1.0.0",
             "0" * 64,
         )
@@ -396,35 +397,138 @@ class _StubExplanationService:
             integrity_digest=opportunity.evidence_package_reference.integrity_digest,
             available_at=cutoff,
         )
-        source_refs = (
-            IntegrityReference(
-                artifact_id=opportunity.opportunity_version_id,
-                artifact_type="opportunity",
-                artifact_version="1.0.0",
-                integrity_digest=opportunity.canonical_sha256(),
-                available_at=cutoff,
-            ),
+        opp_ref = IntegrityReference(
+            artifact_id=opportunity.opportunity_version_id,
+            artifact_type="opportunity",
+            artifact_version="1.0.0",
+            integrity_digest=opportunity.canonical_sha256(),
+            available_at=cutoff,
         )
-        sentence = ExplanationSentence(
-            sentence_id=f"sentence.stub.{opportunity.opportunity_version_id}",
-            template_id="template.opportunity.direction",
+        source_refs = (opp_ref,)
+
+        evidence_map = {
+            item.description_code: item
+            for item in evidence.items
+        }
+
+        def _evidence_val(code: str) -> str | None:
+            item = evidence_map.get(code)
+            if item is None:
+                return None
+            return str(item.observed_value)
+
+        direction = opportunity.stance.value
+        instrument = opportunity.scope.instrument
+
+        ema_alignment = _evidence_val("evidence.ema_alignment")
+        rsi_state = _evidence_val("evidence.rsi_state")
+        rsi_val = _evidence_val("evidence.rsi")
+        ema12 = _evidence_val("evidence.ema_12")
+        ema26 = _evidence_val("evidence.ema_26")
+
+        direction_word = "bullish" if direction == "BUY" else "bearish"
+
+        sentences: list[ExplanationSentence] = []
+        ordinal = 1
+
+        if ema_alignment == "True":
+            trend_detail = (
+                f"EMA-12 ({ema12 or 'N/A'}) is above EMA-26 ({ema26 or 'N/A'}), "
+                f"confirming {direction_word} momentum."
+            )
+        elif ema_alignment == "False":
+            trend_detail = (
+                f"EMA-12 ({ema12 or 'N/A'}) is below EMA-26 ({ema26 or 'N/A'}), "
+                f"indicating {direction_word} momentum."
+            )
+        else:
+            trend_detail = f"EMA alignment supports a {direction_word} outlook."
+
+        sentences.append(ExplanationSentence(
+            sentence_id=f"sentence.trend.{opportunity.opportunity_version_id}",
+            template_id="template.opportunity.trend",
             bindings=(
-                TemplateBinding(
-                    name="direction",
-                    value=opportunity.stance.value,
-                ),
+                TemplateBinding(name="direction", value=direction),
+                TemplateBinding(name="instrument", value=instrument),
             ),
             evidence_references=(evidence_ref,),
             rendered_text=(
-                f"AlphaLens detected a {opportunity.stance.value} signal "
-                f"for {opportunity.scope.instrument}."
+                f"AlphaLens detected a {direction} signal for {instrument}: {trend_detail}"
             ),
-        )
-        section = ExplanationSection(
-            section_id="assessment",
-            ordinal=1,
-            sentences=(sentence,),
-        )
+        ))
+        ordinal += 1
+
+        if rsi_state and rsi_val:
+            if direction == "BUY":
+                rsi_detail = (
+                    f"RSI-14 at {rsi_val} is in the {rsi_state} range, "
+                    f"supporting the bullish assessment."
+                )
+            else:
+                rsi_detail = (
+                    f"RSI-14 at {rsi_val} is in the {rsi_state} range, "
+                    f"supporting the bearish assessment."
+                )
+            sentences.append(ExplanationSentence(
+                sentence_id=f"sentence.rsi.{opportunity.opportunity_version_id}",
+                template_id="template.opportunity.rsi",
+                bindings=(
+                    TemplateBinding(name="rsi_state", value=rsi_state),
+                    TemplateBinding(name="rsi", value=rsi_val),
+                ),
+                evidence_references=(evidence_ref,),
+                rendered_text=rsi_detail,
+            ))
+            ordinal += 1
+
+        if opportunity.plan is not None:
+            plan = opportunity.plan
+            targets = plan.targets
+            if targets:
+                target = targets[0]
+                rr = plan.risk_reward
+                rr_text = f" with R:R of {rr}" if rr else ""
+                sentences.append(ExplanationSentence(
+                    sentence_id=f"sentence.plan.{opportunity.opportunity_version_id}",
+                    template_id="template.opportunity.plan",
+                    bindings=(
+                        TemplateBinding(name="instrument", value=instrument),
+                    ),
+                    evidence_references=(evidence_ref,),
+                    rendered_text=(
+                        f"The plan targets a move toward {target.expected_reward_level} "
+                        f"from entry near {target.entry_low}{rr_text}."
+                    ),
+                ))
+                ordinal += 1
+
+        if not sentences:
+            sentences.append(ExplanationSentence(
+                sentence_id=f"sentence.stub.{opportunity.opportunity_version_id}",
+                template_id="template.opportunity.direction",
+                bindings=(
+                    TemplateBinding(name="direction", value=direction),
+                ),
+                evidence_references=(evidence_ref,),
+                rendered_text=(
+                    f"AlphaLens detected a {direction} signal for {instrument}."
+                ),
+            ))
+
+        sections = [
+            ExplanationSection(
+                section_id="assessment",
+                ordinal=1,
+                sentences=tuple(sentences),
+            ),
+        ]
+
+        limitations: list[str] = []
+        if ema_alignment is None:
+            limitations.append("evidence.ema_alignment.unavailable")
+        if rsi_state is None:
+            limitations.append("evidence.rsi_state.unavailable")
+
         audit = AuditMetadata(
             created_at=cutoff,
             evidence_cutoff=cutoff,
@@ -441,15 +545,16 @@ class _StubExplanationService:
         explanation = ExplanationArtifact(
             contract_version="1.0.0",
             explanation_id=(
-                f"explanation.runtime.stub.{opportunity.opportunity_version_id}"
+                f"explanation.runtime.deterministic."
+                f"{opportunity.opportunity_version_id}"
             ),
             opportunity_version_id=opportunity.opportunity_version_id,
             language="en",
             locale="en-US",
             taxonomy_version="1.0.0",
             template_set_version="1.0.0",
-            sections=(section,),
-            limitations=("explanation.stub",),
+            sections=tuple(sections),
+            limitations=tuple(limitations),
             audit=audit,
         )
         result_hash = canonical_sha256(

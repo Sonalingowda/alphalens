@@ -19,6 +19,7 @@ from app.opportunity_intelligence.domain import (
     ExplanationArtifact,
     FeatureSnapshot,
     LifecycleEvent,
+    LifecycleState,
     MarketContext,
     MarketScope,
     MarketSnapshot,
@@ -442,6 +443,24 @@ class LifecycleMemoryRepository(InMemoryImmutableRepository[OpportunityLifecycle
             as_of=page.as_of,
             next_cursor=page.next_cursor,
         )
+
+    async def list_stale_lifecycles(
+        self,
+        *,
+        stale_before: datetime,
+        limit: int,
+    ) -> tuple[OpportunityLifecycle, ...]:
+        """Return RANKED lifecycles whose available_at precedes stale_before."""
+        results: list[OpportunityLifecycle] = []
+        for record in self._records.values():
+            if len(results) >= limit:
+                break
+            if (
+                record.audit.available_at < stale_before
+                and record.current_state is LifecycleState.RANKED
+            ):
+                results.append(record)
+        return tuple(results)
 
 
 class NotificationMemoryRepository(InMemoryImmutableRepository[Notification]):

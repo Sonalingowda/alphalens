@@ -163,6 +163,7 @@ class OpportunityDetail(CanonicalModel):
     historical_references: tuple[IntegrityReference, ...]
     verification_status: str
     audit: AuditMetadata
+    quality_score: Decimal | None = None
 
     def __post_init__(self) -> None:
         validate_contract_version(self.contract_version)

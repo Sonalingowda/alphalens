@@ -1,6 +1,8 @@
 """Concrete PostgreSQL-backed runtime opportunity lifecycle service."""
 
 from dataclasses import replace
+from datetime import datetime, timedelta
+import logging
 
 from app.opportunity_intelligence.domain import (
     AuditMetadata,
@@ -302,3 +304,155 @@ class RuntimeLifecycleService:
         await self._lifecycles.save(lifecycle)
 
         return lifecycle
+
+    async def expire_stale(
+        self,
+        *,
+        as_of: datetime,
+        active_max_age_minutes: int = 10,
+        batch_limit: int = 50,
+    ) -> tuple[OpportunityLifecycle, ...]:
+        """Transition RANKED lifecycles older than active_max_age_minutes to EXPIRED.
+
+        This is the authoritative lifecycle expiration mechanism.  It queries
+        the repository for RANKED lifecycles whose available_at precedes
+        ``as_of - active_max_age_minutes`` and appends an EXPIRED transition
+        event to each one.
+        """
+        stale_before = as_of - timedelta(minutes=active_max_age_minutes)
+        stale = await self._lifecycles.list_stale_lifecycles(
+            stale_before=stale_before,
+            limit=batch_limit,
+        )
+        if not stale:
+            return ()
+
+        expired: list[OpportunityLifecycle] = []
+        for lifecycle in stale:
+            try:
+                result = await self._expire_one(lifecycle, as_of)
+                expired.append(result)
+            except Exception:
+                logger.exception(
+                    "lifecycle_expire_failed opportunity_id=%s",
+                    lifecycle.opportunity_id,
+                )
+        return tuple(expired)
+
+    async def _expire_one(
+        self,
+        lifecycle: OpportunityLifecycle,
+        as_of: datetime,
+    ) -> OpportunityLifecycle:
+        """Append an EXPIRED event to one RANKED lifecycle."""
+        current_event = next(
+            e for e in lifecycle.events if e.event_id == lifecycle.current_event_id
+        )
+
+        source_refs = (
+            IntegrityReference(
+                artifact_id=lifecycle.current_event_id,
+                artifact_type="lifecycle_event",
+                artifact_version="1.0.0",
+                integrity_digest=lifecycle.canonical_sha256(),
+                available_at=current_event.available_at,
+            ),
+        )
+
+        cutoff = current_event.audit.evidence_cutoff
+
+        audit = AuditMetadata(
+            created_at=as_of,
+            evidence_cutoff=cutoff,
+            available_at=as_of,
+            provenance=Provenance(
+                source_references=source_refs,
+                policy_references=(self._policy,),
+                code_version=self._code_version,
+                configuration_hash=self._policy.integrity_digest,
+                lineage_hash=canonical_sha256(source_refs),
+            ),
+            result_hash="0" * 64,
+        )
+
+        event = LifecycleEvent(
+            contract_version="1.0.0",
+            event_id=(
+                f"lifecycle.event."
+                f"{lifecycle.opportunity_id}."
+                f"{len(lifecycle.events) + 1}"
+            ),
+            opportunity_id=lifecycle.opportunity_id,
+            opportunity_version_id=lifecycle.events[-1].opportunity_version_id,
+            prior_state=LifecycleState.RANKED,
+            resulting_state=LifecycleState.EXPIRED,
+            sequence=len(lifecycle.events) + 1,
+            policy=self._policy,
+            reason_code="opportunity.expired",
+            occurred_at=as_of,
+            available_at=as_of,
+            assessment_reference=current_event.assessment_reference,
+            evidence_references=current_event.evidence_references,
+            predecessor_event_id=current_event.event_id,
+            successor_opportunity_version_id=None,
+            audit=audit,
+        )
+
+        event = replace(
+            event,
+            audit=replace(
+                audit,
+                result_hash=canonical_sha256(
+                    event,
+                    exclude=frozenset({"result_hash"}),
+                ),
+            ),
+        )
+
+        events = (*lifecycle.events, event)
+        lifecycle_audit = AuditMetadata(
+            created_at=as_of,
+            evidence_cutoff=cutoff,
+            available_at=as_of,
+            provenance=Provenance(
+                source_references=source_refs,
+                policy_references=(self._policy,),
+                code_version=self._code_version,
+                configuration_hash=self._policy.integrity_digest,
+                lineage_hash=canonical_sha256(source_refs),
+            ),
+            result_hash="0" * 64,
+        )
+
+        provisional = OpportunityLifecycle(
+            contract_version="1.0.0",
+            opportunity_id=lifecycle.opportunity_id,
+            scope=lifecycle.scope,
+            direction=lifecycle.direction,
+            identity_policy=lifecycle.identity_policy,
+            originating_candidate_id=lifecycle.originating_candidate_id,
+            initial_evidence_cutoff=lifecycle.initial_evidence_cutoff,
+            events=events,
+            current_event_id=event.event_id,
+            current_state=LifecycleState.EXPIRED,
+            audit=lifecycle_audit,
+        )
+
+        lifecycle = replace(
+            provisional,
+            audit=replace(
+                lifecycle_audit,
+                result_hash=canonical_sha256(
+                    provisional,
+                    exclude=frozenset({"result_hash"}),
+                ),
+            ),
+        )
+
+        await self._lifecycles.save_event(event)
+        await self._lifecycles.save(lifecycle)
+
+        return lifecycle
+
+
+logger = logging.getLogger("alphalens.runtime_lifecycle")

@@ -2,6 +2,7 @@
 
 import asyncio
 from contextlib import asynccontextmanager, suppress
+from datetime import datetime, timezone
 import logging
 
 from sqlalchemy import text
@@ -16,6 +17,7 @@ from app.opportunity_intelligence.api import create_opportunity_intelligence_app
 from app.opportunity_intelligence.domain import MarketSnapshot
 from app.opportunity_intelligence.persistence import (
     DashboardProjectionPostgreSQLRepository,
+    LifecyclePostgreSQLRepository,
     MarketSnapshotPostgreSQLRepository,
     OpportunityDetailPostgreSQLRepository,
     OpportunityPlanPostgreSQLRepository,
@@ -93,10 +95,12 @@ opportunity_app = create_opportunity_intelligence_app(
     plans_repository=OpportunityPlanPostgreSQLRepository(session_factory),
     governance_repository=RuntimeGovernancePostgreSQLRepository(session_factory),
     market_repository=market_snapshot_repository,
+    lifecycle_repository=LifecyclePostgreSQLRepository(session_factory),
 )
 _mvp_paths = {
     "/api/v1/opportunities",
     "/api/v1/opportunities/{opportunity_id}",
+    "/api/v1/opportunities/history",
     "/api/v1/opportunity-intelligence/health",
     "/health",
     "/markets/live",
@@ -132,6 +136,42 @@ async def _try_load_expected_move_inference():
     return None
 
 
+_SWEEP_INTERVAL_SECONDS = 60
+_ACTIVE_MAX_AGE_MINUTES = 10
+
+
+async def _run_lifecycle_sweep(stop_event: asyncio.Event) -> None:
+    """Periodically expire stale RANKED lifecycles to EXPIRED."""
+    from app.runtime_lifecycle import RuntimeLifecycleService
+    from app.opportunity_intelligence.persistence import LifecyclePostgreSQLRepository
+
+    lifecycle_repo = LifecyclePostgreSQLRepository(session_factory)
+    lifecycle_service = RuntimeLifecycleService(lifecycles=lifecycle_repo)
+
+    while not stop_event.is_set():
+        try:
+            await asyncio.wait_for(
+                stop_event.wait(), timeout=_SWEEP_INTERVAL_SECONDS
+            )
+            break
+        except asyncio.TimeoutError:
+            pass
+
+        try:
+            as_of = datetime.now(timezone.utc)
+            expired = await lifecycle_service.expire_stale(
+                as_of=as_of,
+                active_max_age_minutes=_ACTIVE_MAX_AGE_MINUTES,
+            )
+            if expired:
+                logger.info(
+                    "lifecycle_sweep_expired count=%d",
+                    len(expired),
+                )
+        except Exception:
+            logger.exception("lifecycle_sweep_failed")
+
+
 @asynccontextmanager
 async def _infrastructure_lifespan(application):
     global _runtime_pipeline
@@ -155,13 +195,21 @@ async def _infrastructure_lifespan(application):
             )
             application.state.live_market_ingestion = live_market_ingestion
             application.state.live_market_ingestion_task = ingestion_task
+            lifecycle_sweep_task = asyncio.create_task(
+                _run_lifecycle_sweep(stop_event),
+                name="alphalens-lifecycle-sweep",
+            )
+            application.state.lifecycle_sweep_task = lifecycle_sweep_task
             try:
                 yield
             finally:
                 stop_event.set()
                 ingestion_task.cancel()
+                lifecycle_sweep_task.cancel()
                 with suppress(asyncio.CancelledError):
                     await ingestion_task
+                with suppress(asyncio.CancelledError):
+                    await lifecycle_sweep_task
     finally:
         await redis_infrastructure.close()
 

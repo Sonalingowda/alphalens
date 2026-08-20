@@ -624,6 +624,32 @@ class LifecyclePostgreSQLRepository(
             next_cursor=page.next_cursor,
         )
 
+    async def list_stale_lifecycles(
+        self,
+        *,
+        stale_before: datetime,
+        limit: int,
+    ) -> tuple[OpportunityLifecycle, ...]:
+        """Return RANKED lifecycles whose available_at precedes stale_before."""
+        statement = self._base_select().where(
+            ImmutableAggregateRecord.available_at < stale_before,
+        )
+        try:
+            async with self._sessions() as session:
+                rows = (await session.scalars(self._ordered(statement))).all()
+        except SQLAlchemyError as error:
+            raise StorageUnavailableError(
+                "Lifecycle stale query failed."
+            ) from error
+        results: list[OpportunityLifecycle] = []
+        for row in rows:
+            lifecycle = self._decode(row)
+            if lifecycle.current_state is LifecycleState.RANKED:
+                results.append(lifecycle)
+                if len(results) >= limit:
+                    break
+        return tuple(results)
+
 
 @dataclass(frozen=True, slots=True)
 class _DeliveryAttemptEnvelope(CanonicalModel):

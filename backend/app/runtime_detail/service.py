@@ -24,6 +24,7 @@ Design constraints enforced here:
 """
 
 from dataclasses import dataclass, replace
+from decimal import Decimal
 
 from app.opportunity_intelligence.domain import (
     AuditMetadata,
@@ -41,6 +42,7 @@ from app.opportunity_intelligence.domain import (
     canonical_sha256,
 )
 from app.opportunity_intelligence.repositories import (
+    EntityAsOfQuery,
     EntityId,
     EntityNotFoundError,
     EvidenceRepository,
@@ -48,6 +50,7 @@ from app.opportunity_intelligence.repositories import (
     MarketSnapshotRepository,
     OpportunityDetailRepository,
     OpportunityRepository,
+    ScoringRepository,
 )
 from app.opportunity_intelligence.repositories.projections import ExplanationRepository
 from app.opportunity_intelligence.services import (
@@ -100,6 +103,7 @@ class RuntimeOpportunityDetailProjectionService:
         evidence: EvidenceRepository,
         explanations: ExplanationRepository,
         details: OpportunityDetailRepository,
+        scores: ScoringRepository | None = None,
         code_version: str,
     ) -> None:
         if not code_version.strip():
@@ -110,6 +114,7 @@ class RuntimeOpportunityDetailProjectionService:
         self._evidence = evidence
         self._explanations = explanations
         self._details = details
+        self._scores = scores
         self._code_version = code_version
 
     async def project(
@@ -204,6 +209,7 @@ class RuntimeOpportunityDetailProjectionService:
             historical_references=(),
             verification_status=_VERIFICATION_STATUS,
             audit=audit,
+            quality_score=await self._resolve_quality_score(persisted.opportunity),
         )
 
         # --- Compute result_hash before single atomic write ---
@@ -258,6 +264,24 @@ class RuntimeOpportunityDetailProjectionService:
                 )
 
         return _PersistedInputs(p_opp, p_market, p_context, p_evidence, p_explanation)
+
+    async def _resolve_quality_score(
+        self,
+        opportunity: Opportunity,
+    ) -> "Decimal | None":
+        """Resolve numeric quality score from the scoring repository."""
+        if self._scores is None:
+            return None
+        try:
+            score = await self._scores.get_latest_for_opportunity(
+                EntityAsOfQuery(
+                    EntityId(opportunity.opportunity_version_id),
+                    opportunity.audit.evidence_cutoff,
+                )
+            )
+            return score.aggregate_value
+        except EntityNotFoundError:
+            return None
 
 
 # ---------------------------------------------------------------------------

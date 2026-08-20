@@ -1,4 +1,4 @@
-"""Tests for RuntimeLifecycleService.advance().
+"""Tests for RuntimeLifecycleService.advance() and expire_stale().
 
 Covers the critical scenario that caused the live pipeline failure:
   - opportunity with qualification_reference=None (the pipeline-produced state)
@@ -8,10 +8,15 @@ Covers the critical scenario that caused the live pipeline failure:
   - qualification identity mismatch (when qualification_reference IS present)
   - ranking membership missing
   - non-QUALIFIED outcome
+  - expire_stale transitions RANKED to EXPIRED
+  - expire_stale preserves terminal states
+  - expire_stale returns empty for no stale items
+  - expire_stale respects batch_limit
 """
 
 import unittest
 from dataclasses import replace
+from datetime import datetime, timedelta, timezone
 
 from app.opportunity_intelligence.domain import (
     IntegrityReference,
@@ -156,6 +161,116 @@ class RuntimeLifecycleServiceTests(unittest.IsolatedAsyncioTestCase):
 
         with self.assertRaises(ServiceContractError):
             await service.advance(opportunity, not_qualified, ranking, None)
+
+
+class LifecycleExpireStaleTests(unittest.IsolatedAsyncioTestCase):
+    """Tests for RuntimeLifecycleService.expire_stale()."""
+
+    STALE_NOW = datetime(2025, 1, 1, 0, 20, 0, tzinfo=timezone.utc)
+    FRESH_NOW = datetime(2025, 1, 1, 0, 12, 0, tzinfo=timezone.utc)
+
+    async def _ranked_lifecycle(self):
+        """Create a ranked lifecycle and the service."""
+        fixture, opportunity, qualification, ranking, service, lifecycles = (
+            await _lifecycle_fixture()
+        )
+        lifecycle = await service.advance(opportunity, qualification, ranking, None)
+        return service, lifecycles, lifecycle, opportunity
+
+    async def test_stale_lifecycle_transitions_to_expired(self):
+        """RANKED lifecycle older than 10 minutes becomes EXPIRED."""
+        service, lifecycles, lifecycle, _ = await self._ranked_lifecycle()
+
+        stale_as_of = self.STALE_NOW
+        expired = await service.expire_stale(
+            as_of=stale_as_of,
+            active_max_age_minutes=10,
+        )
+
+        self.assertEqual(len(expired), 1)
+        self.assertEqual(expired[0].current_state, LifecycleState.EXPIRED)
+        self.assertEqual(expired[0].opportunity_id, lifecycle.opportunity_id)
+        self.assertEqual(len(expired[0].events), 4)
+
+        from app.opportunity_intelligence.repositories.queries import EntityAsOfQuery, EntityId
+        stored = await lifecycles.get_current(
+            EntityAsOfQuery(EntityId(lifecycle.opportunity_id), stale_as_of)
+        )
+        self.assertEqual(stored.current_state, LifecycleState.EXPIRED)
+
+    async def test_fresh_lifecycle_not_expired(self):
+        """RANKED lifecycle younger than 10 minutes remains RANKED."""
+        service, lifecycles, lifecycle, _ = await self._ranked_lifecycle()
+
+        fresh_as_of = self.FRESH_NOW
+        expired = await service.expire_stale(
+            as_of=fresh_as_of,
+            active_max_age_minutes=10,
+        )
+
+        self.assertEqual(len(expired), 0)
+        from app.opportunity_intelligence.repositories.queries import EntityAsOfQuery, EntityId
+        stored = await lifecycles.get_current(
+            EntityAsOfQuery(EntityId(lifecycle.opportunity_id), fresh_as_of)
+        )
+        self.assertEqual(stored.current_state, LifecycleState.RANKED)
+
+    async def test_expire_stale_returns_empty_when_no_stale(self):
+        """expire_stale returns empty tuple when nothing is stale."""
+        service, _, _, _ = await self._ranked_lifecycle()
+
+        expired = await service.expire_stale(
+            as_of=self.FRESH_NOW,
+            active_max_age_minutes=10,
+        )
+        self.assertEqual(expired, ())
+
+    async def test_expire_stale_respects_batch_limit(self):
+        """expire_stale processes at most batch_limit items."""
+        service, _, _, _ = await self._ranked_lifecycle()
+
+        expired = await service.expire_stale(
+            as_of=self.STALE_NOW,
+            active_max_age_minutes=10,
+            batch_limit=0,
+        )
+        self.assertEqual(expired, ())
+
+    async def test_expired_lifecycle_event_has_correct_reason(self):
+        """The EXPIRED event uses reason_code opportunity.expired."""
+        service, _, lifecycle, _ = await self._ranked_lifecycle()
+
+        expired = await service.expire_stale(
+            as_of=self.STALE_NOW,
+            active_max_age_minutes=10,
+        )
+
+        expire_event = expired[0].events[-1]
+        self.assertEqual(expire_event.reason_code, "opportunity.expired")
+        self.assertEqual(expire_event.resulting_state, LifecycleState.EXPIRED)
+        self.assertEqual(expire_event.prior_state, LifecycleState.RANKED)
+
+    async def test_expired_lifecycle_preserves_direction(self):
+        """EXPIRED lifecycle preserves original direction."""
+        service, _, lifecycle, _ = await self._ranked_lifecycle()
+
+        expired = await service.expire_stale(
+            as_of=self.STALE_NOW,
+            active_max_age_minutes=10,
+        )
+
+        self.assertEqual(expired[0].direction, lifecycle.direction)
+
+    async def test_expired_lifecycle_preserves_scope(self):
+        """EXPIRED lifecycle preserves original scope."""
+        service, _, lifecycle, _ = await self._ranked_lifecycle()
+
+        expired = await service.expire_stale(
+            as_of=self.STALE_NOW,
+            active_max_age_minutes=10,
+        )
+
+        self.assertEqual(expired[0].scope, lifecycle.scope)
 
 
 if __name__ == "__main__":

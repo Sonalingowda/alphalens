@@ -53,6 +53,7 @@ export default async function OpportunityDetailPage({
   const confidence = opportunity.confidence ?? null;
   const reasonCodes = opportunity.reason_codes ?? [];
   const scoreReference = opportunity.score_reference ?? null;
+  const qualityScore = detail.quality_score ?? null;
   const explanation = extractExplanation(detail.explanation);
   const planTargets = plan?.targets ?? [];
   const evidenceItems = detail.evidence.items ?? [];
@@ -140,10 +141,17 @@ export default async function OpportunityDetailPage({
             <CardHeader>
               <CardTitle>Quality / score</CardTitle>
               <CardDescription>
-                Persisted score reference returned by the opportunity detail API.
+                Persisted quality score and score reference for this opportunity.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
+              {qualityScore && (
+                <PlanFact
+                  label="Quality"
+                  value={`${qualityScore}`}
+                  mono
+                />
+              )}
               <PlanFact
                 label="Score reference"
                 value={

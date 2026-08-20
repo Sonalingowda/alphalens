@@ -1,5 +1,6 @@
 """Repository ports for ranking, plans, lifecycle, and notifications."""
 
+from datetime import datetime
 from typing import Protocol, runtime_checkable
 
 from app.opportunity_intelligence.domain import (
@@ -83,6 +84,15 @@ class LifecycleRepository(
 
     async def get_current(self, query: EntityAsOfQuery) -> OpportunityLifecycle:
         """Return unique current lifecycle or raise not-found/version conflict."""
+        ...
+
+    async def list_stale_lifecycles(
+        self,
+        *,
+        stale_before: datetime,
+        limit: int,
+    ) -> tuple[OpportunityLifecycle, ...]:
+        """Return RANKED lifecycles whose available_at precedes stale_before."""
         ...
 
     async def history(

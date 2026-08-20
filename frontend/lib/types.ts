@@ -489,6 +489,7 @@ export type OpportunityDetail = {
   };
   verification_status: string;
   audit: AuditMetadata;
+  quality_score?: string | null;
 };
 
 export type MvpHealth = {
