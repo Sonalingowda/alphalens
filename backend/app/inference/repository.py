@@ -7,8 +7,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.inference.artifact import (
+    PackagedExpectedMoveInference,
     PackagedRidgeInference,
     hash_json,
+    load_expected_move_inference_artifact,
     load_ridge_inference_artifact,
 )
 from app.persistence.models import ModelInferenceArtifactRecord
@@ -30,6 +32,17 @@ class LoadedProductionArtifact:
     validation_run_id: UUID
     split_hash: str
     inference: PackagedRidgeInference
+
+
+@dataclass(frozen=True, slots=True)
+class LoadedExpectedMoveArtifact:
+    artifact_id: UUID
+    configuration_hash: str
+    artifact_sha256: str
+    state_sha256: str
+    model_family: str
+    feature_pipeline_version: str
+    inference: PackagedExpectedMoveInference
 
 
 async def load_production_artifact(
@@ -74,6 +87,46 @@ async def load_production_artifact(
         ),
         validation_run_id=record.validation_run_id,
         split_hash=record.split_hash,
+        inference=inference,
+    )
+
+
+async def load_expected_move_artifact(
+    session: AsyncSession,
+    *,
+    model_family: str = "expected_move_ridge",
+) -> LoadedExpectedMoveArtifact | None:
+    """Load the expected-move artifact if present, or return None.
+
+    Returns None when no expected-move artifact has been packaged yet,
+    allowing the pipeline to fall back to V1.1 behavior.
+    """
+    record = (
+        await session.scalars(
+            select(ModelInferenceArtifactRecord).where(
+                ModelInferenceArtifactRecord.model_family == model_family
+            )
+        )
+    ).one_or_none()
+    if record is None:
+        return None
+    if (
+        hash_json(record.artifact_payload) != record.artifact_sha256
+        or hash_json(record.artifact_payload["core"])
+        != record.state_sha256
+    ):
+        raise ValueError("Expected-move inference artifact failed hash verification.")
+    inference = load_expected_move_inference_artifact(
+        record.artifact_payload,
+        expected_artifact_sha256=record.artifact_sha256,
+    )
+    return LoadedExpectedMoveArtifact(
+        artifact_id=record.id,
+        configuration_hash=record.configuration_hash,
+        artifact_sha256=record.artifact_sha256,
+        state_sha256=record.state_sha256,
+        model_family=record.model_family,
+        feature_pipeline_version=record.feature_pipeline_version,
         inference=inference,
     )
 

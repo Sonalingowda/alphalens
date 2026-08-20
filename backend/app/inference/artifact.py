@@ -11,6 +11,12 @@ import numpy as np
 
 
 INFERENCE_ARTIFACT_VERSION = "1.0.0"
+EXPECTED_MOVE_ARTIFACT_VERSION = "2.0.0"
+EXPECTED_MOVE_MODEL_FAMILY = "expected_move_ridge"
+EXPECTED_MOVE_HORIZON_CANDLES = 5
+EXPECTED_MOVE_HORIZON_MINUTES = 25
+EXPECTED_MOVE_MIN_SNR = Decimal("1.0")
+EXPECTED_MOVE_MAX_RR = Decimal("3.0")
 
 
 @dataclass(frozen=True, slots=True)
@@ -180,4 +186,171 @@ def _float_array(value: object) -> np.ndarray:
     if not np.all(np.isfinite(array)):
         raise ValueError("Inference numeric state is non-finite.")
     return array
+
+
+@dataclass(frozen=True, slots=True)
+class ExpectedMovePrediction:
+    """Deterministic expected-move prediction with signal-to-noise ratio."""
+
+    value: float
+    float_hex: str
+    snr: float
+
+    def __post_init__(self) -> None:
+        if not math.isfinite(self.value) or self.value < 0:
+            raise ValueError("Expected move prediction must be non-negative finite.")
+        if not math.isfinite(self.snr):
+            raise ValueError("Expected move SNR must be finite.")
+
+
+@dataclass(frozen=True, slots=True)
+class PackagedExpectedMoveInference:
+    """Fit-free expected-move Ridge inference using immutable numeric state."""
+
+    feature_names: tuple[str, ...]
+    scaler_means: np.ndarray
+    scaler_scales: np.ndarray
+    coefficients: np.ndarray
+    intercept: float
+    residual_std: float
+    artifact_sha256: str
+    state_sha256: str
+
+    def predict(
+        self,
+        feature_values: tuple[Decimal | float, ...],
+    ) -> ExpectedMovePrediction:
+        return self.predict_batch((feature_values,))[0]
+
+    def predict_mapping(
+        self,
+        feature_values: Mapping[str, Decimal | float],
+    ) -> ExpectedMovePrediction:
+        if set(feature_values) != set(self.feature_names):
+            raise ValueError("Feature mapping does not match artifact schema.")
+        return self.predict(
+            tuple(feature_values[name] for name in self.feature_names)
+        )
+
+    def predict_batch(
+        self,
+        rows: tuple[tuple[Decimal | float, ...], ...],
+    ) -> tuple[ExpectedMovePrediction, ...]:
+        if not rows or any(
+            len(row) != len(self.feature_names) for row in rows
+        ):
+            raise ValueError("Feature vectors do not match artifact schema.")
+        matrix = np.asarray(
+            [
+                [float(value) for value in row]
+                for row in rows
+            ],
+            dtype=np.float64,
+        )
+        if not np.all(np.isfinite(matrix)):
+            raise ValueError("Feature vectors contain non-finite values.")
+        transformed = matrix.copy()
+        transformed -= self.scaler_means
+        transformed /= self.scaler_scales
+        predicted = np.asarray(
+            np.maximum(
+                transformed @ self.coefficients + self.intercept,
+                0.0,
+            ),
+            dtype=np.float64,
+        )
+        if not np.all(np.isfinite(predicted)):
+            raise ValueError("Artifact produced a non-finite prediction.")
+        if self.residual_std <= 0:
+            raise ValueError("Residual std must be positive.")
+        snr_values = predicted / self.residual_std
+        return tuple(
+            ExpectedMovePrediction(
+                value=float(value),
+                float_hex=float(value).hex(),
+                snr=float(snr),
+            )
+            for value, snr in zip(predicted, snr_values)
+        )
+
+
+def load_expected_move_inference_artifact(
+    payload: dict[str, Any],
+    *,
+    expected_artifact_sha256: str,
+) -> PackagedExpectedMoveInference:
+    """Verify and load an expected-move artifact without importing training code."""
+    if hash_json(payload) != expected_artifact_sha256:
+        raise ValueError("Expected-move inference artifact SHA-256 differs.")
+    if (
+        payload.get("artifact_version") != EXPECTED_MOVE_ARTIFACT_VERSION
+        or payload.get("model_family") != EXPECTED_MOVE_MODEL_FAMILY
+    ):
+        raise ValueError("Unsupported expected-move inference artifact.")
+    core = payload.get("core")
+    state_hash = payload.get("state_sha256")
+    if (
+        not isinstance(core, dict)
+        or not isinstance(state_hash, str)
+        or hash_json(core) != state_hash
+    ):
+        raise ValueError("Expected-move artifact state hash differs.")
+    schema = core.get("ordered_feature_schema")
+    state = core.get("numeric_state")
+    if not isinstance(schema, list) or not isinstance(state, dict):
+        raise ValueError("Expected-move artifact structure is incomplete.")
+    names = tuple(item["name"] for item in schema)
+    means = _float_array(state.get("scaler_means_float_hex"))
+    scales = _float_array(state.get("scaler_scales_float_hex"))
+    coefficients = _float_array(
+        state.get("ridge_coefficients_float_hex")
+    )
+    intercept_hex = state.get("ridge_intercept_float_hex")
+    if not isinstance(intercept_hex, str):
+        raise ValueError("Expected-move intercept is absent.")
+    intercept = float.fromhex(intercept_hex)
+    residual_std_hex = state.get("residual_std_float_hex")
+    if not isinstance(residual_std_hex, str):
+        raise ValueError("Expected-move residual_std is absent.")
+    residual_std = float.fromhex(residual_std_hex)
+    if (
+        not names
+        or len(set(names)) != len(names)
+        or len(means) != len(names)
+        or len(scales) != len(names)
+        or len(coefficients) != len(names)
+        or np.any(scales <= 0)
+        or not math.isfinite(intercept)
+        or not math.isfinite(residual_std)
+        or residual_std <= 0
+    ):
+        raise ValueError("Expected-move artifact dimensions are invalid.")
+    for array in (means, scales, coefficients):
+        array.setflags(write=False)
+    return PackagedExpectedMoveInference(
+        feature_names=names,
+        scaler_means=means,
+        scaler_scales=scales,
+        coefficients=coefficients,
+        intercept=intercept,
+        residual_std=residual_std,
+        artifact_sha256=expected_artifact_sha256,
+        state_sha256=state_hash,
+    )
+
+
+def build_expected_move_artifact_envelope(
+    *,
+    core: dict[str, Any],
+    created_at_iso: str,
+) -> tuple[dict[str, Any], str]:
+    state_hash = hash_json(core)
+    payload = {
+        "artifact_version": EXPECTED_MOVE_ARTIFACT_VERSION,
+        "model_family": EXPECTED_MOVE_MODEL_FAMILY,
+        "created_at": created_at_iso,
+        "state_sha256": state_hash,
+        "core": core,
+    }
+    return payload, hash_json(payload)
 

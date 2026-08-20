@@ -1,7 +1,9 @@
-"""Repository-backed implementation of Runtime Qualification Policy v1.0."""
+"""Repository-backed implementation of Runtime Qualification Policy v1.0 and v2.0."""
 
 from dataclasses import replace
+from decimal import Decimal
 
+from app.inference.artifact import EXPECTED_MOVE_MIN_SNR
 from app.opportunity_intelligence.domain import (
     AuditMetadata,
     ContextStatus,
@@ -356,4 +358,245 @@ def _policy() -> PolicyReference:
         RUNTIME_QUALIFICATION_POLICY_ID,
         RUNTIME_QUALIFICATION_POLICY_VERSION,
         RUNTIME_QUALIFICATION_POLICY_HASH,
+    )
+
+
+# ---------------------------------------------------------------------------
+# V2: Expected-Move Qualification Service
+# ---------------------------------------------------------------------------
+
+RUNTIME_QUALIFICATION_V2_POLICY_ID = "alphalens_runtime_qualification_v2"
+RUNTIME_QUALIFICATION_V2_POLICY_VERSION = "2.0.0"
+RUNTIME_QUALIFICATION_V2_POLICY_HASH = (
+    "0" * 64  # placeholder until policy document is ratified
+)
+_V2_PLAN_CONTRACT_VERSION = "2.0.0"
+
+
+class RuntimeQualificationServiceV2:
+    """Persist deterministic structural qualification with expected-move gate.
+
+    V2 adds a fifth gate to the V1.0 qualification:
+        qualification.expected_move_viable  →  SNR >= 1.0
+
+    All four V1.0 gates remain unchanged.
+    """
+
+    def __init__(
+        self,
+        *,
+        opportunities: OpportunityRepository,
+        evidence: EvidenceRepository,
+        market_contexts: MarketContextRepository,
+        feature_snapshots: FeatureSnapshotRepository,
+        market_snapshots: MarketSnapshotRepository,
+        qualifications: QualificationRepository,
+        code_version: str,
+        policy: PolicyReference | None = None,
+    ) -> None:
+        if not code_version.strip():
+            raise ValueError("Runtime qualification V2 code version must be non-empty.")
+        self._opportunities = opportunities
+        self._evidence = evidence
+        self._market_contexts = market_contexts
+        self._feature_snapshots = feature_snapshots
+        self._market_snapshots = market_snapshots
+        self._qualifications = qualifications
+        self._code_version = code_version
+        self._policy = policy if policy is not None else _v2_policy()
+
+    async def qualify(
+        self,
+        opportunity: Opportunity,
+        evidence: EvidencePackage,
+        market_context: MarketContext,
+    ) -> QualificationRecord:
+        """Verify persisted lineage, apply V1.0 gates plus expected-move gate."""
+        if self._policy != _v2_policy():
+            raise PolicyUnavailableError("Qualification policy v2.0.0 is unavailable.")
+        try:
+            persisted_opportunity = await self._opportunities.get_by_id(
+                EntityId(opportunity.opportunity_version_id)
+            )
+            persisted_evidence = await self._evidence.get_by_candidate_id(
+                EntityId(opportunity.candidate_id)
+            )
+            context = await self._market_contexts.get_by_id(
+                EntityId(market_context.context_id)
+            )
+            sources = _sources(persisted_opportunity)
+            market = await self._market_snapshots.get_by_id(
+                EntityId(sources["market_snapshot"].artifact_id)
+            )
+            features = await self._feature_snapshots.get_by_id(
+                EntityId(sources["feature_snapshot"].artifact_id)
+            )
+        except EntityNotFoundError as error:
+            raise ServiceUnavailableError(
+                "Qualification requires all referenced persisted artifacts."
+            ) from error
+        for supplied, persisted, label in (
+            (opportunity, persisted_opportunity, "opportunity"),
+            (evidence, persisted_evidence, "evidence package"),
+            (market_context, context, "market context"),
+        ):
+            if supplied.canonical_sha256() != persisted.canonical_sha256():
+                raise ServiceContractError(
+                    f"Persisted {label} conflicts with qualification input."
+                )
+        _validate(persisted_opportunity, persisted_evidence, context, features, market)
+        snr_gate = _validate_expected_move(persisted_opportunity)
+        record = _record_v2(
+            persisted_opportunity,
+            persisted_evidence,
+            context,
+            features,
+            market,
+            self._policy,
+            self._code_version,
+            snr_gate,
+        )
+        return await self._qualifications.save(record)
+
+
+def _validate_expected_move(
+    opportunity: Opportunity,
+) -> QualificationGateResult:
+    """Fifth gate: expected-move SNR >= 1.0 when V2 plan is present."""
+    plan = opportunity.plan
+    if plan is None or plan.expected_move_confidence is None:
+        raise ServiceContractError(
+            "Qualification V2 requires a V2 plan with expected-move confidence."
+        )
+    snr = plan.expected_move_confidence
+    if not isinstance(snr, Decimal):
+        snr = Decimal(str(snr))
+    references = (
+        _reference(
+            opportunity.opportunity_version_id, "opportunity", opportunity
+        ),
+    )
+    if snr >= EXPECTED_MOVE_MIN_SNR:
+        return QualificationGateResult(
+            "qualification.expected_move_viable",
+            "expected_move_viable",
+            QualificationStatus.PASS,
+            references,
+            "qualification.expected_move_snr_above_threshold",
+        )
+    return QualificationGateResult(
+        "qualification.expected_move_viable",
+        "expected_move_viable",
+        QualificationStatus.FAIL,
+        references,
+        "qualification.expected_move_snr_below_threshold",
+    )
+
+
+def _record_v2(
+    opportunity: Opportunity,
+    evidence: EvidencePackage,
+    context: MarketContext,
+    features: FeatureSnapshot,
+    market: MarketSnapshot,
+    policy: PolicyReference,
+    code_version: str,
+    snr_gate: QualificationGateResult,
+) -> QualificationRecord:
+    sources = opportunity.audit.provenance.source_references
+    assessment_reference = _reference(
+        opportunity.opportunity_version_id, "opportunity", opportunity
+    )
+    evidence_reference = _reference(evidence.package_id, "evidence_package", evidence)
+    context_reference = _reference(context.context_id, "market_context", context)
+    common_references = (
+        assessment_reference,
+        evidence_reference,
+        context_reference,
+        _reference(features.snapshot_id, "feature_snapshot", features),
+        _reference(market.snapshot_id, "market_snapshot", market),
+    )
+    gates = (
+        QualificationGateResult(
+            "qualification.persisted_inputs",
+            "persisted_inputs",
+            QualificationStatus.PASS,
+            common_references,
+            "qualification.persisted_inputs_verified",
+        ),
+        QualificationGateResult(
+            "qualification.assessment_policy",
+            "assessment_policy",
+            QualificationStatus.PASS,
+            (assessment_reference,),
+            "qualification.assessment_policy_verified",
+        ),
+        QualificationGateResult(
+            "qualification.evidence_lineage",
+            "evidence_lineage",
+            QualificationStatus.PASS,
+            common_references[1:],
+            "qualification.evidence_lineage_verified",
+        ),
+        QualificationGateResult(
+            "qualification.scope_chronology",
+            "scope_chronology",
+            QualificationStatus.PASS,
+            common_references,
+            "qualification.scope_chronology_verified",
+        ),
+        snr_gate,
+    )
+    all_passed = all(
+        gate.status is QualificationStatus.PASS for gate in gates
+    )
+    outcome = (
+        QualificationOutcome.QUALIFIED
+        if all_passed
+        else QualificationOutcome.EXCLUDED
+    )
+    audit = AuditMetadata(
+        created_at=opportunity.audit.evidence_cutoff,
+        evidence_cutoff=opportunity.audit.evidence_cutoff,
+        available_at=opportunity.audit.evidence_cutoff,
+        provenance=Provenance(
+            source_references=sources,
+            policy_references=(policy,),
+            code_version=code_version,
+            configuration_hash=RUNTIME_QUALIFICATION_V2_POLICY_HASH,
+            lineage_hash=canonical_sha256(sources),
+        ),
+        result_hash="0" * 64,
+    )
+    record = QualificationRecord(
+        contract_version=_V2_PLAN_CONTRACT_VERSION,
+        qualification_id=f"qualification.runtime_v2.{opportunity.assessment_id}",
+        assessment_reference=assessment_reference,
+        context_reference=context_reference,
+        evidence_package_reference=evidence_reference,
+        policy=policy,
+        gate_results=gates,
+        outcome=outcome,
+        exclusions=(
+            ()
+            if all_passed
+            else ("qualification.expected_move_snr_below_threshold",)
+        ),
+        limitations=opportunity.limitations,
+        audit=audit,
+    )
+    return replace(
+        record,
+        audit=replace(
+            audit,
+            result_hash=canonical_sha256(record, exclude=frozenset({"result_hash"})),
+        ),
+    )
+
+
+def _v2_policy() -> PolicyReference:
+    return PolicyReference(
+        RUNTIME_QUALIFICATION_V2_POLICY_ID,
+        RUNTIME_QUALIFICATION_V2_POLICY_VERSION,
+        RUNTIME_QUALIFICATION_V2_POLICY_HASH,
     )

@@ -12,10 +12,10 @@ from app.opportunity_intelligence.domain.primitives import (
     MarketScope,
     PolicyReference,
     PriceRange,
-    validate_contract_version,
     validate_decimal,
     validate_identifier,
     validate_non_empty_tuple,
+    validate_plan_contract_version,
     validate_unique_identifiers,
     validate_utc,
 )
@@ -66,9 +66,12 @@ class OpportunityPlan(CanonicalModel):
     limitations: tuple[str, ...]
     valid_until: datetime | None
     audit: AuditMetadata
+    expected_move_prediction: Decimal | None = None
+    expected_move_confidence: Decimal | None = None
+    prediction_horizon_minutes: int | None = None
 
     def __post_init__(self) -> None:
-        validate_contract_version(self.contract_version)
+        validate_plan_contract_version(self.contract_version)
         for name, value in (
             ("Plan identifier", self.plan_id),
             ("Plan opportunity identifier", self.opportunity_id),
@@ -125,3 +128,20 @@ class OpportunityPlan(CanonicalModel):
             raise DomainValidationError(
                 "Plan target evidence is unavailable at the evidence cutoff."
             )
+        if self.expected_move_prediction is not None:
+            validate_decimal(
+                self.expected_move_prediction,
+                "Plan expected move prediction",
+                non_negative=True,
+            )
+        if self.expected_move_confidence is not None:
+            validate_decimal(
+                self.expected_move_confidence,
+                "Plan expected move confidence",
+                non_negative=True,
+            )
+        if self.prediction_horizon_minutes is not None:
+            if self.prediction_horizon_minutes <= 0:
+                raise DomainValidationError(
+                    "Plan prediction horizon must be positive."
+                )

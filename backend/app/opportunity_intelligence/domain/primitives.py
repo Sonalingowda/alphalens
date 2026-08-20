@@ -11,6 +11,8 @@ from typing import Any, Mapping
 
 
 CONTRACT_VERSION = "1.0.0"
+VALID_PLAN_CONTRACT_VERSIONS = frozenset({"1.0.0", "2.0.0"})
+DECIMAL_QUANTUM = Decimal("0.000000000000000001")
 DECIMAL_QUANTUM = Decimal("0.000000000000000001")
 _SEMVER_PATTERN = re.compile(
     r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$"
@@ -118,6 +120,13 @@ def validate_contract_version(value: str) -> None:
     if value != CONTRACT_VERSION:
         raise DomainValidationError(
             f"Contract version must be exactly {CONTRACT_VERSION}."
+        )
+
+
+def validate_plan_contract_version(value: str) -> None:
+    if value not in VALID_PLAN_CONTRACT_VERSIONS:
+        raise DomainValidationError(
+            f"contract_version must be one of {sorted(VALID_PLAN_CONTRACT_VERSIONS)}, got '{value}'"
         )
 
 
