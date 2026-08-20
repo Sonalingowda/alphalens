@@ -275,6 +275,7 @@ export type OpportunityDashboardItem = {
   has_plan: boolean;
   limitations: string[];
   detail_reference: string;
+  quality_score?: string | null;
 };
 
 export type IntegrityReference = {
@@ -342,6 +343,7 @@ export type OpportunityPlan = {
   limitations: string[];
   valid_until?: string | null;
   audit: AuditMetadata;
+  expected_move_confidence?: string | null;
 };
 
 export type ConfidenceRecord = {

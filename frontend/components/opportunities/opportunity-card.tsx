@@ -62,11 +62,15 @@ export function OpportunityCard({
   plan,
   currentPrice,
   confidence,
+  snr,
+  quality,
 }: {
   item: OpportunityDashboardItem;
   plan?: OpportunityPlan | null;
   currentPrice?: string | null;
   confidence?: string | null;
+  snr?: string | null;
+  quality?: string | null;
 }) {
   const bullish = item.stance === "BUY";
   const DirectionIcon = bullish ? ArrowUpRight : ArrowDownRight;
@@ -141,9 +145,9 @@ export function OpportunityCard({
                 {age}
               </span>
               <span>
-                Confidence: {confidence ?? "Unavailable"}
+                SNR: {snr ? `${Number(snr).toFixed(2)}x` : "Unavailable"}
               </span>
-              <span>Quality: Unavailable</span>
+              <span>Quality: {quality ?? "Unavailable"}</span>
             </div>
           </div>
 

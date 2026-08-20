@@ -14,6 +14,8 @@ import type {
 type Enrichment = {
   plan: OpportunityPlan | null;
   confidence: string | null;
+  snr: string | null;
+  quality: string | null;
 };
 
 const POLL_INTERVAL_MS = 15_000;
@@ -84,6 +86,8 @@ export function OpportunityFeed({
             plan={enrich?.plan ?? null}
             currentPrice={currentPrice}
             confidence={enrich?.confidence ?? null}
+            snr={enrich?.snr ?? null}
+            quality={enrich?.quality ?? null}
           />
         );
       })}

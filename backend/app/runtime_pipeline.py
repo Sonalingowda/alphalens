@@ -191,6 +191,7 @@ def build_runtime_pipeline(
         lifecycles=lifecycles,
         dashboard=dashboard_repo,
         plans=plans,
+        scores=scores,
         code_version=_CODE_VERSION,
     )
     detail_service = RuntimeOpportunityDetailProjectionService(

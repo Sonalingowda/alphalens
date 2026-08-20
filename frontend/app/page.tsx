@@ -18,6 +18,8 @@ import type {
 type OpportunityEnrichment = {
   plan: OpportunityPlan | null;
   confidence: string | null;
+  snr: string | null;
+  quality: string | null;
 };
 
 type DashboardSearchParams = Promise<{
@@ -138,8 +140,10 @@ async function loadOpportunityEnrichments(
 ): Promise<Map<string, OpportunityEnrichment>> {
   const entries = await Promise.all(
     items.map(async (item) => {
+      const quality = item.quality_score ?? null;
+
       if (!item.has_plan) {
-        return [item.opportunity_id, { plan: null, confidence: null }] as const;
+        return [item.opportunity_id, { plan: null, confidence: null, snr: null, quality }] as const;
       }
 
       const detailResult = await getOpportunityDetail(
@@ -148,7 +152,7 @@ async function loadOpportunityEnrichments(
       );
 
       if (!detailResult.ok) {
-        return [item.opportunity_id, { plan: null, confidence: null }] as const;
+        return [item.opportunity_id, { plan: null, confidence: null, snr: null, quality }] as const;
       }
 
       const detail = detailResult.data;
@@ -157,8 +161,10 @@ async function loadOpportunityEnrichments(
       const confidence = confidenceVal
         ? `${confidenceVal}`
         : null;
+      const snrVal = plan?.expected_move_confidence ?? null;
+      const snr = snrVal ? `${snrVal}` : null;
 
-      return [item.opportunity_id, { plan, confidence }] as const;
+      return [item.opportunity_id, { plan, confidence, snr, quality }] as const;
     }),
   );
 

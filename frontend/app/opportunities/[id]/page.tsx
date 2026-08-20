@@ -114,6 +114,20 @@ export default async function OpportunityDetailPage({
             }
           />
           <Fact
+            icon={Gauge}
+            label="SNR"
+            value={
+              plan?.expected_move_confidence
+                ? `${Number(plan.expected_move_confidence).toFixed(2)}x`
+                : "Unavailable"
+            }
+            detail={
+              plan?.expected_move_confidence
+                ? "Signal-to-noise ratio from expected-move model"
+                : "No expected-move model output available for this opportunity."
+            }
+          />
+          <Fact
             icon={Database}
             label="Result hash"
             value={shortHash(detail.audit.result_hash)}

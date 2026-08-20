@@ -724,5 +724,278 @@ class TestRiskRewardGate(unittest.TestCase):
         self.assertEqual(gate.reason_code, "qualification.risk_reward_above_threshold")
 
 
+class TestDashboardItemQualityScore(unittest.TestCase):
+    """Verify DashboardItem quality_score field behavior."""
+
+    def _make_dashboard_item(self, *, quality_score=None):
+        from app.opportunity_intelligence.domain.presentation import DashboardItem
+        from app.opportunity_intelligence.domain.primitives import (
+            AuditMetadata,
+            IntegrityReference,
+            MarketScope,
+            Provenance,
+            PolicyReference,
+        )
+        from app.opportunity_intelligence.domain.stances import OpportunityStance
+        from app.opportunity_intelligence.domain.lifecycle import LifecycleState
+        from datetime import datetime, timezone
+
+        now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        scope = MarketScope(instrument="BTCUSDT", timeframe="5m")
+        policy = PolicyReference("test", "1.0.0", "0" * 64)
+        source = IntegrityReference(
+            artifact_id="src.test.1",
+            artifact_type="evidence_package",
+            artifact_version="1.0.0",
+            integrity_digest="0" * 64,
+            available_at=now,
+        )
+        ranking_ref = IntegrityReference(
+            artifact_id="ranking.test.1",
+            artifact_type="ranking_snapshot",
+            artifact_version="1.0.0",
+            integrity_digest="0" * 64,
+            available_at=now,
+        )
+        audit = AuditMetadata(
+            created_at=now,
+            evidence_cutoff=now,
+            available_at=now,
+            provenance=Provenance(
+                source_references=(source,),
+                policy_references=(policy,),
+                code_version="test",
+                configuration_hash="0" * 64,
+                lineage_hash="0" * 64,
+            ),
+            result_hash="0" * 64,
+        )
+        return DashboardItem(
+            opportunity_id="opp.test.1",
+            opportunity_version_id="oppv.test.1",
+            scope=scope,
+            stance=OpportunityStance.BUY,
+            lifecycle_state=LifecycleState.PUBLISHED,
+            evidence_cutoff=now,
+            available_at=now,
+            freshness_state="current",
+            rank=1,
+            ranking_snapshot_reference=ranking_ref,
+            score_reference=source,
+            confidence_reference=None,
+            reason_codes=("test",),
+            has_plan=True,
+            limitations=("test",),
+            detail_reference="oppv.test.1",
+            quality_score=quality_score,
+        )
+
+    def test_quality_score_included_when_set(self) -> None:
+        from decimal import Decimal
+        item = self._make_dashboard_item(quality_score=Decimal("72"))
+        d = item.to_dict()
+        self.assertIn("quality_score", d)
+        self.assertEqual(d["quality_score"], "72")
+
+    def test_quality_score_omitted_when_none(self) -> None:
+        item = self._make_dashboard_item(quality_score=None)
+        d = item.to_dict()
+        self.assertNotIn("quality_score", d)
+
+    def test_quality_score_none_by_default(self) -> None:
+        item = self._make_dashboard_item()
+        self.assertIsNone(item.quality_score)
+
+
+class TestV2PlanSNRNotConfidence(unittest.TestCase):
+    """Verify expected_move_confidence is SNR, not a calibrated probability."""
+
+    def test_snr_field_semantics(self) -> None:
+        from app.opportunity_intelligence.domain.plan import OpportunityPlan, PlanTarget
+        from app.opportunity_intelligence.domain.primitives import (
+            AuditMetadata,
+            IntegrityReference,
+            MarketScope,
+            PolicyReference,
+            PriceRange,
+            Provenance,
+        )
+        from app.opportunity_intelligence.domain.stances import OpportunityStance
+        from datetime import datetime, timezone
+        from decimal import Decimal
+
+        now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        scope = MarketScope(instrument="BTCUSDT", timeframe="5m")
+        policy = PolicyReference("test", "1.0.0", "0" * 64)
+        source = IntegrityReference(
+            artifact_id="src.test.1",
+            artifact_type="evidence_package",
+            artifact_version="1.0.0",
+            integrity_digest="0" * 64,
+            available_at=now,
+        )
+        audit = AuditMetadata(
+            created_at=now,
+            evidence_cutoff=now,
+            available_at=now,
+            provenance=Provenance(
+                source_references=(source,),
+                policy_references=(policy,),
+                code_version="test",
+                configuration_hash="0" * 64,
+                lineage_hash="0" * 64,
+            ),
+            result_hash="0" * 64,
+        )
+        target = PlanTarget(
+            target_id="plan.test.1.tp1",
+            price=Decimal("125.000000000000000000"),
+            potential_reward=Decimal("25.000000000000000000"),
+            risk_reward=Decimal("2.500000000000000000"),
+            evidence_references=(source,),
+        )
+        plan = OpportunityPlan(
+            contract_version="2.0.0",
+            plan_id="plan.test.1",
+            opportunity_id="opp.test.1",
+            assessment_id="assess.test.1",
+            decision_id="decision.test.1",
+            policy=policy,
+            scope=scope,
+            direction=OpportunityStance.BUY,
+            reference_price=Decimal("100.000000000000000000"),
+            reference_price_source=source,
+            entry_zone=PriceRange(
+                lower=Decimal("100.000000000000000000"),
+                upper=Decimal("100.000000000000000000"),
+            ),
+            entry_semantics="reference_price_exact",
+            invalidation_price=Decimal("90.000000000000000000"),
+            invalidation_condition="price_below_invalidation",
+            targets=(target,),
+            risk=Decimal("10.000000000000000000"),
+            risk_unit="price_distance",
+            assumptions=("test",),
+            limitations=("test",),
+            valid_until=None,
+            audit=audit,
+            expected_move_prediction=Decimal("15.000000000000000000"),
+            expected_move_confidence=Decimal("2.5"),
+            prediction_horizon_minutes=25,
+        )
+        d = plan.to_dict()
+        self.assertEqual(d["expected_move_confidence"], "2.5")
+        self.assertNotEqual(d.get("confidence"), "2.5")
+
+    def test_snr_serialized_as_expected_move_confidence(self) -> None:
+        from app.inference.artifact import PackagedExpectedMoveInference
+        import numpy as np
+        from decimal import Decimal
+
+        inference = PackagedExpectedMoveInference(
+            feature_names=("f1",),
+            scaler_means=np.zeros(1, dtype=np.float64),
+            scaler_scales=np.ones(1, dtype=np.float64),
+            coefficients=np.array([0.005], dtype=np.float64),
+            intercept=0.0,
+            residual_std=0.001,
+            artifact_sha256="a" * 64,
+            state_sha256="b" * 64,
+        )
+        prediction = inference.predict((Decimal("1.0"),))
+        expected_snr = prediction.value / 0.001
+        self.assertAlmostEqual(prediction.snr, expected_snr, places=6)
+        self.assertGreater(prediction.snr, 0)
+
+
+class TestScoreResultAggregateValue(unittest.TestCase):
+    """Verify ScoreResult aggregate_value is a legitimate ordinal quality metric."""
+
+    def test_aggregate_value_range(self) -> None:
+        from app.opportunity_intelligence.domain.scoring import ScoreResult
+        from app.opportunity_intelligence.domain.primitives import (
+            AuditMetadata,
+            DecimalRange,
+            IntegrityReference,
+            PolicyReference,
+            Provenance,
+        )
+        from datetime import datetime, timezone
+        from decimal import Decimal
+
+        now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        policy = PolicyReference("test", "1.0.0", "0" * 64)
+        source = IntegrityReference(
+            artifact_id="src.test.1",
+            artifact_type="evidence_package",
+            artifact_version="1.0.0",
+            integrity_digest="0" * 64,
+            available_at=now,
+        )
+        qual_ref = IntegrityReference(
+            artifact_id="qual.test.1",
+            artifact_type="qualification_record",
+            artifact_version="1.0.0",
+            integrity_digest="0" * 64,
+            available_at=now,
+        )
+        opp_ref = IntegrityReference(
+            artifact_id="opp.test.1",
+            artifact_type="opportunity",
+            artifact_version="1.0.0",
+            integrity_digest="0" * 64,
+            available_at=now,
+        )
+        audit = AuditMetadata(
+            created_at=now,
+            evidence_cutoff=now,
+            available_at=now,
+            provenance=Provenance(
+                source_references=(source,),
+                policy_references=(policy,),
+                code_version="test",
+                configuration_hash="0" * 64,
+                lineage_hash="0" * 64,
+            ),
+            result_hash="0" * 64,
+        )
+        from app.opportunity_intelligence.domain.scoring import (
+            ScoreComponent,
+            ScoreComponentAvailability,
+        )
+        component = ScoreComponent(
+            component_id="opportunity_quality",
+            component_version="1.0.0",
+            meaning="ordinal_opportunity_priority",
+            availability=ScoreComponentAvailability.AVAILABLE,
+            source_evidence=(qual_ref, opp_ref, source),
+            raw_value=Decimal("72"),
+            normalized_value=Decimal("72"),
+            weight=Decimal("1"),
+            contribution=Decimal("72"),
+            normalization_reference=None,
+            weight_reference=None,
+            limitations=("scoring.confidence_unavailable",),
+            component_hash="0" * 64,
+        )
+        score = ScoreResult(
+            contract_version="1.0.0",
+            score_id="score.test.1",
+            opportunity_id="oppv.test.1",
+            qualification_reference=qual_ref,
+            policy=policy,
+            components=(component,),
+            aggregation_definition="ordinal_quality_v1",
+            aggregate_value=Decimal("72"),
+            aggregate_unit="ordinal_priority",
+            valid_domain=DecimalRange(Decimal("50"), Decimal("100")),
+            missing_input_disposition="unavailable_no_score_result",
+            audit=audit,
+        )
+        self.assertGreaterEqual(score.aggregate_value, Decimal("50"))
+        self.assertLessEqual(score.aggregate_value, Decimal("100"))
+        self.assertEqual(score.aggregate_unit, "ordinal_priority")
+
+
 if __name__ == "__main__":
     unittest.main()

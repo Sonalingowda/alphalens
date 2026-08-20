@@ -48,6 +48,7 @@ class DashboardItem(CanonicalModel):
     has_plan: bool
     limitations: tuple[str, ...]
     detail_reference: str
+    quality_score: Decimal | None = None
 
     def __post_init__(self) -> None:
         validate_identifier(self.opportunity_id, "Dashboard opportunity identifier")

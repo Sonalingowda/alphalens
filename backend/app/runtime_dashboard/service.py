@@ -42,6 +42,7 @@ from app.opportunity_intelligence.repositories import (
     OpportunityPlanRepository,
     OpportunityRepository,
     RankingRepository,
+    ScoringRepository,
 )
 from app.opportunity_intelligence.services import (
     ServiceContractError,
@@ -88,6 +89,7 @@ class RuntimeDashboardProjectionService:
         lifecycles: LifecycleRepository,
         dashboard: DashboardProjectionRepository,
         plans: OpportunityPlanRepository | None = None,
+        scores: ScoringRepository | None = None,
         code_version: str,
     ) -> None:
         if not code_version.strip():
@@ -99,6 +101,7 @@ class RuntimeDashboardProjectionService:
         self._lifecycles = lifecycles
         self._dashboard = dashboard
         self._plans = plans
+        self._scores = scores
         self._code_version = code_version
 
     async def project(
@@ -177,6 +180,11 @@ class RuntimeDashboardProjectionService:
                 as_of=persisted_ranking.audit.evidence_cutoff,
             )
             score_ref = membership.score_reference
+            quality_score = await _resolve_quality_score(
+                scores=self._scores,
+                score_reference=score_ref,
+                as_of=persisted_ranking.audit.evidence_cutoff,
+            )
             items.append(
                 DashboardItem(
                     opportunity_id=resolved_opp.opportunity_id,
@@ -195,6 +203,7 @@ class RuntimeDashboardProjectionService:
                     has_plan=resolved_opp.plan is not None,
                     limitations=resolved_opp.limitations,
                     detail_reference=resolved_opp.opportunity_version_id,
+                    quality_score=quality_score,
                 )
             )
 
@@ -275,6 +284,26 @@ async def _resolve_persisted_plan(
     except EntityNotFoundError:
         return replace(opp, plan=None)
     return replace(opp, plan=plan)
+
+
+async def _resolve_quality_score(
+    *,
+    scores: ScoringRepository | None,
+    score_reference: IntegrityReference,
+    as_of,
+) -> "Decimal | None":
+    """Return the existing ScoreResult.aggregate_value when the repository is wired.
+
+    Returns None when the scores repository is unavailable, the score reference
+    is missing, or the score cannot be loaded.  This never invents a value.
+    """
+    if scores is None or score_reference is None:
+        return None
+    try:
+        score = await scores.get_by_id(EntityId(score_reference.artifact_id))
+    except EntityNotFoundError:
+        return None
+    return score.aggregate_value
 
 
 # ---------------------------------------------------------------------------
