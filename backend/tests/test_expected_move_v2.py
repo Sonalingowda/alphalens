@@ -16,6 +16,7 @@ from app.inference.artifact import (
     hash_json,
     load_expected_move_inference_artifact,
 )
+from app.opportunity_intelligence.domain import QualificationStatus
 
 
 class TestExpectedMoveArtifact(unittest.TestCase):
@@ -426,6 +427,301 @@ class TestPlanContractVersion(unittest.TestCase):
         )
         with self.assertRaises(DomainValidationError):
             validate_plan_contract_version("1.1.0")
+
+
+class TestRiskRewardGate(unittest.TestCase):
+    """Verify the R:R quality gate rejects weak opportunities (R:R < 2.0)."""
+
+    def test_min_rr_constant(self) -> None:
+        from app.inference.artifact import EXPECTED_MOVE_MIN_RR
+        self.assertEqual(EXPECTED_MOVE_MIN_RR, Decimal("2.0"))
+
+    def _make_opportunity(
+        self,
+        plan,
+        *,
+        opportunity_id: str = "opp.test.1",
+        opportunity_version_id: str = "oppv.test.1",
+    ):
+        from app.opportunity_intelligence.domain import Opportunity
+        from app.opportunity_intelligence.domain.primitives import (
+            AuditMetadata,
+            IntegrityReference,
+            PolicyReference,
+            Provenance,
+        )
+        from app.opportunity_intelligence.domain.stances import OpportunityStance
+        from datetime import datetime, timezone
+
+        now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        policy = PolicyReference("test", "1.0.0", "0" * 64)
+        source = IntegrityReference(
+            artifact_id="src.test.1",
+            artifact_type="evidence_package",
+            artifact_version="1.0.0",
+            integrity_digest="0" * 64,
+            available_at=now,
+        )
+        audit = AuditMetadata(
+            created_at=now,
+            evidence_cutoff=now,
+            available_at=now,
+            provenance=Provenance(
+                source_references=(source,),
+                policy_references=(policy,),
+                code_version="test",
+                configuration_hash="0" * 64,
+                lineage_hash="0" * 64,
+            ),
+            result_hash="0" * 64,
+        )
+        return Opportunity(
+            contract_version="1.0.0",
+            opportunity_id=opportunity_id,
+            opportunity_version_id=opportunity_version_id,
+            assessment_id="assess.test.1",
+            decision_id="decision.test.1",
+            candidate_id="cand.test.1",
+            scope=plan.scope,
+            stance=OpportunityStance.BUY,
+            decision_policy=policy,
+            evidence_package_reference=source,
+            context_reference=source,
+            reason_codes=("test",),
+            limitations=("test",),
+            qualification_reference=None,
+            score_reference=None,
+            confidence=None,
+            plan=plan,
+            valid_until=None,
+            supersedes_opportunity_version_id=None,
+            audit=audit,
+        )
+
+    def test_rr_gate_passes_above_threshold(self) -> None:
+        from app.runtime_qualification.service import _validate_risk_reward
+        from app.opportunity_intelligence.domain.plan import OpportunityPlan, PlanTarget
+        from app.opportunity_intelligence.domain.primitives import (
+            AuditMetadata,
+            IntegrityReference,
+            MarketScope,
+            PolicyReference,
+            PriceRange,
+            Provenance,
+        )
+        from app.opportunity_intelligence.domain.stances import OpportunityStance
+        from datetime import datetime, timezone
+
+        now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        scope = MarketScope(instrument="BTCUSDT", timeframe="5m")
+        policy = PolicyReference("test", "1.0.0", "0" * 64)
+        source = IntegrityReference(
+            artifact_id="src.test.1",
+            artifact_type="evidence_package",
+            artifact_version="1.0.0",
+            integrity_digest="0" * 64,
+            available_at=now,
+        )
+        audit = AuditMetadata(
+            created_at=now,
+            evidence_cutoff=now,
+            available_at=now,
+            provenance=Provenance(
+                source_references=(source,),
+                policy_references=(policy,),
+                code_version="test",
+                configuration_hash="0" * 64,
+                lineage_hash="0" * 64,
+            ),
+            result_hash="0" * 64,
+        )
+        target = PlanTarget(
+            target_id="plan.test.1.tp1",
+            price=Decimal("125.000000000000000000"),
+            potential_reward=Decimal("25.000000000000000000"),
+            risk_reward=Decimal("2.500000000000000000"),
+            evidence_references=(source,),
+        )
+        plan = OpportunityPlan(
+            contract_version="2.0.0",
+            plan_id="plan.test.1",
+            opportunity_id="opp.test.1",
+            assessment_id="assess.test.1",
+            decision_id="decision.test.1",
+            policy=policy,
+            scope=scope,
+            direction=OpportunityStance.BUY,
+            reference_price=Decimal("100.000000000000000000"),
+            reference_price_source=source,
+            entry_zone=PriceRange(
+                lower=Decimal("100.000000000000000000"),
+                upper=Decimal("100.000000000000000000"),
+            ),
+            entry_semantics="reference_price_exact",
+            invalidation_price=Decimal("90.000000000000000000"),
+            invalidation_condition="price_below_invalidation",
+            targets=(target,),
+            risk=Decimal("10.000000000000000000"),
+            risk_unit="price_distance",
+            assumptions=("test",),
+            limitations=("test",),
+            valid_until=None,
+            audit=audit,
+        )
+        opportunity = self._make_opportunity(plan)
+        gate = _validate_risk_reward(opportunity)
+        self.assertIs(gate.status, QualificationStatus.PASS)
+        self.assertEqual(gate.reason_code, "qualification.risk_reward_above_threshold")
+
+    def test_rr_gate_fails_below_threshold(self) -> None:
+        from app.runtime_qualification.service import _validate_risk_reward
+        from app.opportunity_intelligence.domain.plan import OpportunityPlan, PlanTarget
+        from app.opportunity_intelligence.domain.primitives import (
+            AuditMetadata,
+            IntegrityReference,
+            MarketScope,
+            PolicyReference,
+            PriceRange,
+            Provenance,
+        )
+        from app.opportunity_intelligence.domain.stances import OpportunityStance
+        from datetime import datetime, timezone
+
+        now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        scope = MarketScope(instrument="BTCUSDT", timeframe="5m")
+        policy = PolicyReference("test", "1.0.0", "0" * 64)
+        source = IntegrityReference(
+            artifact_id="src.test.1",
+            artifact_type="evidence_package",
+            artifact_version="1.0.0",
+            integrity_digest="0" * 64,
+            available_at=now,
+        )
+        audit = AuditMetadata(
+            created_at=now,
+            evidence_cutoff=now,
+            available_at=now,
+            provenance=Provenance(
+                source_references=(source,),
+                policy_references=(policy,),
+                code_version="test",
+                configuration_hash="0" * 64,
+                lineage_hash="0" * 64,
+            ),
+            result_hash="0" * 64,
+        )
+        target = PlanTarget(
+            target_id="plan.test.1.tp1",
+            price=Decimal("115.000000000000000000"),
+            potential_reward=Decimal("15.000000000000000000"),
+            risk_reward=Decimal("1.500000000000000000"),
+            evidence_references=(source,),
+        )
+        plan = OpportunityPlan(
+            contract_version="2.0.0",
+            plan_id="plan.test.1",
+            opportunity_id="opp.test.1",
+            assessment_id="assess.test.1",
+            decision_id="decision.test.1",
+            policy=policy,
+            scope=scope,
+            direction=OpportunityStance.BUY,
+            reference_price=Decimal("100.000000000000000000"),
+            reference_price_source=source,
+            entry_zone=PriceRange(
+                lower=Decimal("100.000000000000000000"),
+                upper=Decimal("100.000000000000000000"),
+            ),
+            entry_semantics="reference_price_exact",
+            invalidation_price=Decimal("90.000000000000000000"),
+            invalidation_condition="price_below_invalidation",
+            targets=(target,),
+            risk=Decimal("10.000000000000000000"),
+            risk_unit="price_distance",
+            assumptions=("test",),
+            limitations=("test",),
+            valid_until=None,
+            audit=audit,
+        )
+        opportunity = self._make_opportunity(plan)
+        gate = _validate_risk_reward(opportunity)
+        self.assertIs(gate.status, QualificationStatus.FAIL)
+        self.assertEqual(gate.reason_code, "qualification.risk_reward_below_threshold")
+
+    def test_rr_gate_exact_threshold_passes(self) -> None:
+        from app.runtime_qualification.service import _validate_risk_reward
+        from app.opportunity_intelligence.domain.plan import OpportunityPlan, PlanTarget
+        from app.opportunity_intelligence.domain.primitives import (
+            AuditMetadata,
+            IntegrityReference,
+            MarketScope,
+            PolicyReference,
+            PriceRange,
+            Provenance,
+        )
+        from app.opportunity_intelligence.domain.stances import OpportunityStance
+        from datetime import datetime, timezone
+
+        now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        scope = MarketScope(instrument="BTCUSDT", timeframe="5m")
+        policy = PolicyReference("test", "1.0.0", "0" * 64)
+        source = IntegrityReference(
+            artifact_id="src.test.1",
+            artifact_type="evidence_package",
+            artifact_version="1.0.0",
+            integrity_digest="0" * 64,
+            available_at=now,
+        )
+        audit = AuditMetadata(
+            created_at=now,
+            evidence_cutoff=now,
+            available_at=now,
+            provenance=Provenance(
+                source_references=(source,),
+                policy_references=(policy,),
+                code_version="test",
+                configuration_hash="0" * 64,
+                lineage_hash="0" * 64,
+            ),
+            result_hash="0" * 64,
+        )
+        target = PlanTarget(
+            target_id="plan.test.1.tp1",
+            price=Decimal("120.000000000000000000"),
+            potential_reward=Decimal("20.000000000000000000"),
+            risk_reward=Decimal("2.000000000000000000"),
+            evidence_references=(source,),
+        )
+        plan = OpportunityPlan(
+            contract_version="2.0.0",
+            plan_id="plan.test.1",
+            opportunity_id="opp.test.1",
+            assessment_id="assess.test.1",
+            decision_id="decision.test.1",
+            policy=policy,
+            scope=scope,
+            direction=OpportunityStance.BUY,
+            reference_price=Decimal("100.000000000000000000"),
+            reference_price_source=source,
+            entry_zone=PriceRange(
+                lower=Decimal("100.000000000000000000"),
+                upper=Decimal("100.000000000000000000"),
+            ),
+            entry_semantics="reference_price_exact",
+            invalidation_price=Decimal("90.000000000000000000"),
+            invalidation_condition="price_below_invalidation",
+            targets=(target,),
+            risk=Decimal("10.000000000000000000"),
+            risk_unit="price_distance",
+            assumptions=("test",),
+            limitations=("test",),
+            valid_until=None,
+            audit=audit,
+        )
+        opportunity = self._make_opportunity(plan)
+        gate = _validate_risk_reward(opportunity)
+        self.assertIs(gate.status, QualificationStatus.PASS)
+        self.assertEqual(gate.reason_code, "qualification.risk_reward_above_threshold")
 
 
 if __name__ == "__main__":

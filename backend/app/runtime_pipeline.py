@@ -47,10 +47,14 @@ from app.runtime_detection import RuntimeOpportunityDetectionService
 from app.runtime_evidence import RuntimeEvidenceService
 from app.runtime_features import RuntimeFeatureEngine
 from app.runtime_indicators import RuntimeIndicatorService
+from app.inference.repository import load_expected_move_artifact
+from app.inference.artifact import PackagedExpectedMoveInference
 from app.runtime_notification import RuntimeNotificationService
 from app.runtime_lifecycle import RuntimeLifecycleService
 from app.runtime_opportunity_plan import RuntimeOpportunityPlanService
+from app.runtime_opportunity_plan.service import RuntimeOpportunityPlanServiceV2
 from app.runtime_qualification import RuntimeQualificationService
+from app.runtime_qualification.service import RuntimeQualificationServiceV2
 from app.runtime_ranking import RuntimeRankingService
 from app.runtime_scoring import RuntimeScoringService
 
@@ -65,12 +69,19 @@ _PIPELINE_SCOPE = MarketScope(instrument="BTCUSDT", timeframe="5m")
 
 def build_runtime_pipeline(
     session_factory: async_sessionmaker[AsyncSession],
+    *,
+    expected_move_inference: "PackagedExpectedMoveInference | None" = None,
 ) -> "RuntimeIntelligencePipeline":
     """Construct the fully-wired runtime intelligence pipeline.
 
     All repositories are PostgreSQL-backed.  This factory is called once at
     application startup and the returned object is held for the lifetime of
     the process.
+
+    When *expected_move_inference* is provided the V2 plan and qualification
+    services are used (model-derived target, SNR gate, R:R gate).  Otherwise
+    the V1.1 services (fixed 1.5R multiplier, four qualification gates) are
+    used.
     """
     market_snapshots = MarketSnapshotPostgreSQLRepository(session_factory)
     feature_snapshots = FeatureSnapshotPostgreSQLRepository(session_factory)
@@ -114,7 +125,33 @@ def build_runtime_pipeline(
         evidence=evidence_repo,
         code_version=_CODE_VERSION,
     )
-    plan_service = RuntimeOpportunityPlanService(code_version=_CODE_VERSION)
+    if expected_move_inference is not None:
+        plan_service = RuntimeOpportunityPlanServiceV2(
+            code_version=_CODE_VERSION,
+            inference=expected_move_inference,
+        )
+        qualification_service = RuntimeQualificationServiceV2(
+            opportunities=opportunities,
+            evidence=evidence_repo,
+            market_contexts=market_contexts,
+            feature_snapshots=feature_snapshots,
+            market_snapshots=market_snapshots,
+            qualifications=qualifications,
+            code_version=_CODE_VERSION,
+        )
+        logger.info("runtime_pipeline_v2_wired")
+    else:
+        plan_service = RuntimeOpportunityPlanService(code_version=_CODE_VERSION)
+        qualification_service = RuntimeQualificationService(
+            opportunities=opportunities,
+            evidence=evidence_repo,
+            market_contexts=market_contexts,
+            feature_snapshots=feature_snapshots,
+            market_snapshots=market_snapshots,
+            qualifications=qualifications,
+            code_version=_CODE_VERSION,
+        )
+        logger.info("runtime_pipeline_v1_wired")
     assessment_service = RuntimeAssessmentService(
         candidates=detections,
         evidence=evidence_repo,
@@ -124,15 +161,6 @@ def build_runtime_pipeline(
         opportunities=opportunities,
         plans_repository=plans,
         plans=plan_service,
-        code_version=_CODE_VERSION,
-    )
-    qualification_service = RuntimeQualificationService(
-        opportunities=opportunities,
-        evidence=evidence_repo,
-        market_contexts=market_contexts,
-        feature_snapshots=feature_snapshots,
-        market_snapshots=market_snapshots,
-        qualifications=qualifications,
         code_version=_CODE_VERSION,
     )
     scoring_service = RuntimeScoringService(

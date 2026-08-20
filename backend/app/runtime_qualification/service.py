@@ -3,7 +3,7 @@
 from dataclasses import replace
 from decimal import Decimal
 
-from app.inference.artifact import EXPECTED_MOVE_MIN_SNR
+from app.inference.artifact import EXPECTED_MOVE_MIN_RR, EXPECTED_MOVE_MIN_SNR
 from app.opportunity_intelligence.domain import (
     AuditMetadata,
     ContextStatus,
@@ -446,6 +446,7 @@ class RuntimeQualificationServiceV2:
                 )
         _validate(persisted_opportunity, persisted_evidence, context, features, market)
         snr_gate = _validate_expected_move(persisted_opportunity)
+        rr_gate = _validate_risk_reward(persisted_opportunity)
         record = _record_v2(
             persisted_opportunity,
             persisted_evidence,
@@ -455,6 +456,7 @@ class RuntimeQualificationServiceV2:
             self._policy,
             self._code_version,
             snr_gate,
+            rr_gate,
         )
         return await self._qualifications.save(record)
 
@@ -493,6 +495,40 @@ def _validate_expected_move(
     )
 
 
+def _validate_risk_reward(
+    opportunity: Opportunity,
+) -> QualificationGateResult:
+    """Sixth gate: risk-reward >= 2.0 when V2 plan is present."""
+    plan = opportunity.plan
+    if plan is None or not plan.targets:
+        raise ServiceContractError(
+            "Qualification V2 requires a V2 plan with at least one target."
+        )
+    risk_reward = plan.targets[0].risk_reward
+    if not isinstance(risk_reward, Decimal):
+        risk_reward = Decimal(str(risk_reward))
+    references = (
+        _reference(
+            opportunity.opportunity_version_id, "opportunity", opportunity
+        ),
+    )
+    if risk_reward >= EXPECTED_MOVE_MIN_RR:
+        return QualificationGateResult(
+            "qualification.risk_reward_viable",
+            "risk_reward_viable",
+            QualificationStatus.PASS,
+            references,
+            "qualification.risk_reward_above_threshold",
+        )
+    return QualificationGateResult(
+        "qualification.risk_reward_viable",
+        "risk_reward_viable",
+        QualificationStatus.FAIL,
+        references,
+        "qualification.risk_reward_below_threshold",
+    )
+
+
 def _record_v2(
     opportunity: Opportunity,
     evidence: EvidencePackage,
@@ -502,6 +538,7 @@ def _record_v2(
     policy: PolicyReference,
     code_version: str,
     snr_gate: QualificationGateResult,
+    rr_gate: QualificationGateResult,
 ) -> QualificationRecord:
     sources = opportunity.audit.provenance.source_references
     assessment_reference = _reference(
@@ -546,6 +583,7 @@ def _record_v2(
             "qualification.scope_chronology_verified",
         ),
         snr_gate,
+        rr_gate,
     )
     all_passed = all(
         gate.status is QualificationStatus.PASS for gate in gates
@@ -580,7 +618,11 @@ def _record_v2(
         exclusions=(
             ()
             if all_passed
-            else ("qualification.expected_move_snr_below_threshold",)
+            else tuple(
+                gate.reason_code
+                for gate in gates
+                if gate.status is not QualificationStatus.PASS
+            )
         ),
         limitations=opportunity.limitations,
         audit=audit,

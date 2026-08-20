@@ -24,6 +24,7 @@ from app.opportunity_intelligence.persistence import (
 from app.opportunity_intelligence.repositories import RepositoryError
 from app.persistence.database import session_factory
 from app.runtime_pipeline import build_runtime_pipeline
+from app.inference.repository import load_expected_move_artifact
 from app.settings import load_settings
 
 
@@ -115,14 +116,38 @@ redis_infrastructure = RedisInfrastructure.from_url(settings.redis_url)
 _application_lifespan = app.router.lifespan_context
 
 
+async def _try_load_expected_move_inference():
+    """Attempt to load the expected-move inference artifact from the database."""
+    try:
+        async with session_factory() as session:
+            loaded = await load_expected_move_artifact(session)
+            if loaded is not None:
+                logger.info(
+                    "expected_move_artifact_loaded artifact_id=%s",
+                    loaded.artifact_id,
+                )
+                return loaded.inference
+    except Exception:
+        logger.exception("expected_move_artifact_load_failed")
+    return None
+
+
 @asynccontextmanager
 async def _infrastructure_lifespan(application):
+    global _runtime_pipeline
     try:
         async with _application_lifespan(application):
             try:
                 await live_market_ingestion.warmup_history()
             except Exception:
                 logger.exception("warmup_history_failed")
+            em_inference = await _try_load_expected_move_inference()
+            if em_inference is not None:
+                _runtime_pipeline = build_runtime_pipeline(
+                    session_factory,
+                    expected_move_inference=em_inference,
+                )
+                logger.info("runtime_pipeline_upgraded_to_v2")
             stop_event = asyncio.Event()
             ingestion_task = asyncio.create_task(
                 live_market_ingestion.run(stop_event),
