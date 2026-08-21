@@ -600,7 +600,14 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
                 return (candle,)
 
         service = OutcomeResolutionService(candle_query=_FakeCandleQuery())
-        result = await service.resolve(opportunity, plan)
+        result = await service.resolve(
+            opportunity_id="opp.test.12345",
+            opportunity_version_id="opp.test.12345.v1",
+            direction="BUY",
+            signal_timestamp=_SIGNAL_TIME,
+            evidence_cutoff=_SIGNAL_TIME,
+            plan=plan,
+        )
 
         self.assertIsInstance(result, OutcomeRecord)
         self.assertEqual(result.outcome, OpportunityOutcome.TARGET_HIT)
@@ -625,71 +632,23 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
                 return (candle,)
 
         service = OutcomeResolutionService(candle_query=_FakeCandleQuery())
-        result = await service.resolve(opportunity, plan)
+        result = await service.resolve(
+            opportunity_id="opp.test.12345",
+            opportunity_version_id="opp.test.12345.v1",
+            direction="BUY",
+            signal_timestamp=_SIGNAL_TIME,
+            evidence_cutoff=_SIGNAL_TIME,
+            plan=plan,
+        )
 
         self.assertEqual(result.outcome, OpportunityOutcome.EXPIRED)
         self.assertIsNone(result.first_touch_price)
 
     async def test_resolve_no_plan_raises(self) -> None:
-        from app.opportunity_intelligence.domain import Opportunity
-        from app.opportunity_intelligence.domain.primitives import AuditMetadata, IntegrityReference, Provenance
+        from dataclasses import replace
+        from app.opportunity_intelligence.domain.plan import OpportunityPlan
 
-        opportunity = Opportunity(
-            contract_version="1.0.0",
-            opportunity_id="opp.no.plan",
-            opportunity_version_id="opp.no.plan.v1",
-            stance=OpportunityStance.BUY,
-            assessment_id="a",
-            decision_id="d",
-            candidate_id="c",
-            scope=MarketScope(instrument="BTCUSDT", timeframe="5m"),
-            decision_policy=_POLICY,
-            evidence_package_reference=IntegrityReference(
-                artifact_id="x",
-                artifact_type="t",
-                artifact_version="1.0.0",
-                integrity_digest="0" * 64,
-                available_at=_SIGNAL_TIME,
-            ),
-            context_reference=IntegrityReference(
-                artifact_id="y",
-                artifact_type="t",
-                artifact_version="1.0.0",
-                integrity_digest="0" * 64,
-                available_at=_SIGNAL_TIME,
-            ),
-            reason_codes=("r",),
-            limitations=("l",),
-            qualification_reference=None,
-            score_reference=None,
-            confidence=None,
-            plan=None,
-            valid_until=None,
-            supersedes_opportunity_version_id=None,
-            audit=AuditMetadata(
-                created_at=_SIGNAL_TIME,
-                evidence_cutoff=_SIGNAL_TIME,
-                available_at=_SIGNAL_TIME,
-                provenance=Provenance(
-                    source_references=(
-                        IntegrityReference(
-                            artifact_id="s",
-                            artifact_type="t",
-                            artifact_version="1.0.0",
-                            integrity_digest="0" * 64,
-                            available_at=_SIGNAL_TIME,
-                        ),
-                    ),
-                    policy_references=(_POLICY,),
-                    code_version="test",
-                    configuration_hash="0" * 64,
-                    lineage_hash="0" * 64,
-                ),
-                result_hash="0" * 64,
-            ),
-        )
-
-        plan = _make_plan()
+        plan_no_valid_until = replace(_make_plan(), valid_until=None)
 
         class _FakeCandleQuery:
             async def query(self, instrument, timeframe, after, up_to_and_including):
@@ -697,7 +656,14 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
 
         service = OutcomeResolutionService(candle_query=_FakeCandleQuery())
         with self.assertRaises(OpportunityOutcomeError):
-            await service.resolve(opportunity, plan)
+            await service.resolve(
+                opportunity_id="opp.test.12345",
+                opportunity_version_id="opp.test.12345.v1",
+                direction="BUY",
+                signal_timestamp=_SIGNAL_TIME,
+                evidence_cutoff=_SIGNAL_TIME,
+                plan=plan_no_valid_until,
+            )
 
 
 class OutcomeMemoryRepositoryTests(unittest.IsolatedAsyncioTestCase):

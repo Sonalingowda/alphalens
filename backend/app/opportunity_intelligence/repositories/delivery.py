@@ -6,6 +6,7 @@ from typing import Protocol, runtime_checkable
 from app.opportunity_intelligence.domain import (
     DeliveryAttempt,
     LifecycleEvent,
+    MarketScope,
     Notification,
     OpportunityLifecycle,
     OpportunityPlan,
@@ -94,6 +95,16 @@ class LifecycleRepository(
         limit: int,
     ) -> tuple[OpportunityLifecycle, ...]:
         """Return RANKED lifecycles whose available_at precedes stale_before."""
+        ...
+
+    async def list_terminal_lifecycles(
+        self,
+        *,
+        scope: "MarketScope",
+        as_of: datetime,
+        limit: int,
+    ) -> tuple[OpportunityLifecycle, ...]:
+        """Return terminal-state lifecycles for a scope, newest available_at first."""
         ...
 
     async def history(

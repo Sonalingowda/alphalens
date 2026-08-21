@@ -174,27 +174,21 @@ def create_opportunity_intelligence_app(
             )
         resolved_as_of = _resolve_as_of(as_of, current_time)
         scope = MarketScope(instrument=instrument, timeframe=timeframe)
-        terminal_states = {
-            LifecycleState.EXPIRED,
-            LifecycleState.SUPERSEDED,
-            LifecycleState.INVALIDATED,
-            LifecycleState.ARCHIVED,
-        }
-        stale_lifecycles = await lifecycle_repository.list_stale_lifecycles(
-            stale_before=resolved_as_of,
+        terminal_lifecycles = await lifecycle_repository.list_terminal_lifecycles(
+            scope=scope,
+            as_of=resolved_as_of,
             limit=limit,
         )
         items: list[dict[str, object]] = []
-        for lc in stale_lifecycles:
-            if lc.current_state in terminal_states and lc.scope == scope:
-                items.append({
-                    "opportunity_id": lc.opportunity_id,
-                    "scope": {"instrument": lc.scope.instrument, "timeframe": lc.scope.timeframe},
-                    "direction": lc.direction.value,
-                    "lifecycle_state": lc.current_state.value,
-                    "available_at": lc.audit.available_at.isoformat(),
-                    "event_count": len(lc.events),
-                })
+        for lc in terminal_lifecycles:
+            items.append({
+                "opportunity_id": lc.opportunity_id,
+                "scope": {"instrument": lc.scope.instrument, "timeframe": lc.scope.timeframe},
+                "direction": lc.direction.value,
+                "lifecycle_state": lc.current_state.value,
+                "available_at": lc.audit.available_at.isoformat(),
+                "event_count": len(lc.events),
+            })
         payload = {
             "contract_version": OPPORTUNITY_API_VERSION,
             "scope": {"instrument": instrument, "timeframe": timeframe},

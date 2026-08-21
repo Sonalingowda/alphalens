@@ -600,7 +600,7 @@ class OpportunityHistoryRouteTests(unittest.TestCase):
         """history endpoint responds 200 instead of 404 (route not captured by {opportunity_id})."""
         from app.opportunity_intelligence.domain import LifecycleState
         lifecycle_repo = SimpleNamespace(
-            list_stale_lifecycles=AsyncMock(return_value=()),
+            list_terminal_lifecycles=AsyncMock(return_value=()),
         )
         client = self._history_client(lifecycle_repository=lifecycle_repo)
         response = client.get(
@@ -641,16 +641,8 @@ class OpportunityHistoryRouteTests(unittest.TestCase):
             audit=SimpleNamespace(available_at=datetime(2025, 1, 1, 0, 0, 0, tzinfo=timezone.utc)),
             events=(),
         )
-        ranked = SimpleNamespace(
-            opportunity_id="opp.ranked",
-            scope=scope,
-            direction=OpportunityStance.SELL,
-            current_state=LifecycleState.RANKED,
-            audit=SimpleNamespace(available_at=datetime(2025, 1, 1, 0, 0, 0, tzinfo=timezone.utc)),
-            events=(),
-        )
         lifecycle_repo = SimpleNamespace(
-            list_stale_lifecycles=AsyncMock(return_value=(expired, ranked)),
+            list_terminal_lifecycles=AsyncMock(return_value=(expired,)),
         )
         client = self._history_client(lifecycle_repository=lifecycle_repo)
         response = client.get(

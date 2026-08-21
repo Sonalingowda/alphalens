@@ -14,7 +14,6 @@ from typing import Protocol
 from app.opportunity_intelligence.domain import (
     AuditMetadata,
     IntegrityReference,
-    Opportunity,
     OpportunityOutcome,
     OpportunityPlan,
     OutcomeRecord,
@@ -148,25 +147,27 @@ class OutcomeResolutionService:
 
     async def resolve(
         self,
-        opportunity: Opportunity,
+        *,
+        opportunity_id: str,
+        opportunity_version_id: str,
+        direction: str,
+        signal_timestamp: datetime,
+        evidence_cutoff: datetime,
         plan: OpportunityPlan,
+        source_integrity_digest: str = "0" * 64,
+        source_contract_version: str = "1.0.0",
     ) -> OutcomeRecord:
         """Resolve the outcome for one V2 opportunity.
 
         The resolution uses ONLY candles after the signal timestamp and up to
         valid_until.  No future information is used.
         """
-        if opportunity.plan is None:
-            raise OpportunityOutcomeError(
-                "Cannot resolve outcome for opportunity without a plan."
-            )
         if plan.valid_until is None:
             raise OpportunityOutcomeError("Cannot resolve outcome for plan without valid_until.")
         if plan.targets is None or len(plan.targets) == 0:
             raise OpportunityOutcomeError("Cannot resolve outcome for plan without targets.")
 
         target_price = plan.targets[0].price
-        signal_timestamp = opportunity.audit.available_at
         valid_until = plan.valid_until
 
         candles_raw = await self._candle_query.query(
@@ -177,7 +178,7 @@ class OutcomeResolutionService:
         )
 
         outcome, candles_evaluated, first_touch_price, first_touch_timestamp, first_touch_candle_index, exclusion_reason = _determine_outcome(
-            direction=opportunity.stance.value,
+            direction=direction,
             reference_price=plan.reference_price,
             entry_zone_lower=plan.entry_zone.lower,
             entry_zone_upper=plan.entry_zone.upper,
@@ -192,17 +193,17 @@ class OutcomeResolutionService:
 
         source_refs = (
             IntegrityReference(
-                artifact_id=opportunity.opportunity_version_id,
+                artifact_id=opportunity_version_id,
                 artifact_type="opportunity_version",
-                artifact_version=opportunity.contract_version,
-                integrity_digest=canonical_sha256(opportunity),
-                available_at=opportunity.audit.available_at,
+                artifact_version=source_contract_version,
+                integrity_digest=source_integrity_digest,
+                available_at=signal_timestamp,
             ),
         )
 
         audit = AuditMetadata(
             created_at=resolved_at,
-            evidence_cutoff=opportunity.audit.evidence_cutoff,
+            evidence_cutoff=evidence_cutoff,
             available_at=resolved_at,
             provenance=Provenance(
                 source_references=source_refs,
@@ -216,12 +217,12 @@ class OutcomeResolutionService:
 
         outcome_record = OutcomeRecord(
             contract_version="2.0.0",
-            outcome_id=f"outcome.{opportunity.opportunity_id}.v1",
-            opportunity_id=opportunity.opportunity_id,
-            opportunity_version_id=opportunity.opportunity_version_id,
-            lifecycle_id=opportunity.opportunity_id,
+            outcome_id=f"outcome.{opportunity_id}.v1",
+            opportunity_id=opportunity_id,
+            opportunity_version_id=opportunity_version_id,
+            lifecycle_id=opportunity_id,
             outcome=outcome,
-            direction=opportunity.stance.value,
+            direction=direction,
             reference_price=plan.reference_price,
             entry_zone_lower=plan.entry_zone.lower,
             entry_zone_upper=plan.entry_zone.upper,

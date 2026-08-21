@@ -486,7 +486,7 @@ class _StubExplanationService:
             targets = plan.targets
             if targets:
                 target = targets[0]
-                rr = plan.risk_reward
+                rr = target.risk_reward
                 rr_text = f" with R:R of {rr}" if rr else ""
                 sentences.append(ExplanationSentence(
                     sentence_id=f"sentence.plan.{opportunity.opportunity_version_id}",
@@ -496,8 +496,8 @@ class _StubExplanationService:
                     ),
                     evidence_references=(evidence_ref,),
                     rendered_text=(
-                        f"The plan targets a move toward {target.expected_reward_level} "
-                        f"from entry near {target.entry_low}{rr_text}."
+                        f"The plan targets a move toward {target.price} "
+                        f"from entry near {plan.entry_zone.lower}{rr_text}."
                     ),
                 ))
                 ordinal += 1

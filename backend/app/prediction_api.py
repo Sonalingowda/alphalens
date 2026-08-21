@@ -231,48 +231,50 @@ async def _resolve_outcome_for_expired(
     plan_repo,
     outcome_repo,
 ) -> None:
-    """Best-effort outcome resolution for one expired lifecycle."""
+    """Best-effort outcome resolution for one expired lifecycle.
+
+    Uses the first lifecycle event (DETECTED) as the signal timestamp,
+    NOT the EXPIRED event.  Skips resolution if plan.valid_until is still
+    in the future to prevent premature outcome determination.
+    """
     from app.opportunity_intelligence.repositories.queries import (
         EntityAsOfQuery,
         EntityId,
     )
 
-    lifecycle_event = next(
-        e for e in lifecycle.events if e.event_id == lifecycle.current_event_id
-    )
+    signal_event = lifecycle.events[0]
     opportunity_id = lifecycle.opportunity_id
 
     plan = await plan_repo.get_latest_for_opportunity(
         EntityAsOfQuery(
             entity_id=EntityId(opportunity_id),
-            as_of=lifecycle_event.available_at,
+            as_of=signal_event.available_at,
         )
     )
 
-    from app.opportunity_intelligence.domain import Opportunity
+    if plan is None:
+        logger.warning(
+            "outcome_resolution_skipped_no_plan opportunity_id=%s",
+            opportunity_id,
+        )
+        return
 
-    opportunity = Opportunity(
-        contract_version="2.0.0",
+    if plan.valid_until is not None and plan.valid_until > datetime.now(timezone.utc):
+        logger.info(
+            "outcome_resolution_skipped_premature opportunity_id=%s valid_until=%s",
+            opportunity_id,
+            plan.valid_until.isoformat(),
+        )
+        return
+
+    outcome_record = await outcome_service.resolve(
         opportunity_id=opportunity_id,
         opportunity_version_id=lifecycle.events[-1].opportunity_version_id,
-        stance=lifecycle.direction,
-        assessment_id="",
-        decision_id="",
-        candidate_id="",
-        evidence_package_reference=lifecycle_event.evidence_references[0] if lifecycle_event.evidence_references else None,
-        context_reference=None,
-        reason_codes=("lifecycle.expired",),
-        limitations=(),
-        qualification_reference=None,
-        score_reference=None,
-        confidence=None,
+        direction=lifecycle.direction.value,
+        signal_timestamp=signal_event.available_at,
+        evidence_cutoff=signal_event.audit.evidence_cutoff,
         plan=plan,
-        valid_until=plan.valid_until,
-        supersedes_opportunity_version_id=None,
-        audit=lifecycle_event.audit,
     )
-
-    outcome_record = await outcome_service.resolve(opportunity, plan)
     await outcome_repo.save(outcome_record)
     logger.info(
         "outcome_resolved opportunity_id=%s outcome=%s",

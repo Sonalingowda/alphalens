@@ -672,6 +672,54 @@ class LifecyclePostgreSQLRepository(
                     break
         return tuple(results)
 
+    async def list_terminal_lifecycles(
+        self,
+        *,
+        scope: MarketScope,
+        as_of: datetime,
+        limit: int,
+    ) -> tuple[OpportunityLifecycle, ...]:
+        """Return terminal-state lifecycles for a scope, newest first."""
+        statement = self._base_select()
+        try:
+            async with self._sessions() as session:
+                rows = (await session.scalars(self._ordered(statement))).all()
+        except SQLAlchemyError as error:
+            raise StorageUnavailableError(
+                "Lifecycle terminal query failed."
+            ) from error
+
+        terminal_states = {
+            LifecycleState.EXPIRED,
+            LifecycleState.SUPERSEDED,
+            LifecycleState.INVALIDATED,
+            LifecycleState.ARCHIVED,
+        }
+        latest_by_logical: dict[str, ImmutableAggregateRecord] = {}
+        for row in rows:
+            lifecycle = self._decode(row)
+            if lifecycle.scope != scope:
+                continue
+            if lifecycle.current_state not in terminal_states:
+                continue
+            existing = latest_by_logical.get(row.logical_id)
+            if existing is None or row.available_at > existing.available_at:
+                latest_by_logical[row.logical_id] = row
+
+        results: list[OpportunityLifecycle] = []
+        sorted_rows = sorted(
+            latest_by_logical.values(),
+            key=lambda r: r.available_at,
+            reverse=True,
+        )
+        for row in sorted_rows:
+            if len(results) >= limit:
+                break
+            if row.available_at <= as_of:
+                lifecycle = self._decode(row)
+                results.append(lifecycle)
+        return tuple(results)
+
 
 @dataclass(frozen=True, slots=True)
 class _DeliveryAttemptEnvelope(CanonicalModel):

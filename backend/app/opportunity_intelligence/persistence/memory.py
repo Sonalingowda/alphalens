@@ -475,6 +475,43 @@ class LifecycleMemoryRepository(InMemoryImmutableRepository[OpportunityLifecycle
                 results.append(record)
         return tuple(results)
 
+    async def list_terminal_lifecycles(
+        self,
+        *,
+        scope: "MarketScope",
+        as_of: datetime,
+        limit: int,
+    ) -> tuple[OpportunityLifecycle, ...]:
+        """Return terminal-state lifecycles for a scope, newest first."""
+        terminal_states = {
+            LifecycleState.EXPIRED,
+            LifecycleState.SUPERSEDED,
+            LifecycleState.INVALIDATED,
+            LifecycleState.ARCHIVED,
+        }
+        latest_by_logical: dict[str, OpportunityLifecycle] = {}
+        for record in self._records.values():
+            if record.scope != scope:
+                continue
+            if record.current_state not in terminal_states:
+                continue
+            lid = self._logical_identity(record)
+            existing = latest_by_logical.get(lid)
+            if existing is None or record.audit.available_at > existing.audit.available_at:
+                latest_by_logical[lid] = record
+        results: list[OpportunityLifecycle] = []
+        sorted_records = sorted(
+            latest_by_logical.values(),
+            key=lambda r: r.audit.available_at,
+            reverse=True,
+        )
+        for record in sorted_records:
+            if len(results) >= limit:
+                break
+            if record.audit.available_at <= as_of:
+                results.append(record)
+        return tuple(results)
+
 
 class OutcomeMemoryRepository(InMemoryImmutableRepository[OutcomeRecord]):
     def __init__(self) -> None:
