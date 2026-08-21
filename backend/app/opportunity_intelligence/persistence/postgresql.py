@@ -24,6 +24,7 @@ from app.opportunity_intelligence.domain import (
     ExplanationArtifact,
     FeatureSnapshot,
     LifecycleEvent,
+    LifecycleState,
     MarketContext,
     MarketScope,
     MarketSnapshot,

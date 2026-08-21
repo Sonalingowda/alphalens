@@ -689,3 +689,342 @@ class RuntimeDetailProjectionServiceTests(unittest.IsolatedAsyncioTestCase):
         # stops the pipeline early.  What matters is the detail service is
         # wired correctly and satisfies the protocol.
         self.assertEqual(ctx.exception.stage.value, "QUALIFICATION")
+
+
+class DetailQualityScoreResolutionTests(unittest.IsolatedAsyncioTestCase):
+    """Verify quality_score is resolved from ScoreResult via correct ID chain.
+
+    The ID chain:
+      - ScoringPostgreSQLRepository stores logical_id = ScoreResult.opportunity_id
+      - ScoreResult.opportunity_id = Opportunity.opportunity_version_id (with .v1)
+      - _resolve_quality_score queries EntityId(opportunity.opportunity_version_id)
+      - latest_for_logical_id matches logical_id == query.entity_id.value
+    """
+
+    async def test_quality_score_resolves_when_score_exists(self) -> None:
+        """Detail projection populates quality_score from matching ScoreResult."""
+        from decimal import Decimal
+        from app.opportunity_intelligence.domain import (
+            AuditMetadata,
+            IntegrityReference,
+            Provenance,
+            ScoreComponent,
+            ScoreComponentAvailability,
+            ScoreResult,
+            canonical_sha256,
+        )
+        from app.opportunity_intelligence.domain.scoring import DecimalRange
+        from app.opportunity_intelligence.persistence import ScoringMemoryRepository
+
+        fixture, opportunity, evidence, explanation, lifecycle, service, details = (
+            await _detail_fixture()
+        )
+
+        cutoff = opportunity.audit.evidence_cutoff
+        opp_ref = IntegrityReference(
+            artifact_id=opportunity.opportunity_version_id,
+            artifact_type="opportunity",
+            artifact_version="1.0.0",
+            integrity_digest=opportunity.canonical_sha256(),
+            available_at=cutoff,
+        )
+        qual_ref = IntegrityReference(
+            artifact_id="qual.test.1",
+            artifact_type="qualification_record",
+            artifact_version="1.0.0",
+            integrity_digest="0" * 64,
+            available_at=cutoff,
+        )
+        ev_ref = IntegrityReference(
+            artifact_id=opportunity.evidence_package_reference.artifact_id,
+            artifact_type="evidence_package",
+            artifact_version="1.0.0",
+            integrity_digest=opportunity.evidence_package_reference.integrity_digest,
+            available_at=cutoff,
+        )
+        ctx_ref = IntegrityReference(
+            artifact_id="ctx.test.1",
+            artifact_type="market_context",
+            artifact_version="1.0.0",
+            integrity_digest="0" * 64,
+            available_at=cutoff,
+        )
+        source_refs = (opp_ref, ev_ref, ctx_ref)
+        component = ScoreComponent(
+            component_id="opportunity_quality",
+            component_version="1.0.0",
+            meaning="ordinal_opportunity_priority",
+            availability=ScoreComponentAvailability.AVAILABLE,
+            source_evidence=(qual_ref, opp_ref, ev_ref),
+            raw_value=Decimal("63"),
+            normalized_value=Decimal("63"),
+            weight=Decimal("1"),
+            contribution=Decimal("63"),
+            normalization_reference=None,
+            weight_reference=None,
+            limitations=("scoring.risk_unavailable", "scoring.confidence_unavailable", "scoring.reward_unavailable"),
+            component_hash="0" * 64,
+        )
+        component = replace(component, component_hash=canonical_sha256(component, exclude=frozenset({"component_hash"})))
+
+        score = ScoreResult(
+            contract_version="1.0.0",
+            score_id=f"score.test.{opportunity.opportunity_version_id}",
+            opportunity_id=opportunity.opportunity_version_id,
+            qualification_reference=qual_ref,
+            policy=PolicyReference("alphalens_runtime_scoring_ema_rsi", "1.1.0", "0" * 64),
+            components=(component,),
+            aggregation_definition="ordinal_quality_v1",
+            aggregate_value=Decimal("63"),
+            aggregate_unit="ordinal_priority",
+            valid_domain=DecimalRange(lower=Decimal("50"), upper=Decimal("100")),
+            missing_input_disposition="unavailable_no_score_result",
+            audit=AuditMetadata(
+                created_at=cutoff,
+                evidence_cutoff=cutoff,
+                available_at=cutoff,
+                provenance=Provenance(
+                    source_references=source_refs,
+                    policy_references=(),
+                    code_version="git:test",
+                    configuration_hash="0" * 64,
+                    lineage_hash=canonical_sha256(source_refs),
+                ),
+                result_hash="0" * 64,
+            ),
+        )
+        score = replace(score, audit=replace(score.audit, result_hash=canonical_sha256(score, exclude=frozenset({"result_hash"}))))
+
+        scores_repo = ScoringMemoryRepository()
+        await scores_repo.save(score)
+
+        detail_service = RuntimeOpportunityDetailProjectionService(
+            opportunities=fixture.opportunities,
+            market_snapshots=fixture.markets,
+            market_contexts=fixture.contexts,
+            evidence=fixture.evidence,
+            explanations=fixture.explanations,
+            details=details,
+            scores=scores_repo,
+            code_version="git:quality_score_test",
+        )
+
+        detail = await detail_service.project(
+            opportunity,
+            fixture.market,
+            (),
+            fixture.context,
+            evidence,
+            explanation,
+            lifecycle,
+        )
+
+        self.assertEqual(detail.quality_score, Decimal("63"))
+
+    async def test_quality_score_none_when_no_score_exists(self) -> None:
+        """Detail projection returns quality_score=None when no ScoreResult matches."""
+        from app.opportunity_intelligence.persistence import ScoringMemoryRepository
+
+        fixture, opportunity, evidence, explanation, lifecycle, service, details = (
+            await _detail_fixture()
+        )
+
+        scores_repo = ScoringMemoryRepository()
+        detail_service = RuntimeOpportunityDetailProjectionService(
+            opportunities=fixture.opportunities,
+            market_snapshots=fixture.markets,
+            market_contexts=fixture.contexts,
+            evidence=fixture.evidence,
+            explanations=fixture.explanations,
+            details=details,
+            scores=scores_repo,
+            code_version="git:quality_score_none_test",
+        )
+
+        detail = await detail_service.project(
+            opportunity,
+            fixture.market,
+            (),
+            fixture.context,
+            evidence,
+            explanation,
+            lifecycle,
+        )
+
+        self.assertIsNone(detail.quality_score)
+
+    async def test_quality_score_none_when_scores_not_wired(self) -> None:
+        """Detail projection returns quality_score=None when scores repository is None."""
+        fixture, opportunity, evidence, explanation, lifecycle, service, details = (
+            await _detail_fixture()
+        )
+
+        # scores=None (not wired) — the default path
+        detail_service = _make_service(
+            opportunities=fixture.opportunities,
+            markets=fixture.markets,
+            contexts=fixture.contexts,
+            evidence=fixture.evidence,
+            explanations=fixture.explanations,
+            details=details,
+        )
+
+        detail = await detail_service.project(
+            opportunity,
+            fixture.market,
+            (),
+            fixture.context,
+            evidence,
+            explanation,
+            lifecycle,
+        )
+
+        self.assertIsNone(detail.quality_score)
+
+    async def test_quality_score_uses_opportunity_version_id_not_opportunity_id(self) -> None:
+        """Verify lookup uses opportunity_version_id (with .v1), not opportunity_id."""
+        from decimal import Decimal
+        from app.opportunity_intelligence.domain import (
+            AuditMetadata,
+            IntegrityReference,
+            Provenance,
+            ScoreComponent,
+            ScoreComponentAvailability,
+            ScoreResult,
+            canonical_sha256,
+        )
+        from app.opportunity_intelligence.domain.scoring import DecimalRange
+        from app.opportunity_intelligence.persistence import ScoringMemoryRepository
+
+        fixture, opportunity, evidence, explanation, lifecycle, service, details = (
+            await _detail_fixture()
+        )
+
+        cutoff = opportunity.audit.evidence_cutoff
+        opp_ref = IntegrityReference(
+            artifact_id=opportunity.opportunity_version_id,
+            artifact_type="opportunity",
+            artifact_version="1.0.0",
+            integrity_digest=opportunity.canonical_sha256(),
+            available_at=cutoff,
+        )
+        qual_ref = IntegrityReference(
+            artifact_id="qual.test.1",
+            artifact_type="qualification_record",
+            artifact_version="1.0.0",
+            integrity_digest="0" * 64,
+            available_at=cutoff,
+        )
+        ev_ref = IntegrityReference(
+            artifact_id=opportunity.evidence_package_reference.artifact_id,
+            artifact_type="evidence_package",
+            artifact_version="1.0.0",
+            integrity_digest=opportunity.evidence_package_reference.integrity_digest,
+            available_at=cutoff,
+        )
+        ctx_ref = IntegrityReference(
+            artifact_id="ctx.test.2",
+            artifact_type="market_context",
+            artifact_version="1.0.0",
+            integrity_digest="0" * 64,
+            available_at=cutoff,
+        )
+        source_refs = (opp_ref, ev_ref, ctx_ref)
+        component = ScoreComponent(
+            component_id="opportunity_quality",
+            component_version="1.0.0",
+            meaning="ordinal_opportunity_priority",
+            availability=ScoreComponentAvailability.AVAILABLE,
+            source_evidence=(qual_ref, opp_ref, ev_ref),
+            raw_value=Decimal("72"),
+            normalized_value=Decimal("72"),
+            weight=Decimal("1"),
+            contribution=Decimal("72"),
+            normalization_reference=None,
+            weight_reference=None,
+            limitations=("scoring.risk_unavailable",),
+            component_hash="0" * 64,
+        )
+        component = replace(component, component_hash=canonical_sha256(component, exclude=frozenset({"component_hash"})))
+
+        score = ScoreResult(
+            contract_version="1.0.0",
+            score_id=f"score.test.{opportunity.opportunity_version_id}",
+            opportunity_id=opportunity.opportunity_version_id,
+            qualification_reference=qual_ref,
+            policy=PolicyReference("alphalens_runtime_scoring_ema_rsi", "1.1.0", "0" * 64),
+            components=(component,),
+            aggregation_definition="ordinal_quality_v1",
+            aggregate_value=Decimal("72"),
+            aggregate_unit="ordinal_priority",
+            valid_domain=DecimalRange(lower=Decimal("50"), upper=Decimal("100")),
+            missing_input_disposition="unavailable_no_score_result",
+            audit=AuditMetadata(
+                created_at=cutoff,
+                evidence_cutoff=cutoff,
+                available_at=cutoff,
+                provenance=Provenance(
+                    source_references=source_refs,
+                    policy_references=(),
+                    code_version="git:test",
+                    configuration_hash="0" * 64,
+                    lineage_hash=canonical_sha256(source_refs),
+                ),
+                result_hash="0" * 64,
+            ),
+        )
+        score = replace(score, audit=replace(score.audit, result_hash=canonical_sha256(score, exclude=frozenset({"result_hash"}))))
+
+        scores_repo = ScoringMemoryRepository()
+        await scores_repo.save(score)
+
+        detail_service = RuntimeOpportunityDetailProjectionService(
+            opportunities=fixture.opportunities,
+            market_snapshots=fixture.markets,
+            market_contexts=fixture.contexts,
+            evidence=fixture.evidence,
+            explanations=fixture.explanations,
+            details=details,
+            scores=scores_repo,
+            code_version="git:quality_score_version_id_test",
+        )
+
+        detail = await detail_service.project(
+            opportunity,
+            fixture.market,
+            (),
+            fixture.context,
+            evidence,
+            explanation,
+            lifecycle,
+        )
+
+        self.assertEqual(detail.quality_score, Decimal("72"))
+        self.assertIsNotNone(detail.quality_score)
+
+        scores_repo = ScoringMemoryRepository()
+        await scores_repo.save(score)
+
+        detail_service = RuntimeOpportunityDetailProjectionService(
+            opportunities=fixture.opportunities,
+            market_snapshots=fixture.markets,
+            market_contexts=fixture.contexts,
+            evidence=fixture.evidence,
+            explanations=fixture.explanations,
+            details=details,
+            scores=scores_repo,
+            code_version="git:quality_score_version_id_test",
+        )
+
+        detail = await detail_service.project(
+            opportunity,
+            fixture.market,
+            (),
+            fixture.context,
+            evidence,
+            explanation,
+            lifecycle,
+        )
+
+        self.assertEqual(detail.quality_score, Decimal("72"))
+        self.assertIsNotNone(detail.quality_score)

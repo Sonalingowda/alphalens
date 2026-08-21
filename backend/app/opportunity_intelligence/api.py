@@ -159,6 +159,51 @@ def create_opportunity_intelligence_app(
             )
 
     @app.get(
+        "/api/v1/opportunities/history",
+        response_model=dict[str, object],
+    )
+    async def list_history(
+        instrument: Annotated[str, Query(min_length=1)] = DEFAULT_MVP_INSTRUMENT,
+        timeframe: Annotated[str, Query(min_length=1)] = DEFAULT_MVP_TIMEFRAME,
+        as_of: datetime | None = None,
+        limit: Annotated[int, Query(ge=1, le=500)] = 50,
+    ) -> dict[str, object]:
+        if lifecycle_repository is None:
+            raise StorageUnavailableError(
+                "Lifecycle repository is not configured."
+            )
+        resolved_as_of = _resolve_as_of(as_of, current_time)
+        scope = MarketScope(instrument=instrument, timeframe=timeframe)
+        terminal_states = {
+            LifecycleState.EXPIRED,
+            LifecycleState.SUPERSEDED,
+            LifecycleState.INVALIDATED,
+            LifecycleState.ARCHIVED,
+        }
+        stale_lifecycles = await lifecycle_repository.list_stale_lifecycles(
+            stale_before=resolved_as_of,
+            limit=limit,
+        )
+        items: list[dict[str, object]] = []
+        for lc in stale_lifecycles:
+            if lc.current_state in terminal_states and lc.scope == scope:
+                items.append({
+                    "opportunity_id": lc.opportunity_id,
+                    "scope": {"instrument": lc.scope.instrument, "timeframe": lc.scope.timeframe},
+                    "direction": lc.direction.value,
+                    "lifecycle_state": lc.current_state.value,
+                    "available_at": lc.audit.available_at.isoformat(),
+                    "event_count": len(lc.events),
+                })
+        payload = {
+            "contract_version": OPPORTUNITY_API_VERSION,
+            "scope": {"instrument": instrument, "timeframe": timeframe},
+            "items": tuple(items),
+            "as_of": resolved_as_of.isoformat(),
+        }
+        return _success(payload)
+
+    @app.get(
         "/api/v1/opportunities/{opportunity_id}",
         response_model=dict[str, object],
     )
@@ -273,51 +318,6 @@ def create_opportunity_intelligence_app(
             )
         )
         return _success(record.to_dict())
-
-    @app.get(
-        "/api/v1/opportunities/history",
-        response_model=dict[str, object],
-    )
-    async def list_history(
-        instrument: Annotated[str, Query(min_length=1)] = DEFAULT_MVP_INSTRUMENT,
-        timeframe: Annotated[str, Query(min_length=1)] = DEFAULT_MVP_TIMEFRAME,
-        as_of: datetime | None = None,
-        limit: Annotated[int, Query(ge=1, le=500)] = 50,
-    ) -> dict[str, object]:
-        if lifecycle_repository is None:
-            raise StorageUnavailableError(
-                "Lifecycle repository is not configured."
-            )
-        resolved_as_of = _resolve_as_of(as_of, current_time)
-        scope = MarketScope(instrument=instrument, timeframe=timeframe)
-        terminal_states = {
-            LifecycleState.EXPIRED,
-            LifecycleState.SUPERSEDED,
-            LifecycleState.INVALIDATED,
-            LifecycleState.ARCHIVED,
-        }
-        stale_lifecycles = await lifecycle_repository.list_stale_lifecycles(
-            stale_before=resolved_as_of,
-            limit=limit,
-        )
-        items: list[dict[str, object]] = []
-        for lc in stale_lifecycles:
-            if lc.current_state in terminal_states and lc.scope == scope:
-                items.append({
-                    "opportunity_id": lc.opportunity_id,
-                    "scope": {"instrument": lc.scope.instrument, "timeframe": lc.scope.timeframe},
-                    "direction": lc.direction.value,
-                    "lifecycle_state": lc.current_state.value,
-                    "available_at": lc.audit.available_at.isoformat(),
-                    "event_count": len(lc.events),
-                })
-        payload = {
-            "contract_version": OPPORTUNITY_API_VERSION,
-            "scope": {"instrument": instrument, "timeframe": timeframe},
-            "items": tuple(items),
-            "as_of": resolved_as_of.isoformat(),
-        }
-        return _success(payload)
 
     return app
 

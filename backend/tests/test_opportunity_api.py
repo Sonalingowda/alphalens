@@ -559,3 +559,111 @@ class OpportunityActiveExpirationTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(len(response.json()["data"]["items"]), 0)
+
+
+class OpportunityHistoryRouteTests(unittest.TestCase):
+    """Verify /api/v1/opportunities/history is reachable and not captured by {opportunity_id}."""
+
+    NOW = datetime(2025, 1, 1, 0, 20, 0, tzinfo=timezone.utc)
+
+    def _history_client(
+        self,
+        *,
+        lifecycle_repository=None,
+    ) -> TestClient:
+        from app.opportunity_intelligence.domain import LifecycleState
+        dashboard_value = SimpleNamespace(
+            items=(),
+            to_dict=lambda: {
+                "contract_version": "1.0.0",
+                "items": [],
+                "applied_filters": [],
+                "sort": "canonical.rank",
+            },
+        )
+        detail_value = SimpleNamespace(
+            to_dict=lambda: {"contract_version": "1.0.0", "detail_id": "d.1"},
+        )
+        app = create_opportunity_intelligence_app(
+            dashboard_repository=SimpleNamespace(
+                get_latest=AsyncMock(return_value=dashboard_value),
+            ),
+            detail_repository=SimpleNamespace(
+                get_current=AsyncMock(return_value=detail_value),
+            ),
+            lifecycle_repository=lifecycle_repository,
+            clock=lambda: self.NOW,
+        )
+        return TestClient(app)
+
+    def test_history_route_is_reachable(self) -> None:
+        """history endpoint responds 200 instead of 404 (route not captured by {opportunity_id})."""
+        from app.opportunity_intelligence.domain import LifecycleState
+        lifecycle_repo = SimpleNamespace(
+            list_stale_lifecycles=AsyncMock(return_value=()),
+        )
+        client = self._history_client(lifecycle_repository=lifecycle_repo)
+        response = client.get(
+            "/api/v1/opportunities/history",
+            params={"instrument": "BTCUSDT", "timeframe": "5m", "as_of": self.NOW.isoformat()},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("items", response.json()["data"])
+
+    def test_history_route_not_captured_by_opportunity_id(self) -> None:
+        """'history' string is not routed as opportunity_id parameter."""
+        client = self._history_client()
+        response = client.get(
+            "/api/v1/opportunities/history",
+            params={"instrument": "BTCUSDT", "timeframe": "5m", "as_of": self.NOW.isoformat()},
+        )
+        self.assertNotEqual(response.status_code, 404)
+
+    def test_history_returns_503_when_lifecycle_repo_unconfigured(self) -> None:
+        """Without lifecycle_repository, history returns 503 storage.unavailable."""
+        client = self._history_client(lifecycle_repository=None)
+        response = client.get(
+            "/api/v1/opportunities/history",
+            params={"instrument": "BTCUSDT", "timeframe": "5m", "as_of": self.NOW.isoformat()},
+        )
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json()["error"]["code"], "storage.unavailable")
+
+    def test_history_filters_terminal_states_only(self) -> None:
+        """Only terminal lifecycle states (EXPIRED, SUPERSEDED, etc.) appear."""
+        from app.opportunity_intelligence.domain import LifecycleState, MarketScope
+        scope = MarketScope(instrument="BTCUSDT", timeframe="5m")
+        expired = SimpleNamespace(
+            opportunity_id="opp.expired",
+            scope=scope,
+            direction=OpportunityStance.SELL,
+            current_state=LifecycleState.EXPIRED,
+            audit=SimpleNamespace(available_at=datetime(2025, 1, 1, 0, 0, 0, tzinfo=timezone.utc)),
+            events=(),
+        )
+        ranked = SimpleNamespace(
+            opportunity_id="opp.ranked",
+            scope=scope,
+            direction=OpportunityStance.SELL,
+            current_state=LifecycleState.RANKED,
+            audit=SimpleNamespace(available_at=datetime(2025, 1, 1, 0, 0, 0, tzinfo=timezone.utc)),
+            events=(),
+        )
+        lifecycle_repo = SimpleNamespace(
+            list_stale_lifecycles=AsyncMock(return_value=(expired, ranked)),
+        )
+        client = self._history_client(lifecycle_repository=lifecycle_repo)
+        response = client.get(
+            "/api/v1/opportunities/history",
+            params={"instrument": "BTCUSDT", "timeframe": "5m", "as_of": self.NOW.isoformat()},
+        )
+        self.assertEqual(response.status_code, 200)
+        items = response.json()["data"]["items"]
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]["opportunity_id"], "opp.expired")
+
+    def test_openapi_includes_history_route(self) -> None:
+        """History endpoint appears in the OpenAPI schema."""
+        client = self._history_client()
+        schema = client.get("/api/v1/openapi.json").json()
+        self.assertIn("/api/v1/opportunities/history", schema["paths"])
