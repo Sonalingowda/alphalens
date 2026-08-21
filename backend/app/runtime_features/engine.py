@@ -19,6 +19,7 @@ from app.features.macd import MACD_FEATURE_METADATA
 from app.features.registry import INTRADAY_FEATURE_REGISTRY
 from app.features.rsi import RSI_FEATURE_METADATA
 from app.features.statistical_volatility import BOLLINGER_IDENTIFIER
+from app.market_configuration import get_default_scope
 from app.market_data.models import Candle, CandleTimeframe
 from app.market_data.validation import timeframe_duration
 from app.opportunity_intelligence.domain import (
@@ -26,6 +27,7 @@ from app.opportunity_intelligence.domain import (
     FeatureSnapshot,
     FeatureSnapshotValue,
     IntegrityReference,
+    MarketScope,
     MarketSnapshot,
     Provenance,
 )
@@ -83,19 +85,21 @@ class RuntimeFeatureEngine:
         market_snapshots: MarketSnapshotRepository,
         feature_snapshots: FeatureSnapshotRepository,
         code_version: str,
+        scope: MarketScope | None = None,
     ) -> None:
         if not code_version.strip():
             raise ValueError("Runtime feature code version must be non-empty.")
         self._market_snapshots = market_snapshots
         self._feature_snapshots = feature_snapshots
         self._code_version = code_version
+        self._scope = scope or get_default_scope()
 
     async def resolve(self, market_snapshot: MarketSnapshot) -> FeatureSnapshot:
         """Compute and persist features at one closed market snapshot."""
-        _validate_market_snapshot(market_snapshot)
+        _validate_market_snapshot(market_snapshot, self._scope.instrument)
         await self._verify_persisted_input(market_snapshot)
         history = await self._load_prefix(market_snapshot)
-        source = _build_source(history, market_snapshot.scope.timeframe)
+        source = _build_source(history, market_snapshot.scope.timeframe, self._scope.instrument)
         pipeline_result = run_intraday_feature_pipeline(source)
         current_timestamp = market_snapshot.candles[0].timestamp
         current_values = tuple(
@@ -181,11 +185,11 @@ class RuntimeFeatureEngine:
         return prefix
 
 
-def _validate_market_snapshot(snapshot: MarketSnapshot) -> None:
+def _validate_market_snapshot(snapshot: MarketSnapshot, scope_instrument: str) -> None:
     if not isinstance(snapshot, MarketSnapshot):
         raise ServiceContractError("Feature engine requires MarketSnapshot input.")
-    if snapshot.scope.instrument != "BTCUSDT":
-        raise ServiceContractError("Runtime features support only BTCUSDT.")
+    if snapshot.scope.instrument != scope_instrument:
+        raise ServiceContractError(f"Runtime features support only {scope_instrument}.")
     try:
         timeframe = CandleTimeframe(snapshot.scope.timeframe)
     except ValueError as error:
@@ -234,8 +238,10 @@ def _contiguous_suffix(
 def _build_source(
     history: tuple[MarketSnapshot, ...],
     timeframe_value: str,
+    instrument: str,
 ):
     timeframe = CandleTimeframe(timeframe_value)
+    asset_identifier, quote_currency = instrument[:3], instrument[3:]
     observations = tuple(
         SourceCandleObservation(
             candle=Candle(
@@ -252,8 +258,8 @@ def _build_source(
         for item in history
     )
     return build_intraday_source_snapshot(
-        asset_identifier="BTC",
-        quote_currency="USDT",
+        asset_identifier=asset_identifier,
+        quote_currency=quote_currency,
         timeframe=timeframe,
         observations=observations,
     )

@@ -52,7 +52,7 @@ from tests.test_runtime_assessment import _assessment_fixture, _request
 # Shared fixture builder
 # ---------------------------------------------------------------------------
 
-async def _ranking_fixture(ema12="105", ema26="100", rsi="65"):
+async def _ranking_fixture(ema12="105", ema26="100", rsi="65", instrument="BTCUSDT"):
     """Build a complete fixture chain through scoring and return ranking inputs.
 
     Returns:
@@ -63,6 +63,7 @@ async def _ranking_fixture(ema12="105", ema26="100", rsi="65"):
         f"{ema12}.000000000000000000",
         f"{ema26}.000000000000000000",
         f"{rsi}.000000000000000000",
+        instrument,
     )
     opportunity = await assessment_service.assess(
         fixture.candidate, evidence, fixture.context
@@ -77,6 +78,7 @@ async def _ranking_fixture(ema12="105", ema26="100", rsi="65"):
         market_snapshots=fixture.markets,
         qualifications=qualifications,
         code_version="git:rankingtest100",
+        scope=fixture.market.scope,
     )
     qualification = await qualification_service.qualify(
         opportunity, evidence, fixture.context
@@ -90,6 +92,7 @@ async def _ranking_fixture(ema12="105", ema26="100", rsi="65"):
         market_contexts=fixture.contexts,
         scores=scores,
         code_version="git:rankingtest100",
+        scope=fixture.market.scope,
     )
     score = await scoring_service.score(
         opportunity, qualification, evidence, fixture.context, fixture.feature
@@ -101,6 +104,7 @@ async def _ranking_fixture(ema12="105", ema26="100", rsi="65"):
         qualifications=qualifications,
         opportunities=opportunities,
         rankings=rankings,
+        scope=fixture.market.scope,
     )
 
     # Stash extra handles on the fixture namespace for pipeline tests.
@@ -123,7 +127,7 @@ async def _ranking_fixture(ema12="105", ema26="100", rsi="65"):
     )
 
 
-def _make_service(*, scores, qualifications, opportunities, rankings, policy=None):
+def _make_service(*, scores, qualifications, opportunities, rankings, policy=None, scope=None):
     return RuntimeRankingService(
         scores=scores,
         qualifications=qualifications,
@@ -131,6 +135,7 @@ def _make_service(*, scores, qualifications, opportunities, rankings, policy=Non
         rankings=rankings,
         code_version="git:rankingtest100",
         policy=policy,
+        scope=scope,
     )
 
 

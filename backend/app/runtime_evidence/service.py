@@ -3,6 +3,7 @@
 from dataclasses import dataclass, replace
 from datetime import datetime
 
+from app.market_configuration import get_default_scope
 from app.opportunity_intelligence.domain import (
     AuditMetadata,
     ContextStatus,
@@ -15,6 +16,7 @@ from app.opportunity_intelligence.domain import (
     FeatureSnapshotValue,
     IntegrityReference,
     MarketContext,
+    MarketScope,
     MarketSnapshot,
     OpportunityCandidate,
     PolicyReference,
@@ -46,7 +48,6 @@ _DETECTION_POLICY_VERSION = "1.0.0"
 _DETECTION_POLICY_HASH = (
     "d1ae27b11d710b5491394db3d144dbe6e71dfae254ae5b7bc2767d7417ddfb8a"
 )
-_SCOPE_INSTRUMENT = "BTCUSDT"
 _SCOPE_TIMEFRAMES = ("5m", "10m", "15m")
 _REQUIRED_FEATURES = (
     ("exponential_moving_average_12", "1.0.0", "exponential_moving_average_12"),
@@ -83,6 +84,7 @@ class RuntimeEvidenceService:
         market_contexts: MarketContextRepository,
         evidence: EvidenceRepository,
         code_version: str,
+        scope: MarketScope | None = None,
     ) -> None:
         if not code_version.strip():
             raise ValueError("Runtime evidence code version must be non-empty.")
@@ -92,6 +94,7 @@ class RuntimeEvidenceService:
         self._market_contexts = market_contexts
         self._evidence = evidence
         self._code_version = code_version
+        self._scope = scope or get_default_scope()
 
     async def assemble(
         self,
@@ -107,7 +110,7 @@ class RuntimeEvidenceService:
             feature_snapshot,
             market_context,
         )
-        _validate_inputs(inputs)
+        _validate_inputs(inputs, self._scope.instrument)
         values = _required_values(inputs.features)
         items = _build_items(inputs, values)
         package_id = f"evidence.runtime.ema_rsi.{candidate.candidate_id}"
@@ -230,7 +233,7 @@ class RuntimeEvidenceService:
         )
 
 
-def _validate_inputs(inputs: _PersistedInputs) -> None:
+def _validate_inputs(inputs: _PersistedInputs, scope_instrument: str) -> None:
     candidate, market, features, context = (
         inputs.candidate,
         inputs.market,
@@ -239,7 +242,7 @@ def _validate_inputs(inputs: _PersistedInputs) -> None:
     )
     candle = market.candles[0] if len(market.candles) == 1 else None
     if (
-        candidate.scope.instrument != _SCOPE_INSTRUMENT
+        candidate.scope.instrument != scope_instrument
         or candidate.scope.timeframe not in _SCOPE_TIMEFRAMES
         or market.scope != candidate.scope
         or features.scope != candidate.scope

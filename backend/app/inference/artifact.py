@@ -216,6 +216,7 @@ class PackagedExpectedMoveInference:
     residual_std: float
     artifact_sha256: str
     state_sha256: str
+    scope_instrument: str | None = None
 
     def predict(
         self,
@@ -314,6 +315,9 @@ def load_expected_move_inference_artifact(
     if not isinstance(residual_std_hex, str):
         raise ValueError("Expected-move residual_std is absent.")
     residual_std = float.fromhex(residual_std_hex)
+    declared_instrument = payload.get("scope_instrument")
+    if declared_instrument is not None and not isinstance(declared_instrument, str):
+        raise ValueError("Expected-move artifact instrument identity is invalid.")
     if (
         not names
         or len(set(names)) != len(names)
@@ -337,6 +341,7 @@ def load_expected_move_inference_artifact(
         residual_std=residual_std,
         artifact_sha256=expected_artifact_sha256,
         state_sha256=state_hash,
+        scope_instrument=declared_instrument,
     )
 
 

@@ -217,7 +217,9 @@ class _Fixture(SimpleNamespace):
     pass
 
 
-async def _fixture(ema_12: str, ema_26: str, rsi: str) -> _Fixture:
+async def _fixture(
+    ema_12: str, ema_26: str, rsi: str, instrument: str = "BTCUSDT"
+) -> _Fixture:
     markets = MarketSnapshotMemoryRepository()
     features = FeatureSnapshotMemoryRepository()
     contexts = MarketContextMemoryRepository()
@@ -225,7 +227,7 @@ async def _fixture(ema_12: str, ema_26: str, rsi: str) -> _Fixture:
     evidence = EvidenceMemoryRepository()
     market = replace(
         _market_snapshot(),
-        scope=type(_market_snapshot().scope)(instrument="BTCUSDT", timeframe="5m"),
+        scope=type(_market_snapshot().scope)(instrument=instrument, timeframe="5m"),
     )
     feature = _feature(ema_12, ema_26, rsi, market)
     atr = replace(
@@ -255,6 +257,7 @@ async def _fixture(ema_12: str, ema_26: str, rsi: str) -> _Fixture:
         market_contexts=contexts,
         detections=detections,
         code_version="git:runtimeevidencedetection",
+        scope=market.scope,
     )
     _, candidate = await detector.detect(market, feature, context)
     assert candidate is not None
@@ -277,6 +280,7 @@ async def _fixture(ema_12: str, ema_26: str, rsi: str) -> _Fixture:
                 contexts=contexts,
                 detections=detections,
                 evidence=evidence,
+                market=market,
             )
         ),
     )
@@ -290,4 +294,7 @@ def _evidence_service(fixture: _Fixture, **overrides: object) -> RuntimeEvidence
         market_contexts=overrides.get("contexts") or fixture.contexts,
         evidence=overrides.get("evidence") or fixture.evidence,
         code_version="git:runtimeevidence123",
+        scope=getattr(fixture, "market", None).scope
+        if hasattr(fixture, "market")
+        else None,
     )

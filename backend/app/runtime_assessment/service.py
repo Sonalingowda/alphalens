@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass, replace
 
+from app.market_configuration import get_default_scope
 from app.opportunity_intelligence.domain import (
     AuditMetadata,
     ContextStatus,
@@ -10,6 +11,7 @@ from app.opportunity_intelligence.domain import (
     FeatureSnapshot,
     IntegrityReference,
     MarketContext,
+    MarketScope,
     MarketSnapshot,
     Opportunity,
     OpportunityCandidate,
@@ -52,7 +54,6 @@ _EVIDENCE_POLICY_VERSION = "1.0.0"
 _EVIDENCE_POLICY_HASH = (
     "9159b3d43cbfeafdbe11f0a9e748119f5ddbac762e2bb89c62fd937dacd913c8"
 )
-_SCOPE_INSTRUMENT = "BTCUSDT"
 _SCOPE_TIMEFRAMES = ("5m", "10m", "15m")
 _REQUIRED_EVIDENCE = {
     "market_price_close": (
@@ -131,6 +132,7 @@ class RuntimeAssessmentService:
         code_version: str,
         plans: OpportunityPlanService,
         policy: PolicyReference | None = None,
+        scope: MarketScope | None = None,
     ) -> None:
         if not code_version.strip():
             raise ValueError("Runtime assessment code version must be non-empty.")
@@ -144,6 +146,7 @@ class RuntimeAssessmentService:
         self._plans = plans
         self._code_version = code_version
         self._policy = policy if policy is not None else _assessment_policy()
+        self._scope = scope or get_default_scope()
 
     async def assess(
         self,
@@ -154,7 +157,7 @@ class RuntimeAssessmentService:
         """Validate persisted evidence lineage and save one immutable assessment."""
         _validate_policy(self._policy)
         inputs = await self._load_persisted_inputs(candidate, evidence, market_context)
-        _validate_inputs(inputs)
+        _validate_inputs(inputs, self._scope.instrument)
         stance, reason_codes = _decision(inputs)
         opportunity = _build_opportunity(
             inputs,
@@ -250,7 +253,7 @@ def _validate_policy(policy: PolicyReference) -> None:
         raise PolicyUnavailableError("Assessment policy v1.0.1 is unavailable.")
 
 
-def _validate_inputs(inputs: _PersistedInputs) -> None:
+def _validate_inputs(inputs: _PersistedInputs, scope_instrument: str) -> None:
     candidate, evidence, market, features, context = (
         inputs.candidate,
         inputs.evidence,
@@ -262,7 +265,7 @@ def _validate_inputs(inputs: _PersistedInputs) -> None:
     candle = market.candles[0] if len(market.candles) == 1 else None
     evidence_policy = evidence.audit.provenance.policy_references
     if (
-        candidate.scope.instrument != _SCOPE_INSTRUMENT
+        candidate.scope.instrument != scope_instrument
         or candidate.scope.timeframe not in _SCOPE_TIMEFRAMES
         or market.scope != candidate.scope
         or features.scope != candidate.scope

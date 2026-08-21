@@ -13,6 +13,7 @@ from dataclasses import replace
 from datetime import datetime, timedelta
 from decimal import Decimal
 
+from app.market_configuration import get_default_scope
 from app.opportunity_intelligence.domain import (
     AuditMetadata,
     IntegrityReference,
@@ -71,7 +72,6 @@ _ASSESSMENT_POLICY = PolicyReference(
 _DETECTION_POLICY_HASH = (
     "d1ae27b11d710b5491394db3d144dbe6e71dfae254ae5b7bc2767d7417ddfb8a"
 )
-_SCOPE_INSTRUMENT = "BTCUSDT"
 _SCOPE_TIMEFRAMES = ("5m", "10m", "15m")
 
 # Rolling window: ScoreResult.available_at must be strictly after (cutoff - 15 min).
@@ -128,6 +128,7 @@ class RuntimeRankingService:
         rankings: RankingRepository,
         code_version: str,
         policy: PolicyReference | None = None,
+        scope: MarketScope | None = None,
     ) -> None:
         if not code_version.strip():
             raise ValueError("Runtime ranking code version must be non-empty.")
@@ -137,6 +138,7 @@ class RuntimeRankingService:
         self._rankings = rankings
         self._code_version = code_version
         self._policy = policy if policy is not None else _policy()
+        self._scope = scope or get_default_scope()
 
     async def rank(
         self,
@@ -187,6 +189,7 @@ class RuntimeRankingService:
             persisted_score,
             triggering_qualification,
             triggering_opportunity,
+            self._scope.instrument,
         )
 
         # --- Verify triggering qualification and opportunity from the repository ---
@@ -233,6 +236,7 @@ class RuntimeRankingService:
                 candidate_score,
                 self._qualifications,
                 self._opportunities,
+                self._scope.instrument,
             )
             if isinstance(result, str):
                 if is_triggering:
@@ -326,7 +330,7 @@ class RuntimeRankingService:
         cutoff_epoch_ms = int(ranking_cutoff.timestamp() * 1000)
         snapshot_id = (
             f"ranking.runtime_ema_rsi."
-            f"{_SCOPE_INSTRUMENT}.{triggering_opportunity.scope.timeframe}.{cutoff_epoch_ms}"
+            f"{self._scope.instrument}.{triggering_opportunity.scope.timeframe}.{cutoff_epoch_ms}"
         )
 
         # --- Hashes required by policy §10 ---
@@ -359,7 +363,7 @@ class RuntimeRankingService:
             policy=self._policy,
             as_of=ranking_cutoff,
             generated_at=ranking_cutoff,
-            scope=MarketScope(instrument=_SCOPE_INSTRUMENT, timeframe=triggering_opportunity.scope.timeframe),
+            scope=MarketScope(instrument=self._scope.instrument, timeframe=triggering_opportunity.scope.timeframe),
             eligible_candidate_references=eligible_refs,
             qualified_opportunity_references=qualified_refs,
             memberships=tuple(memberships),
@@ -388,6 +392,7 @@ def _validate_score_lineage(
     score: ScoreResult,
     qualification: QualificationRecord,
     opportunity: Opportunity,
+    scope_instrument: str,
 ) -> None:
     """Verify that the triggering score's lineage satisfies policy §3."""
     # 1. Policy version and hash
@@ -397,7 +402,7 @@ def _validate_score_lineage(
         )
     # 2. Scope
     if (
-        opportunity.scope.instrument != _SCOPE_INSTRUMENT
+        opportunity.scope.instrument != scope_instrument
         or opportunity.scope.timeframe not in _SCOPE_TIMEFRAMES
     ):
         raise ServiceContractError("Ranking: opportunity scope is not supported.")
@@ -456,6 +461,7 @@ async def _validate_member_lineage(
     score: ScoreResult,
     qualifications: QualificationRepository,
     opportunities: OpportunityRepository,
+    scope_instrument: str,
 ) -> (
     tuple[ScoreResult, QualificationRecord, Opportunity]
     | str
@@ -505,7 +511,7 @@ async def _validate_member_lineage(
 
     # Scope
     if (
-        opportunity.scope.instrument != _SCOPE_INSTRUMENT
+        opportunity.scope.instrument != scope_instrument
         or opportunity.scope.timeframe not in _SCOPE_TIMEFRAMES
     ):
         return "ranking.lineage_validation_failed"
@@ -549,8 +555,13 @@ async def _load_window_population(
     """Return all ScoreResults within the rolling 15-minute window.
 
     Window: (ranking_cutoff - 15 min, ranking_cutoff] — open on the left,
-    closed on the right, as defined in policy §7.  Scope is implicitly
-    constrained to BTCUSDT/5m by the scoring policy filter.
+    closed on the right, as defined in policy §7.
+
+    The window is loaded unscoped because the frozen ScoreResult contract
+    carries no instrument identity.  Market isolation is enforced during
+    member validation: any candidate whose opportunity scope does not match
+    the triggering opportunity's instrument is rejected by
+    _validate_member_lineage and can never enter the ranking membership.
     """
     window_open = ranking_cutoff - timedelta(minutes=_WINDOW_MINUTES)
     page = await scores.list(

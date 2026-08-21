@@ -214,8 +214,8 @@ class RuntimeAssessmentServiceTests(unittest.IsolatedAsyncioTestCase):
         qualification.qualify.assert_awaited_once()
 
 
-async def _assessment_fixture(ema_12: str, ema_26: str, rsi: str):
-    fixture = await _fixture(ema_12, ema_26, rsi)
+async def _assessment_fixture(ema_12: str, ema_26: str, rsi: str, instrument: str = "BTCUSDT"):
+    fixture = await _fixture(ema_12, ema_26, rsi, instrument)
     evidence = await fixture.service.assemble(
         fixture.candidate,
         fixture.market,
@@ -251,6 +251,9 @@ def _service(
         ),
         code_version="git:runtimeassessment101",
         policy=policy,
+        scope=getattr(fixture, "market", None).scope
+        if hasattr(fixture, "market")
+        else None,
     )
 
 

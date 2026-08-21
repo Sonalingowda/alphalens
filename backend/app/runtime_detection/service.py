@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 
+from app.market_configuration import get_default_scope
 from app.opportunity_intelligence.domain import (
     AuditMetadata,
     CandidateAttemptState,
@@ -13,6 +14,7 @@ from app.opportunity_intelligence.domain import (
     FeatureSnapshotValue,
     IntegrityReference,
     MarketContext,
+    MarketScope,
     MarketSnapshot,
     OpportunityCandidate,
     PolicyReference,
@@ -35,7 +37,6 @@ RUNTIME_DETECTION_POLICY_HASH = (
     "d1ae27b11d710b5491394db3d144dbe6e71dfae254ae5b7bc2767d7417ddfb8a"
 )
 _CONTRACT_VERSION = "1.0.0"
-_INSTRUMENT = "BTCUSDT"
 _TIMEFRAMES = ("5m", "10m", "15m")
 _BUY_RSI_MINIMUM = "55.000000000000000000"
 _SELL_RSI_MAXIMUM = "45.000000000000000000"
@@ -66,6 +67,7 @@ class RuntimeOpportunityDetectionService:
         market_contexts: MarketContextRepository,
         detections: DetectionRepository,
         code_version: str,
+        scope: MarketScope | None = None,
     ) -> None:
         if not code_version.strip():
             raise ValueError("Runtime detection code version must be non-empty.")
@@ -74,6 +76,7 @@ class RuntimeOpportunityDetectionService:
         self._market_contexts = market_contexts
         self._detections = detections
         self._code_version = code_version
+        self._scope = scope or get_default_scope()
 
     async def detect(
         self,
@@ -87,7 +90,7 @@ class RuntimeOpportunityDetectionService:
             feature_snapshot,
             market_context,
         )
-        error = _validate_inputs(inputs)
+        error = _validate_inputs(inputs, self._scope.instrument)
         if error is not None:
             attempt = _attempt(
                 inputs,
@@ -192,10 +195,10 @@ class RuntimeOpportunityDetectionService:
         )
 
 
-def _validate_inputs(inputs: _PersistedInputs) -> str | None:
+def _validate_inputs(inputs: _PersistedInputs, scope_instrument: str) -> str | None:
     market, features, context = inputs.market, inputs.features, inputs.context
     if (
-        market.scope.instrument != _INSTRUMENT
+        market.scope.instrument != scope_instrument
         or market.scope.timeframe not in _TIMEFRAMES
         or features.scope != market.scope
         or context.scope != market.scope

@@ -59,18 +59,19 @@ from app.runtime_ranking import RuntimeRankingService
 from app.runtime_scoring import RuntimeScoringService
 
 
+from app.market_configuration import get_default_scope
+
+
 logger = logging.getLogger("alphalens.runtime_pipeline")
 
 _CODE_VERSION = "alphalens.runtime.1.0.0"
-
-# Only the 5m timeframe feeds the runtime intelligence pipeline.
-_PIPELINE_SCOPE = MarketScope(instrument="BTCUSDT", timeframe="5m")
 
 
 def build_runtime_pipeline(
     session_factory: async_sessionmaker[AsyncSession],
     *,
     expected_move_inference: "PackagedExpectedMoveInference | None" = None,
+    scope: MarketScope | None = None,
 ) -> "RuntimeIntelligencePipeline":
     """Construct the fully-wired runtime intelligence pipeline.
 
@@ -83,6 +84,25 @@ def build_runtime_pipeline(
     the V1.1 services (fixed 1.5R multiplier, four qualification gates) are
     used.
     """
+    pipeline_scope = scope or get_default_scope()
+    if expected_move_inference is not None:
+        declared_instrument = expected_move_inference.scope_instrument
+        if (
+            declared_instrument is not None
+            and declared_instrument != pipeline_scope.instrument
+        ):
+            raise ValueError(
+                "Expected-move artifact is bound to a different instrument: "
+                f"artifact={declared_instrument} scope={pipeline_scope.instrument}"
+            )
+        if (
+            declared_instrument is None
+            and pipeline_scope != get_default_scope()
+        ):
+            raise ValueError(
+                "Expected-move artifact declares no instrument identity and "
+                f"cannot be applied to scope {pipeline_scope.instrument}."
+            )
     market_snapshots = MarketSnapshotPostgreSQLRepository(session_factory)
     feature_snapshots = FeatureSnapshotPostgreSQLRepository(session_factory)
     market_contexts = MarketContextPostgreSQLRepository(session_factory)
@@ -103,6 +123,7 @@ def build_runtime_pipeline(
         market_snapshots=market_snapshots,
         feature_snapshots=feature_snapshots,
         code_version=_CODE_VERSION,
+        scope=pipeline_scope,
     )
     context_service = RuntimeMarketContextService(
         market_snapshots=market_snapshots,
@@ -116,6 +137,7 @@ def build_runtime_pipeline(
         market_contexts=market_contexts,
         detections=detections,
         code_version=_CODE_VERSION,
+        scope=pipeline_scope,
     )
     evidence_service = RuntimeEvidenceService(
         candidates=detections,
@@ -124,6 +146,7 @@ def build_runtime_pipeline(
         market_contexts=market_contexts,
         evidence=evidence_repo,
         code_version=_CODE_VERSION,
+        scope=pipeline_scope,
     )
     if expected_move_inference is not None:
         plan_service = RuntimeOpportunityPlanServiceV2(
@@ -138,6 +161,7 @@ def build_runtime_pipeline(
             market_snapshots=market_snapshots,
             qualifications=qualifications,
             code_version=_CODE_VERSION,
+            scope=pipeline_scope,
         )
         logger.info("runtime_pipeline_v2_wired")
     else:
@@ -150,6 +174,7 @@ def build_runtime_pipeline(
             market_snapshots=market_snapshots,
             qualifications=qualifications,
             code_version=_CODE_VERSION,
+            scope=pipeline_scope,
         )
         logger.info("runtime_pipeline_v1_wired")
     assessment_service = RuntimeAssessmentService(
@@ -162,6 +187,7 @@ def build_runtime_pipeline(
         plans_repository=plans,
         plans=plan_service,
         code_version=_CODE_VERSION,
+        scope=pipeline_scope,
     )
     scoring_service = RuntimeScoringService(
         opportunities=opportunities,
@@ -170,6 +196,7 @@ def build_runtime_pipeline(
         market_contexts=market_contexts,
         scores=scores,
         code_version=_CODE_VERSION,
+        scope=pipeline_scope,
     )
     ranking_service = RuntimeRankingService(
         scores=scores,
@@ -177,6 +204,7 @@ def build_runtime_pipeline(
         opportunities=opportunities,
         rankings=rankings,
         code_version=_CODE_VERSION,
+        scope=pipeline_scope,
     )
     notification_service = RuntimeNotificationService(
         rankings=rankings,
@@ -225,7 +253,7 @@ def build_runtime_pipeline(
 
     return RuntimeIntelligencePipeline(
         pipeline=pipeline,
-        scope=_PIPELINE_SCOPE,
+        scope=pipeline_scope,
     )
 
 

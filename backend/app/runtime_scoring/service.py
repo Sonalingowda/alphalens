@@ -3,6 +3,7 @@
 from dataclasses import replace
 from decimal import Decimal
 
+from app.market_configuration import get_default_scope
 from app.opportunity_intelligence.domain import (
     AuditMetadata,
     DecimalRange,
@@ -10,6 +11,7 @@ from app.opportunity_intelligence.domain import (
     FeatureSnapshot,
     IntegrityReference,
     MarketContext,
+    MarketScope,
     Opportunity,
     OpportunityStance,
     PolicyReference,
@@ -59,7 +61,6 @@ _EVIDENCE_POLICY = PolicyReference(
     "1.0.0",
     "9159b3d43cbfeafdbe11f0a9e748119f5ddbac762e2bb89c62fd937dacd913c8",
 )
-_SCOPE = ("BTCUSDT",)
 _SCOPE_TIMEFRAMES = ("5m", "10m", "15m")
 _REQUIRED_EVIDENCE_KEYS = {
     "market_price_close",
@@ -98,6 +99,7 @@ class RuntimeScoringService:
         scores: ScoringRepository,
         code_version: str,
         policy: PolicyReference | None = None,
+        scope: MarketScope | None = None,
     ) -> None:
         if not code_version.strip():
             raise ValueError("Runtime scoring code version must be non-empty.")
@@ -108,6 +110,7 @@ class RuntimeScoringService:
         self._scores = scores
         self._code_version = code_version
         self._policy = policy if policy is not None else _policy()
+        self._scope = scope or get_default_scope()
 
     async def score(
         self,
@@ -162,6 +165,7 @@ class RuntimeScoringService:
             persisted_qualification,
             persisted_evidence,
             persisted_context,
+            self._scope.instrument,
         )
         limitations = _optional_limitations(
             persisted_opportunity,
@@ -190,6 +194,7 @@ def _validate(
     qualification: QualificationRecord,
     evidence: EvidencePackage,
     market_context: MarketContext,
+    scope_instrument: str,
 ) -> None:
     cutoff = qualification.audit.evidence_cutoff
     opportunity_reference = _reference(
@@ -212,7 +217,7 @@ def _validate(
         (gate.gate_id, gate.reason_code) for gate in qualification.gate_results
     )
     if (
-        opportunity.scope.instrument != _SCOPE[0]
+        opportunity.scope.instrument != scope_instrument
         or opportunity.scope.timeframe not in _SCOPE_TIMEFRAMES
         or opportunity.decision_policy != _ASSESSMENT_POLICY
         or opportunity.audit.provenance.policy_references != (_ASSESSMENT_POLICY,)

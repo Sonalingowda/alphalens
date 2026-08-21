@@ -4,6 +4,7 @@ from dataclasses import replace
 from decimal import Decimal
 
 from app.inference.artifact import EXPECTED_MOVE_MIN_RR, EXPECTED_MOVE_MIN_SNR
+from app.market_configuration import get_default_scope
 from app.opportunity_intelligence.domain import (
     AuditMetadata,
     ContextStatus,
@@ -11,6 +12,7 @@ from app.opportunity_intelligence.domain import (
     FeatureSnapshot,
     IntegrityReference,
     MarketContext,
+    MarketScope,
     MarketSnapshot,
     Opportunity,
     OpportunityStance,
@@ -54,7 +56,6 @@ _EVIDENCE_POLICY = PolicyReference(
     "1.0.0",
     "9159b3d43cbfeafdbe11f0a9e748119f5ddbac762e2bb89c62fd937dacd913c8",
 )
-_SCOPE = ("BTCUSDT",)
 _SCOPE_TIMEFRAMES = ("5m", "10m", "15m")
 _REQUIRED_EVIDENCE_KEYS = {
     "market_price_close",
@@ -83,6 +84,7 @@ class RuntimeQualificationService:
         qualifications: QualificationRepository,
         code_version: str,
         policy: PolicyReference | None = None,
+        scope: MarketScope | None = None,
     ) -> None:
         if not code_version.strip():
             raise ValueError("Runtime qualification code version must be non-empty.")
@@ -94,6 +96,7 @@ class RuntimeQualificationService:
         self._qualifications = qualifications
         self._code_version = code_version
         self._policy = policy if policy is not None else _policy()
+        self._scope = scope or get_default_scope()
 
     async def qualify(
         self,
@@ -134,7 +137,7 @@ class RuntimeQualificationService:
                 raise ServiceContractError(
                     f"Persisted {label} conflicts with qualification input."
                 )
-        _validate(persisted_opportunity, persisted_evidence, context, features, market)
+        _validate(persisted_opportunity, persisted_evidence, context, features, market, self._scope.instrument)
         record = _record(
             persisted_opportunity,
             persisted_evidence,
@@ -167,6 +170,7 @@ def _validate(
     context: MarketContext,
     features: FeatureSnapshot,
     market: MarketSnapshot,
+    scope_instrument: str,
 ) -> None:
     sources = _sources(opportunity)
     cutoff = opportunity.audit.evidence_cutoff
@@ -185,7 +189,7 @@ def _validate(
         context_reference,
     )
     if (
-        opportunity.scope.instrument != _SCOPE[0]
+        opportunity.scope.instrument != scope_instrument
         or opportunity.scope.timeframe not in _SCOPE_TIMEFRAMES
         or opportunity.stance not in {OpportunityStance.BUY, OpportunityStance.SELL}
         or opportunity.decision_policy != _ASSESSMENT_POLICY
@@ -393,6 +397,7 @@ class RuntimeQualificationServiceV2:
         qualifications: QualificationRepository,
         code_version: str,
         policy: PolicyReference | None = None,
+        scope: MarketScope | None = None,
     ) -> None:
         if not code_version.strip():
             raise ValueError("Runtime qualification V2 code version must be non-empty.")
@@ -404,6 +409,7 @@ class RuntimeQualificationServiceV2:
         self._qualifications = qualifications
         self._code_version = code_version
         self._policy = policy if policy is not None else _v2_policy()
+        self._scope = scope or get_default_scope()
 
     async def qualify(
         self,
@@ -444,7 +450,7 @@ class RuntimeQualificationServiceV2:
                 raise ServiceContractError(
                     f"Persisted {label} conflicts with qualification input."
                 )
-        _validate(persisted_opportunity, persisted_evidence, context, features, market)
+        _validate(persisted_opportunity, persisted_evidence, context, features, market, self._scope.instrument)
         snr_gate = _validate_expected_move(persisted_opportunity)
         rr_gate = _validate_risk_reward(persisted_opportunity)
         record = _record_v2(
