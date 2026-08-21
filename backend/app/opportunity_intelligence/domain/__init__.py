@@ -48,6 +48,10 @@ from app.opportunity_intelligence.domain.notification import (
     NotificationEventType,
 )
 from app.opportunity_intelligence.domain.opportunity import ConfidenceRecord, Opportunity
+from app.opportunity_intelligence.domain.outcome import (
+    OpportunityOutcome,
+    OutcomeRecord,
+)
 from app.opportunity_intelligence.domain.plan import (
     OpportunityPlan,
     PlanTarget,
@@ -131,8 +135,10 @@ __all__ = (
     "OpportunityCandidate",
     "OpportunityDetail",
     "OpportunityLifecycle",
+    "OpportunityOutcome",
     "OpportunityPlan",
     "OpportunityStance",
+    "OutcomeRecord",
     "PlanTarget",
     "PolicyReference",
     "PriceRange",

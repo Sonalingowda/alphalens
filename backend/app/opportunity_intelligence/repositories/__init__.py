@@ -8,6 +8,7 @@ from app.opportunity_intelligence.repositories.delivery import (
     LifecycleRepository,
     NotificationRepository,
     OpportunityPlanRepository,
+    OutcomeRepository,
     RankingRepository,
 )
 from app.opportunity_intelligence.repositories.errors import (
@@ -67,9 +68,9 @@ __all__ = (
     "MarketContextRepository",
     "MarketSnapshotRepository",
     "NotificationRepository",
-    "OpportunityDetailRepository",
     "OpportunityPlanRepository",
     "OpportunityRepository",
+    "OutcomeRepository",
     "QualificationRepository",
     "REPOSITORY_INTERFACE_VERSION",
     "RankingRepository",

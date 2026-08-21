@@ -143,9 +143,52 @@ _ACTIVE_MAX_AGE_MINUTES = 10
 async def _run_lifecycle_sweep(stop_event: asyncio.Event) -> None:
     """Periodically expire stale RANKED lifecycles to EXPIRED."""
     from app.runtime_lifecycle import RuntimeLifecycleService
-    from app.opportunity_intelligence.persistence import LifecyclePostgreSQLRepository
+    from app.opportunity_intelligence.persistence import (
+        LifecyclePostgreSQLRepository,
+        OpportunityPlanPostgreSQLRepository,
+        OutcomePostgreSQLRepository,
+    )
+    from app.outcome_resolution.service import OutcomeResolutionService
 
     lifecycle_repo = LifecyclePostgreSQLRepository(session_factory)
+    plan_repo = OpportunityPlanPostgreSQLRepository(session_factory)
+    outcome_repo = OutcomePostgreSQLRepository(session_factory)
+
+    class _CandleQueryAdapter:
+        async def query(
+            self,
+            instrument: str,
+            timeframe: str,
+            after: datetime,
+            up_to_and_including: datetime,
+        ) -> tuple[dict, ...]:
+            from app.persistence.models import CandleRecord
+            from sqlalchemy import select
+
+            async with session_factory() as session:
+                rows = (
+                    await session.scalars(
+                        select(CandleRecord).where(
+                            CandleRecord.asset_identifier == instrument,
+                            CandleRecord.timeframe == timeframe,
+                            CandleRecord.candle_timestamp > after,
+                            CandleRecord.candle_timestamp <= up_to_and_including,
+                        ).order_by(CandleRecord.candle_timestamp.asc())
+                    )
+                ).all()
+                return tuple(
+                    {
+                        "timestamp": r.candle_timestamp,
+                        "open": r.open_price,
+                        "high": r.high_price,
+                        "low": r.low_price,
+                        "close": r.close_price,
+                        "volume": r.volume,
+                    }
+                    for r in rows
+                )
+
+    outcome_service = OutcomeResolutionService(candle_query=_CandleQueryAdapter())
     lifecycle_service = RuntimeLifecycleService(lifecycles=lifecycle_repo)
 
     while not stop_event.is_set():
@@ -168,8 +211,74 @@ async def _run_lifecycle_sweep(stop_event: asyncio.Event) -> None:
                     "lifecycle_sweep_expired count=%d",
                     len(expired),
                 )
+                for lifecycle in expired:
+                    try:
+                        await _resolve_outcome_for_expired(
+                            lifecycle, outcome_service, plan_repo, outcome_repo
+                        )
+                    except Exception:
+                        logger.exception(
+                            "outcome_resolution_failed opportunity_id=%s",
+                            lifecycle.opportunity_id,
+                        )
         except Exception:
             logger.exception("lifecycle_sweep_failed")
+
+
+async def _resolve_outcome_for_expired(
+    lifecycle,
+    outcome_service,
+    plan_repo,
+    outcome_repo,
+) -> None:
+    """Best-effort outcome resolution for one expired lifecycle."""
+    from app.opportunity_intelligence.repositories.queries import (
+        EntityAsOfQuery,
+        EntityId,
+    )
+
+    lifecycle_event = next(
+        e for e in lifecycle.events if e.event_id == lifecycle.current_event_id
+    )
+    opportunity_id = lifecycle.opportunity_id
+
+    plan = await plan_repo.get_latest_for_opportunity(
+        EntityAsOfQuery(
+            entity_id=EntityId(opportunity_id),
+            as_of=lifecycle_event.available_at,
+        )
+    )
+
+    from app.opportunity_intelligence.domain import Opportunity
+
+    opportunity = Opportunity(
+        contract_version="2.0.0",
+        opportunity_id=opportunity_id,
+        opportunity_version_id=lifecycle.events[-1].opportunity_version_id,
+        stance=lifecycle.direction,
+        assessment_id="",
+        decision_id="",
+        candidate_id="",
+        evidence_package_reference=lifecycle_event.evidence_references[0] if lifecycle_event.evidence_references else None,
+        context_reference=None,
+        reason_codes=("lifecycle.expired",),
+        limitations=(),
+        qualification_reference=None,
+        score_reference=None,
+        confidence=None,
+        plan=plan,
+        valid_until=plan.valid_until,
+        supersedes_opportunity_version_id=None,
+        audit=lifecycle_event.audit,
+    )
+
+    outcome_record = await outcome_service.resolve(opportunity, plan)
+    await outcome_repo.save(outcome_record)
+    logger.info(
+        "outcome_resolved opportunity_id=%s outcome=%s",
+        opportunity_id,
+        outcome_record.outcome.value,
+    )
 
 
 @asynccontextmanager

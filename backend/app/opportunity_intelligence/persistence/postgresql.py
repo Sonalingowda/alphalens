@@ -34,6 +34,7 @@ from app.opportunity_intelligence.domain import (
     OpportunityDetail,
     OpportunityLifecycle,
     OpportunityPlan,
+    OutcomeRecord,
     QualificationRecord,
     RankingSnapshot,
     RuntimeHealthRecord,
@@ -435,6 +436,14 @@ class OpportunityPlanPostgreSQLRepository(PostgreSQLImmutableRepository[Opportun
         super().__init__(sessions, OpportunityPlan, lambda item: item.plan_id, lambda item: item.opportunity_id)
 
     async def get_latest_for_opportunity(self, query: EntityAsOfQuery) -> OpportunityPlan:
+        return await self.latest_for_logical_id(query)
+
+
+class OutcomePostgreSQLRepository(PostgreSQLImmutableRepository[OutcomeRecord]):
+    def __init__(self, sessions: async_sessionmaker[AsyncSession]) -> None:
+        super().__init__(sessions, OutcomeRecord, lambda item: item.outcome_id, lambda item: item.opportunity_id)
+
+    async def get_by_opportunity(self, query: EntityAsOfQuery) -> OutcomeRecord:
         return await self.latest_for_logical_id(query)
 
 

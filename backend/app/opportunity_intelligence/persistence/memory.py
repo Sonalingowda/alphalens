@@ -12,6 +12,7 @@ from typing import Generic, TypeVar
 
 from app.opportunity_intelligence.domain import (
     CanonicalModel,
+    ContextObservation,
     DashboardPage,
     DeliveryAttempt,
     DetectionAttempt,
@@ -29,6 +30,7 @@ from app.opportunity_intelligence.domain import (
     OpportunityDetail,
     OpportunityLifecycle,
     OpportunityPlan,
+    OutcomeRecord,
     QualificationRecord,
     RankingSnapshot,
     RuntimeHealthRecord,
@@ -472,6 +474,14 @@ class LifecycleMemoryRepository(InMemoryImmutableRepository[OpportunityLifecycle
             ):
                 results.append(record)
         return tuple(results)
+
+
+class OutcomeMemoryRepository(InMemoryImmutableRepository[OutcomeRecord]):
+    def __init__(self) -> None:
+        super().__init__(OutcomeRecord, lambda item: item.outcome_id, logical_identity=lambda item: item.opportunity_id)
+
+    async def get_by_opportunity(self, query: EntityAsOfQuery) -> OutcomeRecord:
+        return await self.latest_for_logical_id(query)
 
 
 class NotificationMemoryRepository(InMemoryImmutableRepository[Notification]):

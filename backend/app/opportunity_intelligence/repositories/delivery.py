@@ -9,6 +9,7 @@ from app.opportunity_intelligence.domain import (
     Notification,
     OpportunityLifecycle,
     OpportunityPlan,
+    OutcomeRecord,
     RankingSnapshot,
 )
 from app.opportunity_intelligence.repositories.base import ImmutableRepository
@@ -135,4 +136,20 @@ class NotificationRepository(ImmutableRepository[Notification], Protocol):
 
     async def history(self, query: HistoryQuery) -> RepositoryPage[Notification]:
         """Return immutable notification versions in stable order."""
+        ...
+
+
+@runtime_checkable
+class OutcomeRepository(ImmutableRepository[OutcomeRecord], Protocol):
+    """Append-only access to immutable opportunity outcome records."""
+
+    async def save(self, entity: OutcomeRecord) -> OutcomeRecord:
+        """Persist one outcome record.  Idempotent for same content."""
+        ...
+
+    async def get_by_opportunity(
+        self,
+        query: EntityAsOfQuery,
+    ) -> OutcomeRecord:
+        """Return the outcome for one opportunity or raise EntityNotFoundError."""
         ...
