@@ -631,10 +631,13 @@ class LifecyclePostgreSQLRepository(
         stale_before: datetime,
         limit: int,
     ) -> tuple[OpportunityLifecycle, ...]:
-        """Return RANKED lifecycles whose available_at precedes stale_before."""
-        statement = self._base_select().where(
-            ImmutableAggregateRecord.available_at < stale_before,
-        )
+        """Return RANKED lifecycles whose available_at precedes stale_before.
+
+        Only the latest version per logical_id (opportunity) is considered.
+        Once a lifecycle has transitioned to EXPIRED, the older RANKED version
+        is no longer the latest and is therefore skipped.
+        """
+        statement = self._base_select()
         try:
             async with self._sessions() as session:
                 rows = (await session.scalars(self._ordered(statement))).all()
@@ -642,8 +645,17 @@ class LifecyclePostgreSQLRepository(
             raise StorageUnavailableError(
                 "Lifecycle stale query failed."
             ) from error
-        results: list[OpportunityLifecycle] = []
+
+        latest_by_logical: dict[str, ImmutableAggregateRecord] = {}
         for row in rows:
+            existing = latest_by_logical.get(row.logical_id)
+            if existing is None or row.available_at > existing.available_at:
+                latest_by_logical[row.logical_id] = row
+
+        results: list[OpportunityLifecycle] = []
+        for row in latest_by_logical.values():
+            if row.available_at >= stale_before:
+                continue
             lifecycle = self._decode(row)
             if lifecycle.current_state is LifecycleState.RANKED:
                 results.append(lifecycle)

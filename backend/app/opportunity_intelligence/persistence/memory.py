@@ -450,9 +450,20 @@ class LifecycleMemoryRepository(InMemoryImmutableRepository[OpportunityLifecycle
         stale_before: datetime,
         limit: int,
     ) -> tuple[OpportunityLifecycle, ...]:
-        """Return RANKED lifecycles whose available_at precedes stale_before."""
-        results: list[OpportunityLifecycle] = []
+        """Return RANKED lifecycles whose available_at precedes stale_before.
+
+        Only the latest version per logical_id (opportunity) is considered.
+        Once a lifecycle has transitioned to EXPIRED, the older RANKED version
+        is no longer the latest and is therefore skipped.
+        """
+        latest_by_logical: dict[str, OpportunityLifecycle] = {}
         for record in self._records.values():
+            lid = self._logical_identity(record)
+            existing = latest_by_logical.get(lid)
+            if existing is None or record.audit.available_at > existing.audit.available_at:
+                latest_by_logical[lid] = record
+        results: list[OpportunityLifecycle] = []
+        for record in latest_by_logical.values():
             if len(results) >= limit:
                 break
             if (

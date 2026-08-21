@@ -272,6 +272,172 @@ class LifecycleExpireStaleTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(expired[0].scope, lifecycle.scope)
 
+    async def test_second_sweep_skips_already_expired(self):
+        """Running expire_stale twice does not attempt a second transition."""
+        service, lifecycles, lifecycle, _ = await self._ranked_lifecycle()
+
+        first = await service.expire_stale(
+            as_of=self.STALE_NOW,
+            active_max_age_minutes=10,
+        )
+        self.assertEqual(len(first), 1)
+        self.assertEqual(first[0].current_state, LifecycleState.EXPIRED)
+
+        second = await service.expire_stale(
+            as_of=self.STALE_NOW,
+            active_max_age_minutes=10,
+        )
+        self.assertEqual(second, ())
+
+    async def test_no_version_conflict_on_repeated_sweep(self):
+        """Repeated sweeps do not produce VersionConflictError."""
+        from app.opportunity_intelligence.repositories import VersionConflictError
+
+        service, _, _, _ = await self._ranked_lifecycle()
+
+        await service.expire_stale(
+            as_of=self.STALE_NOW,
+            active_max_age_minutes=10,
+        )
+
+        try:
+            result = await service.expire_stale(
+                as_of=self.STALE_NOW,
+                active_max_age_minutes=10,
+            )
+        except VersionConflictError:
+            self.fail("VersionConflictError raised on idempotent sweep")
+        self.assertEqual(result, ())
+
+    async def test_single_expiration_event_after_two_sweeps(self):
+        """Exactly one expiration lifecycle event exists after two sweeps."""
+        service, _, lifecycle, _ = await self._ranked_lifecycle()
+
+        await service.expire_stale(
+            as_of=self.STALE_NOW,
+            active_max_age_minutes=10,
+        )
+        await service.expire_stale(
+            as_of=self.STALE_NOW,
+            active_max_age_minutes=10,
+        )
+
+        from app.opportunity_intelligence.repositories.queries import EntityAsOfQuery, EntityId
+        stored = await service._lifecycles.get_current(
+            EntityAsOfQuery(EntityId(lifecycle.opportunity_id), self.STALE_NOW)
+        )
+        expire_events = [
+            e for e in stored.events
+            if e.resulting_state is LifecycleState.EXPIRED
+        ]
+        self.assertEqual(len(expire_events), 1)
+        self.assertEqual(expire_events[0].reason_code, "opportunity.expired")
+
+    async def test_single_expired_transition_after_two_sweeps(self):
+        """Exactly one EXPIRED transition exists after two sweeps."""
+        service, _, lifecycle, _ = await self._ranked_lifecycle()
+
+        await service.expire_stale(
+            as_of=self.STALE_NOW,
+            active_max_age_minutes=10,
+        )
+        await service.expire_stale(
+            as_of=self.STALE_NOW,
+            active_max_age_minutes=10,
+        )
+
+        from app.opportunity_intelligence.repositories.queries import EntityAsOfQuery, EntityId
+        stored = await service._lifecycles.get_current(
+            EntityAsOfQuery(EntityId(lifecycle.opportunity_id), self.STALE_NOW)
+        )
+        self.assertEqual(stored.current_state, LifecycleState.EXPIRED)
+        self.assertEqual(stored.events[-1].resulting_state, LifecycleState.EXPIRED)
+
+    async def test_exactly_one_ranked_to_expired_event(self):
+        """Exactly one RANKED→EXPIRED event, not duplicated."""
+        service, _, lifecycle, _ = await self._ranked_lifecycle()
+
+        await service.expire_stale(
+            as_of=self.STALE_NOW,
+            active_max_age_minutes=10,
+        )
+        await service.expire_stale(
+            as_of=self.STALE_NOW,
+            active_max_age_minutes=10,
+        )
+
+        from app.opportunity_intelligence.repositories.queries import EntityAsOfQuery, EntityId
+        stored = await service._lifecycles.get_current(
+            EntityAsOfQuery(EntityId(lifecycle.opportunity_id), self.STALE_NOW)
+        )
+        transitions = [
+            e for e in stored.events
+            if e.prior_state is LifecycleState.RANKED
+            and e.resulting_state is LifecycleState.EXPIRED
+        ]
+        self.assertEqual(len(transitions), 1)
+
+    async def test_terminal_state_unchanged_after_sweep(self):
+        """EXPIRED is terminal; sweeping does not alter the stored state."""
+        service, _, lifecycle, _ = await self._ranked_lifecycle()
+
+        await service.expire_stale(
+            as_of=self.STALE_NOW,
+            active_max_age_minutes=10,
+        )
+
+        from app.opportunity_intelligence.repositories.queries import EntityAsOfQuery, EntityId
+        stored_after_first = await service._lifecycles.get_current(
+            EntityAsOfQuery(EntityId(lifecycle.opportunity_id), self.STALE_NOW)
+        )
+
+        await service.expire_stale(
+            as_of=self.STALE_NOW,
+            active_max_age_minutes=10,
+        )
+
+        stored_after_second = await service._lifecycles.get_current(
+            EntityAsOfQuery(EntityId(lifecycle.opportunity_id), self.STALE_NOW)
+        )
+        self.assertEqual(stored_after_first.current_state, LifecycleState.EXPIRED)
+        self.assertEqual(stored_after_second.current_state, LifecycleState.EXPIRED)
+        self.assertEqual(
+            stored_after_first.events[-1].event_id,
+            stored_after_second.events[-1].event_id,
+        )
+        self.assertEqual(len(stored_after_second.events), len(stored_after_first.events))
+
+    async def test_three_sweeps_all_idempotent(self):
+        """Three consecutive sweeps: first expires, next two skip."""
+        service, _, lifecycle, _ = await self._ranked_lifecycle()
+
+        first = await service.expire_stale(
+            as_of=self.STALE_NOW,
+            active_max_age_minutes=10,
+        )
+        second = await service.expire_stale(
+            as_of=self.STALE_NOW,
+            active_max_age_minutes=10,
+        )
+        third = await service.expire_stale(
+            as_of=self.STALE_NOW,
+            active_max_age_minutes=10,
+        )
+
+        self.assertEqual(len(first), 1)
+        self.assertEqual(second, ())
+        self.assertEqual(third, ())
+
+        from app.opportunity_intelligence.repositories.queries import EntityAsOfQuery, EntityId
+        stored = await service._lifecycles.get_current(
+            EntityAsOfQuery(EntityId(lifecycle.opportunity_id), self.STALE_NOW)
+        )
+        expire_events = [
+            e for e in stored.events
+            if e.resulting_state is LifecycleState.EXPIRED
+        ]
+        self.assertEqual(len(expire_events), 1)
+
 
 if __name__ == "__main__":
     unittest.main()
