@@ -43,7 +43,7 @@ def load_settings() -> Settings:
         ).lower(),
         app_name=os.getenv("ALPHALENS_API_NAME", "AlphaLens API"),
         host=os.getenv("ALPHALENS_API_HOST", "127.0.0.1"),
-        port=int(os.getenv("ALPHALENS_API_PORT", "8000")),
+        port=_environment_port(),
         api_workers=int(os.getenv("ALPHALENS_API_WORKERS", "1")),
         log_level=os.getenv("ALPHALENS_LOG_LEVEL", "INFO").upper(),
         cors_allowed_origins=_environment_origins(
@@ -211,6 +211,17 @@ def validate_settings(settings: Settings) -> None:
             raise ConfigurationError(
                 "Production Redis credentials must use a non-placeholder password."
             )
+
+
+def _environment_port() -> int:
+    """Resolve the API port: ALPHALENS_API_PORT first, then platform PORT."""
+    explicit = os.getenv("ALPHALENS_API_PORT")
+    if explicit is not None:
+        return int(explicit)
+    platform_port = os.getenv("PORT")
+    if platform_port is not None:
+        return int(platform_port)
+    return 8000
 
 
 def _environment_datetime(name: str, default: str) -> datetime:
