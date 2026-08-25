@@ -2,7 +2,8 @@
 
 import asyncio
 from contextlib import asynccontextmanager, suppress
-from datetime import datetime, timezone
+from dataclasses import replace
+from datetime import datetime, timedelta, timezone
 import logging
 
 from sqlalchemy import text
@@ -266,6 +267,18 @@ async def _resolve_outcome_for_expired(
             plan.valid_until.isoformat(),
         )
         return
+
+    if plan.valid_until is None:
+        # Documented V1.1 exception: V1.1 plans carry no validity window, so
+        # the resolution horizon is derived from the established 10-minute
+        # active-expiration policy. The persisted plan artifact is unchanged.
+        plan = replace(
+            plan,
+            valid_until=(
+                signal_event.available_at
+                + timedelta(minutes=_ACTIVE_MAX_AGE_MINUTES)
+            ),
+        )
 
     outcome_record = await outcome_service.resolve(
         opportunity_id=opportunity_id,

@@ -914,5 +914,77 @@ class OutcomeRecordValidationTests(unittest.TestCase):
         self.assertIsNone(record.first_touch_price)
 
 
+class V1Dot1SweepWindowDerivationTests(unittest.IsolatedAsyncioTestCase):
+    """Documented V1.1 exception (authorized): when a V1.1 plan carries no
+    validity window, the lifecycle sweep derives the resolution horizon from
+    the established 10-minute active-expiration policy. The persisted plan
+    artifact is unchanged; EXPIRED then resolves canonically and
+    idempotently."""
+
+    def _derivation(self, plan):
+        from dataclasses import replace
+
+        return replace(
+            plan,
+            valid_until=plan.audit.evidence_cutoff + timedelta(minutes=10),
+        )
+
+    async def test_v1_1_derived_window_resolves_expired_idempotently(self) -> None:
+        plan = _make_plan(valid_until=None)
+        self.assertIsNone(plan.valid_until)
+
+        derived = self._derivation(plan)
+
+        candles = tuple(
+            {
+                "timestamp": _SIGNAL_TIME + timedelta(minutes=1 + i),
+                "open": Decimal("100.000000000000000000"),
+                "high": Decimal("100.200000000000000000"),
+                "low": Decimal("99.800000000000000000"),
+                "close": Decimal("100.000000000000000000"),
+                "volume": Decimal("10"),
+            }
+            for i in range(14)
+        )
+
+        evaluated = []
+
+        class _WindowedCandleQuery:
+            async def query(self, instrument, timeframe, after, up_to_and_including):
+                selected = tuple(
+                    candle
+                    for candle in candles
+                    if after < candle["timestamp"] <= up_to_and_including
+                )
+                evaluated.append(len(selected))
+                return selected
+
+        service = OutcomeResolutionService(candle_query=_WindowedCandleQuery())
+        record_one = await service.resolve(
+            opportunity_id="opp.test.12345",
+            opportunity_version_id="opp.test.12345.v1",
+            direction="BUY",
+            signal_timestamp=_SIGNAL_TIME,
+            evidence_cutoff=_SIGNAL_TIME,
+            plan=derived,
+            source_integrity_digest=derived.canonical_sha256(),
+        )
+        record_two = await service.resolve(
+            opportunity_id="opp.test.12345",
+            opportunity_version_id="opp.test.12345.v1",
+            direction="BUY",
+            signal_timestamp=_SIGNAL_TIME,
+            evidence_cutoff=_SIGNAL_TIME,
+            plan=derived,
+            source_integrity_digest=derived.canonical_sha256(),
+        )
+
+        self.assertEqual(record_one.outcome, OpportunityOutcome.EXPIRED)
+        self.assertEqual(evaluated[-1], 10)
+        self.assertEqual(record_one, record_two)
+        self.assertEqual(record_one.outcome_id, "outcome.opp.test.12345.v1")
+        self.assertIsNone(plan.valid_until)
+        self.assertEqual(derived.valid_until, _SIGNAL_TIME + timedelta(minutes=10))
+
 if __name__ == "__main__":
     unittest.main()
