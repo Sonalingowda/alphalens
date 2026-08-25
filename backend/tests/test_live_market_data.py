@@ -561,5 +561,43 @@ def _fake_binance_klines(count: int) -> list[list]:
     return klines
 
 
+class WarmupRetryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_transient_warmup_failure_is_retried(self) -> None:
+        repository = MarketSnapshotMemoryRepository()
+        service = LiveMarketIngestionService(
+            repository=repository,
+            code_version="git:abcdef123456",
+        )
+        attempts = {"count": 0}
+
+        async def flaky() -> int:
+            attempts["count"] += 1
+            if attempts["count"] < 2:
+                raise RuntimeError("transient storage error")
+            return 0
+
+        service.warmup_history = flaky  # type: ignore[method-assign]
+        persisted = await service.warmup_history_with_retry(
+            attempts=3, backoff_seconds=0
+        )
+        self.assertEqual(persisted, 0)
+        self.assertEqual(attempts["count"], 2)
+
+    async def test_exhausted_retries_surface_last_error(self) -> None:
+        repository = MarketSnapshotMemoryRepository()
+        service = LiveMarketIngestionService(
+            repository=repository,
+            code_version="git:abcdef123456",
+        )
+
+        async def always_fails() -> int:
+            raise RuntimeError("persistent storage outage")
+
+        service.warmup_history = always_fails  # type: ignore[method-assign]
+        with self.assertRaises(RuntimeError):
+            await service.warmup_history_with_retry(
+                attempts=2, backoff_seconds=0
+            )
+
 if __name__ == "__main__":
     unittest.main()

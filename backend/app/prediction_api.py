@@ -302,7 +302,7 @@ async def _infrastructure_lifespan(application):
     try:
         async with _application_lifespan(application):
             try:
-                await live_market_ingestion.warmup_history()
+                await live_market_ingestion.warmup_history_with_retry()
             except Exception:
                 logger.exception("warmup_history_failed")
             em_inference = await _try_load_expected_move_inference()

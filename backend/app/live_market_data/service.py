@@ -129,6 +129,36 @@ class LiveMarketIngestionService:
         )
         return persisted
 
+    async def warmup_history_with_retry(
+        self,
+        *,
+        attempts: int = 3,
+        backoff_seconds: float = 15.0,
+    ) -> int:
+        """Run warmup_history(), retrying transient failures.
+
+        A failed warmup leaves candle-history gaps that keep detection
+        inputs unavailable until the next process start, so transient
+        storage errors are retried a bounded number of times before the
+        startup failure is surfaced.
+        """
+        last_error: Exception | None = None
+        for attempt in range(1, attempts + 1):
+            try:
+                self._warmup_history_fetched = False
+                return await self.warmup_history()
+            except Exception as error:  # noqa: BLE001 - retried below
+                last_error = error
+                logger.warning(
+                    "warmup_history_retry attempt=%d failed=%s",
+                    attempt,
+                    type(error).__name__,
+                )
+                if attempt < attempts:
+                    await asyncio.sleep(backoff_seconds)
+        assert last_error is not None
+        raise last_error
+
     async def run(self, stop_event: asyncio.Event) -> None:
         await self.initialize()
         await self._client.run(self.process_message, stop_event)
