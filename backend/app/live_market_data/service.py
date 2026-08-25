@@ -13,6 +13,7 @@ import httpx
 from app.live_market_data.binance import BinanceKlineParser, BinanceWebSocketClient
 from app.live_market_data.metrics import LiveIngestionMetrics
 from app.live_market_data.models import (
+    CandleGap,
     CompletedCandle,
     LiveMarketDataConflictError,
     LiveMessageValidationError,
@@ -215,6 +216,36 @@ class LiveMarketIngestionService:
                 self._metrics.increment("completed_candles")
                 await self._persist(derived)
 
+    async def _repair_gap_history(self, gap: CandleGap) -> None:
+        """Backfill a detected historical gap via the idempotent REST warmup.
+
+        Reuses warmup_history() so a live ingestion gap cannot starve the
+        feature engine warmup prefix.  Failures never propagate: the
+        ingestion loop must survive transient repair failures, and the next
+        detected gap retries the repair.
+        """
+        previous_flag = self._warmup_history_fetched
+        self._warmup_history_fetched = False
+        try:
+            persisted = await self.warmup_history(
+                symbol=gap.symbol,
+                timeframe=gap.timeframe,
+            )
+        except Exception:  # noqa: BLE001 - ingestion must survive repair failures
+            self._warmup_history_fetched = previous_flag
+            logger.exception(
+                "live_candle_gap_backfill_failed symbol=%s timeframe=%s",
+                gap.symbol,
+                gap.timeframe.value,
+            )
+            return
+        logger.info(
+            "live_candle_gap_backfill_complete symbol=%s timeframe=%s persisted=%s",
+            gap.symbol,
+            gap.timeframe.value,
+            persisted,
+        )
+
     async def _persist(self, candle: CompletedCandle) -> MarketSnapshot | None:
         try:
             duplicate = self._deduplicator.classify(candle)
@@ -269,6 +300,7 @@ class LiveMarketIngestionService:
                 gap.missing_end.isoformat(),
                 gap.missing_count,
             )
+            await self._repair_gap_history(gap)
         try:
             stored = await self._repository.save(snapshot)
         except Exception:

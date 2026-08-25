@@ -312,10 +312,11 @@ class RuntimeIntelligencePipeline:
             result = await self._pipeline.run(request)
         except PipelineExecutionError as error:
             logger.error(
-                "runtime_pipeline_execution_error run_id=%s stage=%s trace=%s",
+                "runtime_pipeline_execution_error run_id=%s stage=%s trace=%s cause=%r",
                 error.run_id,
                 error.stage.value,
                 error.trace_hash,
+                error.__cause__,
             )
             for stage_record in error.stages:
                 logger.error(

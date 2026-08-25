@@ -4,7 +4,7 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 import json
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from app.live_market_data import (
     BinanceKlineParser,
@@ -240,6 +240,7 @@ class LiveIngestionServiceTests(unittest.IsolatedAsyncioTestCase):
             repository=repository,
             code_version="git:abcdef123456",
         )
+        service.warmup_history = AsyncMock(return_value=0)
         await service.process_message(_message(START, "15m"))
         await service.process_message(
             _message(START + timedelta(minutes=30), "15m")
@@ -248,6 +249,7 @@ class LiveIngestionServiceTests(unittest.IsolatedAsyncioTestCase):
         metrics = service.metrics.snapshot()
         self.assertEqual(metrics.gaps_detected, 1)
         self.assertEqual(metrics.missing_intervals, 1)
+        service.warmup_history.assert_awaited_once()
 
     async def test_warmup_history_persists_historical_klines(self) -> None:
         repository = MarketSnapshotMemoryRepository()
