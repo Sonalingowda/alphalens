@@ -2,9 +2,15 @@
 
 from dataclasses import replace
 from datetime import timedelta
+from decimal import Decimal
 import unittest
 
-from app.opportunity_intelligence.domain import CandidateAttemptState, DetectionAttempt
+from app.opportunity_intelligence.domain import (
+    CandidateAttemptState,
+    DetectionAttempt,
+    MarketCandleSnapshot,
+    MarketSnapshot,
+)
 from app.opportunity_intelligence.persistence import (
     DashboardProjectionMemoryRepository,
     DetectionMemoryRepository,
@@ -35,7 +41,9 @@ from app.opportunity_intelligence.repositories import (
 )
 from tests.test_opportunity_domain_models import (
     AVAILABLE,
+    CUTOFF,
     SCOPE,
+    START,
     _audit,
     _candidate,
     _market_snapshot,
@@ -166,6 +174,126 @@ class OpportunityPersistenceTests(unittest.IsolatedAsyncioTestCase):
                 EntityAsOfQuery(EntityId(candidate.candidate_id), AVAILABLE)
             )
         )
+
+    async def test_invalid_runtime_argument_fails_closed(self) -> None:
+        repository = MarketSnapshotMemoryRepository()
+        with self.assertRaises(Exception) as captured:
+            await repository.save("not-a-snapshot")  # type: ignore[arg-type]
+        self.assertIsInstance(captured.exception, ContractViolationError)
+
+    async def test_transport_lineage_conflict_resolution(self) -> None:
+        """WS-vs-REST transport lineage differences for same candle are resolved.
+
+        When the same Binance candle arrives via both WebSocket (live) and REST
+        (gap repair) paths, the transport metadata differs (source_payload_hash,
+        event_time, lineage) but the market truth (OHLCV, timestamp) is identical.
+        The repository should resolve this benign conflict by keeping the
+        already-persisted canonical entity and NOT raising DuplicateEntityError.
+        """
+        from app.opportunity_intelligence.persistence import (
+            MarketSnapshotPostgreSQLRepository,
+        )
+        from app.persistence.database import session_factory
+        from app.opportunity_intelligence.domain import MarketSnapshot
+
+        # This test requires a running PostgreSQL instance.
+        # We'll test the equivalence logic directly via the repository method.
+        repository = MarketSnapshotPostgreSQLRepository(session_factory)
+
+        # Create a base market snapshot (simulating WS path)
+        base_snapshot = _market_snapshot()
+
+        # Create a conflicting snapshot with different transport lineage
+        # (different source_payload_hash, event_time, but same market content)
+        source_ws = _reference("candle.source.ws", available_at=START)
+        source_rest = _reference("candle.source.rest", available_at=START)
+        candle = MarketCandleSnapshot(
+            candle_id="candle.1",
+            timestamp=START,
+            available_at=CUTOFF,
+            open=Decimal("100.000000000000000000"),
+            high=Decimal("110.000000000000000000"),
+            low=Decimal("90.000000000000000000"),
+            close=Decimal("105.000000000000000000"),
+            volume=Decimal("10.000000000000000000"),
+            source_reference=source_ws,
+        )
+        ws_snapshot = MarketSnapshot(
+            contract_version="1.0.0",
+            snapshot_id="market.snapshot.transport.test",
+            scope=SCOPE,
+            candles=(candle,),
+            complete=True,
+            audit=_audit(source_ws),
+        )
+
+        # Same market content, different transport lineage (REST path)
+        candle_rest = MarketCandleSnapshot(
+            candle_id="candle.1",
+            timestamp=START,
+            available_at=CUTOFF,
+            open=Decimal("100.000000000000000000"),
+            high=Decimal("110.000000000000000000"),
+            low=Decimal("90.000000000000000000"),
+            close=Decimal("105.000000000000000000"),
+            volume=Decimal("10.000000000000000000"),
+            source_reference=source_rest,  # Different source reference
+        )
+        rest_snapshot = MarketSnapshot(
+            contract_version="1.0.0",
+            snapshot_id="market.snapshot.transport.test",  # Same identity
+            scope=SCOPE,
+            candles=(candle_rest,),
+            complete=True,
+            audit=_audit(source_rest),  # Different audit (different source)
+        )
+
+        # Verify they have different canonical hashes (different transport lineage)
+        self.assertNotEqual(
+            ws_snapshot.canonical_sha256(),
+            rest_snapshot.canonical_sha256(),
+            "WS and REST snapshots must have different canonical hashes due to transport lineage",
+        )
+
+        # Verify market content is equivalent
+        self.assertTrue(
+            repository._equivalent_market_snapshot_content(ws_snapshot, rest_snapshot),
+            "WS and REST snapshots must have equivalent market content",
+        )
+
+        # Test the equivalence method directly
+        self.assertTrue(
+            repository._equivalent_market_snapshot_content(ws_snapshot, ws_snapshot),
+            "Snapshot must be equivalent to itself",
+        )
+
+        # Test that genuinely different market content is NOT equivalent
+        different_candle = MarketCandleSnapshot(
+            candle_id="candle.1",
+            timestamp=START,
+            available_at=CUTOFF,
+            open=Decimal("100.000000000000000000"),
+            high=Decimal("110.000000000000000000"),
+            low=Decimal("90.000000000000000000"),
+            close=Decimal("106.000000000000000000"),  # Different close price
+            volume=Decimal("10.000000000000000000"),
+            source_reference=source_ws,
+        )
+        different_snapshot = MarketSnapshot(
+            contract_version="1.0.0",
+            snapshot_id="market.snapshot.transport.test",
+            scope=SCOPE,
+            candles=(different_candle,),
+            complete=True,
+            audit=_audit(source_ws),
+        )
+        self.assertFalse(
+            repository._equivalent_market_snapshot_content(ws_snapshot, different_snapshot),
+            "Snapshots with different close prices must not be equivalent",
+        )
+
+        # Note: Full integration test with PostgreSQL requires running DB.
+        # The above tests the equivalence logic which is the core of the fix.
 
     async def test_invalid_runtime_argument_fails_closed(self) -> None:
         repository = MarketSnapshotMemoryRepository()

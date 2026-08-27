@@ -1,5 +1,6 @@
 """PostgreSQL adapters for frozen immutable repository contracts."""
 
+import logging
 from collections.abc import Callable, Mapping
 from dataclasses import MISSING, dataclass, fields, is_dataclass
 from datetime import datetime
@@ -11,6 +12,8 @@ from typing import Any, Generic, TypeVar, Union, get_args, get_origin, get_type_
 from sqlalchemy import Select, select, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+logger = logging.getLogger("alphalens.persistence.postgresql")
 
 from app.market_data.models import CandleTimeframe
 from app.market_data.validation import timeframe_duration
@@ -123,6 +126,19 @@ class PostgreSQLImmutableRepository(Generic[T]):
             digest = entity.canonical_sha256()
             if current is not None:
                 if current.canonical_hash != digest:
+                    # Check if this is a benign transport-lineage conflict for MarketSnapshot.
+                    # Both WS and REST can produce the same market candle with different
+                    # transport metadata (source_payload_hash, event_time, lineage).
+                    # If the actual market content (OHLCV, timestamp) is identical,
+                    # treat as benign and keep the already-persisted canonical entity.
+                    if self._entity_type is MarketSnapshot:
+                        existing_entity = self._decode(current)
+                        if self._equivalent_market_snapshot_content(existing_entity, entity):
+                            logger.warning(
+                                "transport_lineage_conflict_resolved identity=%s",
+                                identity,
+                            )
+                            continue
                     raise DuplicateEntityError(
                         f"Immutable identity {identity!r} already has different content."
                     )
@@ -315,6 +331,36 @@ class PostgreSQLImmutableRepository(Generic[T]):
         if entity.canonical_sha256() != row.canonical_hash:
             raise ContractViolationError("Stored canonical aggregate hash mismatch.")
         return entity
+
+    def _equivalent_market_snapshot_content(
+        self, existing: MarketSnapshot, incoming: MarketSnapshot
+    ) -> bool:
+        """Check if two MarketSnapshots have equivalent market content.
+
+        Compares only the actual market truth (scope, candle timestamps, OHLCV,
+        volume) while ignoring transport-lineage differences such as
+        source_payload_hash, event_time, lineage_hash, and audit metadata.
+
+        This is used to resolve benign transport-lineage conflicts when the
+        same Binance candle arrives via both WebSocket (live) and REST
+        (gap repair) paths with different transport metadata but identical
+        market truth.
+        """
+        if existing.scope != incoming.scope:
+            return False
+        if len(existing.candles) != len(incoming.candles):
+            return False
+        for ec, ic in zip(existing.candles, incoming.candles):
+            if (
+                ec.timestamp != ic.timestamp
+                or ec.open != ic.open
+                or ec.high != ic.high
+                or ec.low != ic.low
+                or ec.close != ic.close
+                or ec.volume != ic.volume
+            ):
+                return False
+        return True
 
     @staticmethod
     def _require(value: object, expected: type[object], operation: str) -> None:
