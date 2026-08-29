@@ -244,36 +244,63 @@ async def pipeline_diagnose_latest() -> dict:
     feature_repo = FeatureSnapshotPostgreSQLRepository(session_factory)
     context_repo = MarketContextPostgreSQLRepository(session_factory)
     as_of = market.audit.available_at
-    features = await feature_repo.get_latest(
-        ScopedRepositoryQuery(scope=scope, as_of=as_of, limit=1)
+    recent = await market_snapshot_repository.get_by_scope(
+        ScopedRepositoryQuery(scope=scope, as_of=now, limit=600)
     )
-    context = await context_repo.get_latest(
-        ScopedRepositoryQuery(scope=scope, as_of=as_of, limit=1)
+    history_depth = len(recent.items)
+    oldest_ts = (
+        recent.items[-1].candles[0].timestamp.isoformat() if recent.items else None
     )
-    inputs = await _load_persisted_inputs(market, features, context)
-    reason = _validate_inputs(inputs, scope.instrument)
-    present: set[tuple[str, str]] = set()
-    try:
-        values = _required_values(features)
-        present = {(key[0], key[2]) for key in values}
-    except Exception:
-        pass
-    required = {(item[0], item[2]) for item in _REQUIRED_FEATURES}
-    return {
+    newest_ts = (
+        recent.items[0].candles[0].timestamp.isoformat() if recent.items else None
+    )
+    payload: dict = {
         "snapshot_id": market.snapshot_id,
-        "validate_reason": reason,
-        "market_complete": market.complete,
-        "candle_count": len(market.candles),
-        "required_features": sorted(f"{a}:{b}" for a, b in required),
-        "required_features_present": sorted(f"{a}:{b}" for a, b in present),
-        "context_data_quality_status": context.data_quality.status.value,
-        "context_components": {
-            name: getattr(context, name).status.value
-            for name in ("trend", "momentum", "volatility", "structure", "session")
-        },
-        "feature_cutoff": str(inputs.cutoff),
-        "market_available_at": str(market.audit.available_at),
+        "history_depth": history_depth,
+        "history_oldest": oldest_ts,
+        "history_newest": newest_ts,
     }
+    try:
+        features = await feature_repo.get_latest(
+            ScopedRepositoryQuery(scope=scope, as_of=as_of, limit=1)
+        )
+        context = await context_repo.get_latest(
+            ScopedRepositoryQuery(scope=scope, as_of=as_of, limit=1)
+        )
+        inputs = await _load_persisted_inputs(market, features, context)
+        reason = _validate_inputs(inputs, scope.instrument)
+        present: set[tuple[str, str]] = set()
+        try:
+            values = _required_values(features)
+            present = {(key[0], key[2]) for key in values}
+        except Exception as exc:  # noqa: BLE001 - diagnostic surface
+            payload["required_values_error"] = repr(exc)
+        required = {(item[0], item[2]) for item in _REQUIRED_FEATURES}
+        payload.update(
+            {
+                "validate_reason": reason,
+                "market_complete": market.complete,
+                "candle_count": len(market.candles),
+                "required_features": sorted(f"{a}:{b}" for a, b in required),
+                "required_features_present": sorted(f"{a}:{b}" for a, b in present),
+                "context_data_quality_status": context.data_quality.status.value,
+                "context_components": {
+                    name: getattr(context, name).status.value
+                    for name in (
+                        "trend",
+                        "momentum",
+                        "volatility",
+                        "structure",
+                        "session",
+                    )
+                },
+                "feature_cutoff": str(inputs.cutoff),
+                "market_available_at": str(market.audit.available_at),
+            }
+        )
+    except Exception as exc:  # noqa: BLE001 - diagnostic surface
+        payload["inputs_error"] = repr(exc)
+    return payload
 
 
 redis_infrastructure = RedisInfrastructure.from_url(settings.redis_url)
