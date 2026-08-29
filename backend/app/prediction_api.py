@@ -195,10 +195,23 @@ async def pipeline_run_latest() -> dict:
             "snapshot_id": latest.snapshot_id,
             "error": repr(error),
         }
+    stages = (
+        [
+            {
+                "stage": record.stage.value,
+                "status": record.status.value,
+                "reason": record.reason_code,
+            }
+            for record in result.stages
+        ]
+        if result is not None
+        else []
+    )
     return {
         "status": "ok",
         "snapshot_id": latest.snapshot_id,
         "outcome": result.outcome.value if result is not None else None,
+        "stages": stages,
     }
 
 
