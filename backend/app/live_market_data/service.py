@@ -39,6 +39,19 @@ from app.opportunity_intelligence.repositories import (
 
 logger = logging.getLogger("alphalens.live_market_data")
 
+_REST_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+)
+
+
+def _interval_ms(timeframe: CandleTimeframe) -> int:
+    return int(timeframe.value.rstrip("m")) * 60_000
+
+
+def _provider_for_url(url: str) -> str:
+    return "bybit" if "bybit" in url else "binance"
+
 
 class LiveMarketIngestionService:
     """Persist validated completed candles as immutable market snapshots."""
@@ -52,6 +65,11 @@ class LiveMarketIngestionService:
         parser: BinanceKlineParser | None = None,
         metrics: LiveIngestionMetrics | None = None,
         rest_base_url: str = "https://data-api.binance.vision",
+        rest_fallback_urls: tuple[str, ...] = (
+            "https://api.binance.com",
+            "https://data.binance.com",
+            "https://api.bybit.com",
+        ),
     ) -> None:
         if not code_version.strip():
             raise ValueError("Live ingestion code version must be non-empty.")
@@ -68,8 +86,107 @@ class LiveMarketIngestionService:
         self._gaps = CandleGapDetector()
         self._ten_minute = TenMinuteCandleAggregator()
         self._rest_base_url = rest_base_url.rstrip("/")
+        self._rest_sources: tuple[tuple[str, str], ...] = (
+            (self._rest_base_url, "binance"),
+            *[
+                (url.rstrip("/"), _provider_for_url(url))
+                for url in rest_fallback_urls
+            ],
+        )
         self._initialized = False
         self._warmup_history_fetched = False
+
+    async def _fetch_klines(
+        self,
+        symbol: str,
+        timeframe: CandleTimeframe,
+        limit: int,
+        end_time_ms: int,
+    ) -> list[Sequence[object]]:
+        """Fetch historical klines, trying every configured source in order.
+
+        Binance public REST hosts are frequently IP-blocked from cloud egress
+        (HTTP 418/451), while the public WebSocket host often is not.  To keep
+        the feature-engine warmup prefix populated, fall back through multiple
+        Binance hosts and a non-Binance public source (Bybit) before failing.
+        A browser User-Agent is sent because some hosts reject the default
+        client user-agent.
+        """
+        limit = min(limit, 1000)
+        last_error: Exception | None = None
+        for url, provider in self._rest_sources:
+            try:
+                if provider == "binance":
+                    full = f"{url}/api/v3/klines"
+                    params = {
+                        "symbol": symbol,
+                        "interval": timeframe.value,
+                        "limit": limit,
+                        "endTime": end_time_ms,
+                    }
+                else:
+                    full = f"{url}/v5/market/kline"
+                    params = {
+                        "category": "spot",
+                        "symbol": symbol,
+                        "interval": timeframe.value.rstrip("m"),
+                        "limit": limit,
+                    }
+                async with httpx.AsyncClient() as client:
+                    response = await client.get(
+                        full,
+                        params=params,
+                        timeout=30,
+                        headers={"User-Agent": _REST_USER_AGENT},
+                    )
+                    response.raise_for_status()
+                    data = response.json()
+                if provider == "binance":
+                    if not isinstance(data, list) or not data:
+                        raise ValueError("empty binance klines payload")
+                    klines = [tuple(row) for row in data]
+                else:
+                    if not isinstance(data, dict) or data.get("retCode") != 0:
+                        raise ValueError(f"bybit klines error: {data}")
+                    rows = data.get("result", {}).get("list", [])
+                    if not rows:
+                        raise ValueError("empty bybit klines payload")
+                    step = _interval_ms(timeframe)
+                    klines = []
+                    for row in reversed(rows):
+                        start_ms = int(row[0])
+                        close_ms = start_ms + step - 1
+                        klines.append(
+                            (
+                                start_ms,
+                                row[1],
+                                row[2],
+                                row[3],
+                                row[4],
+                                row[5],
+                                close_ms,
+                                str(row[5]),
+                                0,
+                            )
+                        )
+                logger.info(
+                    "rest_klines_fetched provider=%s url=%s symbol=%s count=%s",
+                    provider,
+                    url,
+                    symbol,
+                    len(klines),
+                )
+                return klines
+            except Exception as error:  # noqa: BLE001 - try next source
+                last_error = error
+                logger.warning(
+                    "rest_klines_fetch_failed provider=%s url=%s err=%s",
+                    provider,
+                    url,
+                    type(error).__name__,
+                )
+        assert last_error is not None
+        raise last_error
 
     @property
     def metrics(self) -> LiveIngestionMetrics:
@@ -100,18 +217,8 @@ class LiveMarketIngestionService:
         floor_minutes = (now.minute // 5) * 5
         end = now.replace(minute=floor_minutes, second=0, microsecond=0)
         end_ms = int(end.timestamp() * 1000)
-        params = {
-            "symbol": symbol,
-            "interval": timeframe.value,
-            "limit": min(limit, 1000),
-            "endTime": end_ms,
-        }
-        url = f"{self._rest_base_url}/api/v3/klines"
         persisted = 0
-        async with httpx.AsyncClient() as client:
-            response = await client.get(url, params=params, timeout=30)
-            response.raise_for_status()
-            klines = response.json()
+        klines = await self._fetch_klines(symbol, timeframe, limit, end_ms)
         for kline in klines:
             candle = _completed_candle_from_rest_kline(kline)
             snapshot = build_market_snapshot(
