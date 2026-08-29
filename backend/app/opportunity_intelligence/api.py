@@ -15,6 +15,7 @@ from app.opportunity_intelligence.domain import (
     LifecycleState,
     MarketScope,
     OpportunityStance,
+    OutcomeRecord,
 )
 from app.opportunity_intelligence.repositories import (
     ContractViolationError,
@@ -33,6 +34,7 @@ from app.opportunity_intelligence.repositories import (
     ValidationError,
     VersionConflictError,
 )
+from app.opportunity_intelligence.persistence import OutcomePostgreSQLRepository
 
 
 OPPORTUNITY_API_VERSION = "1.0.0"
@@ -49,6 +51,7 @@ def create_opportunity_intelligence_app(
     governance_repository: RuntimeGovernanceRepository | None = None,
     market_repository: MarketSnapshotRepository | None = None,
     lifecycle_repository: LifecycleRepository | None = None,
+    outcome_repository: OutcomePostgreSQLRepository | None = None,
     clock: Clock | None = None,
 ) -> FastAPI:
     """Create the read-only API with repository ports supplied by the caller."""
@@ -313,7 +316,72 @@ def create_opportunity_intelligence_app(
         )
         return _success(record.to_dict())
 
+    @app.get(
+        "/api/v1/outcomes/{opportunity_id}",
+        response_model=dict[str, object],
+    )
+    async def get_outcome(
+        opportunity_id: str,
+        as_of: datetime | None = None,
+    ) -> dict[str, object]:
+        """Read-only inspection of a persisted outcome record.
+
+        Exposes only data that outcome resolution has actually persisted from
+        real market candles. This endpoint cannot create or modify outcomes.
+        """
+        if outcome_repository is None:
+            raise StorageUnavailableError(
+                "Outcome repository is not configured."
+            )
+        resolved_as_of = _resolve_as_of(as_of, current_time)
+        record = await outcome_repository.get_by_opportunity(
+            EntityAsOfQuery(EntityId(opportunity_id), resolved_as_of)
+        )
+        return _success(_serialize_outcome(record))
+
     return app
+
+
+def _serialize_outcome(record: OutcomeRecord) -> dict[str, object]:
+    """Convert an OutcomeRecord into a JSON-serializable read-only payload."""
+    from decimal import Decimal as _Decimal
+
+    def _field(value):
+        if isinstance(value, _Decimal):
+            return str(value)
+        if isinstance(value, datetime):
+            return value.isoformat()
+        return value
+
+    return {
+        "outcome_id": record.outcome_id,
+        "opportunity_id": record.opportunity_id,
+        "opportunity_version_id": record.opportunity_version_id,
+        "lifecycle_id": record.lifecycle_id,
+        "outcome": record.outcome.value,
+        "direction": record.direction,
+        "reference_price": _field(record.reference_price),
+        "entry_zone_lower": _field(record.entry_zone_lower),
+        "entry_zone_upper": _field(record.entry_zone_upper),
+        "invalidation_price": _field(record.invalidation_price),
+        "target_price": _field(record.target_price),
+        "signal_timestamp": _field(record.signal_timestamp),
+        "outcome_interval_start": _field(record.outcome_interval_start),
+        "outcome_interval_end": _field(record.outcome_interval_end),
+        "resolved_at": _field(record.resolved_at),
+        "candles_evaluated": record.candles_evaluated,
+        "first_touch_price": _field(record.first_touch_price),
+        "first_touch_timestamp": _field(record.first_touch_timestamp),
+        "first_touch_candle_index": record.first_touch_candle_index,
+        "entry_reached": record.entry_reached,
+        "entry_timestamp": _field(record.entry_timestamp),
+        "entry_candle_index": record.entry_candle_index,
+        "first_barrier": record.first_barrier,
+        "resolution_reason": record.resolution_reason,
+        "data_quality": record.data_quality,
+        "risk_reward": _field(record.risk_reward),
+        "exclusion_reason": record.exclusion_reason,
+    }
 
 
 def _filter_items(

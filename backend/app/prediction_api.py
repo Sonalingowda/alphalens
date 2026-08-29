@@ -22,6 +22,7 @@ from app.opportunity_intelligence.persistence import (
     MarketSnapshotPostgreSQLRepository,
     OpportunityDetailPostgreSQLRepository,
     OpportunityPlanPostgreSQLRepository,
+    OutcomePostgreSQLRepository,
     RuntimeGovernancePostgreSQLRepository,
 )
 from app.opportunity_intelligence.repositories import RepositoryError
@@ -128,12 +129,14 @@ opportunity_app = create_opportunity_intelligence_app(
     governance_repository=RuntimeGovernancePostgreSQLRepository(session_factory),
     market_repository=market_snapshot_repository,
     lifecycle_repository=LifecyclePostgreSQLRepository(session_factory),
+    outcome_repository=OutcomePostgreSQLRepository(session_factory),
 )
 _mvp_paths = {
     "/api/v1/opportunities",
     "/api/v1/opportunities/{opportunity_id}",
     "/api/v1/opportunities/history",
     "/api/v1/opportunity-intelligence/health",
+    "/api/v1/outcomes/{opportunity_id}",
     "/health",
     "/markets/live",
     "/opportunities",
@@ -402,7 +405,12 @@ async def _run_lifecycle_sweep(stop_event: asyncio.Event) -> None:
                 for lifecycle in expired:
                     try:
                         await _resolve_outcome_for_expired(
-                            lifecycle, outcome_service, plan_repo, outcome_repo
+                            lifecycle,
+                            outcome_service,
+                            plan_repo,
+                            outcome_repo,
+                            lifecycle_service,
+                            lifecycle_repo,
                         )
                     except Exception:
                         logger.exception(
@@ -418,13 +426,21 @@ async def _resolve_outcome_for_expired(
     outcome_service,
     plan_repo,
     outcome_repo,
+    lifecycle_service,
+    lifecycle_repo,
 ) -> None:
     """Best-effort outcome resolution for one expired lifecycle.
 
-    Uses the first lifecycle event (DETECTED) as the signal timestamp,
-    NOT the EXPIRED event.  Skips resolution if plan.valid_until is still
-    in the future to prevent premature outcome determination.
+    Uses the first lifecycle event (DETECTED) as the signal timestamp, NOT the
+    EXPIRED event. Resolution only runs when the opportunity has not already
+    been resolved (guards against duplicate OutcomeRecords and duplicate
+    lifecycle RESOLVED events), and never for future-valid opportunities.
+
+    This path deliberately operates only on lifecycles returned by the
+    staleness sweep (RANKED -> EXPIRED in the same pass), so pre-existing
+    EXPIRED historical lifecycles from earlier deployments are NOT rewritten.
     """
+    from app.opportunity_intelligence.domain import LifecycleState
     from app.opportunity_intelligence.repositories.queries import (
         EntityAsOfQuery,
         EntityId,
@@ -432,6 +448,30 @@ async def _resolve_outcome_for_expired(
 
     signal_event = lifecycle.events[0]
     opportunity_id = lifecycle.opportunity_id
+
+    # Idempotency: if the outcome was already persisted, do not recreate it and
+    # do not append another RESOLVED lifecycle event.
+    try:
+        existing = await outcome_repo.get_by_opportunity(
+            EntityAsOfQuery(
+                entity_id=EntityId(opportunity_id),
+                as_of=datetime.now(timezone.utc),
+            )
+        )
+    except Exception:
+        existing = None
+    if existing is not None:
+        logger.info(
+            "outcome_resolution_skipped_already_resolved opportunity_id=%s",
+            opportunity_id,
+        )
+        return
+    if lifecycle.current_state == LifecycleState.RESOLVED:
+        logger.info(
+            "outcome_resolution_skipped_already_resolved_lifecycle opportunity_id=%s",
+            opportunity_id,
+        )
+        return
 
     plan = await plan_repo.get_latest_for_opportunity(
         EntityAsOfQuery(
@@ -456,9 +496,9 @@ async def _resolve_outcome_for_expired(
         return
 
     if plan.valid_until is None:
-        # Documented V1.1 exception: V1.1 plans carry no validity window, so
-        # the resolution horizon is derived from the established 10-minute
-        # active-expiration policy. The persisted plan artifact is unchanged.
+        # Defensive fallback: derive the resolution horizon from the established
+        # 10-minute active-expiration policy when a plan carries no validity
+        # window. New V1.1/V2 plans always persist valid_until.
         plan = replace(
             plan,
             valid_until=(
@@ -481,6 +521,26 @@ async def _resolve_outcome_for_expired(
         opportunity_id,
         outcome_record.outcome.value,
     )
+
+    try:
+        await lifecycle_service.resolve_outcome(
+            lifecycle,
+            outcome_record.outcome,
+            datetime.now(timezone.utc),
+        )
+    except Exception:
+        logger.exception(
+            "outcome_lifecycle_resolution_failed opportunity_id=%s",
+            opportunity_id,
+        )
+    else:
+        try:
+            await lifecycle_repo.save(lifecycle)
+        except Exception:
+            logger.exception(
+                "outcome_lifecycle_save_failed opportunity_id=%s",
+                opportunity_id,
+            )
 
 
 @asynccontextmanager

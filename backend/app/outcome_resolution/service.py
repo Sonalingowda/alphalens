@@ -50,6 +50,54 @@ class OpportunityOutcomeError(Exception):
     """Raised when outcome resolution fails due to missing data or invalid state."""
 
 
+def _entry_reached(
+    direction: str,
+    entry_zone_lower: Decimal,
+    entry_zone_upper: Decimal,
+    candle_low: Decimal,
+    candle_high: Decimal,
+) -> bool:
+    """Return True when a candle's range overlaps the displayed entry zone.
+
+    For BUY the displayed entry is reached when the market trades into the
+    entry zone (low at/below the upper bound and high at/above the lower
+    bound). For SELL the mirrored condition applies. When the entry zone
+    collapses to the reference price this reduces to the candle range
+    containing the reference price.
+    """
+    if candle_high is None or candle_low is None:
+        return False
+    if direction.upper() == "BUY":
+        return candle_low <= entry_zone_upper and candle_high >= entry_zone_lower
+    return candle_high >= entry_zone_lower and candle_low <= entry_zone_upper
+
+
+def _determine_entry(
+    direction: str,
+    entry_zone_lower: Decimal,
+    entry_zone_upper: Decimal,
+    signal_timestamp: datetime,
+    candles: tuple[dict, ...],
+) -> tuple[bool, datetime | None, int | None]:
+    """Return (entry_reached, entry_timestamp, entry_candle_index).
+
+    The entry is the first candle after the signal whose range overlaps the
+    displayed entry zone. Candles are evaluated in chronological order.
+    """
+    for idx, candle in enumerate(candles):
+        if candle["timestamp"] <= signal_timestamp:
+            continue
+        if _entry_reached(
+            direction,
+            entry_zone_lower,
+            entry_zone_upper,
+            candle["low"],
+            candle["high"],
+        ):
+            return True, candle["timestamp"], idx
+    return False, None, None
+
+
 def _determine_outcome(
     direction: str,
     reference_price: Decimal,
@@ -70,13 +118,49 @@ def _determine_outcome(
 ]:
     """Walk candles chronologically and return the first-touch outcome.
 
+    Resolution models the market in two ordered phases:
+
+    1. Determine whether the displayed entry is reached after the signal.
+    2. Only after entry, observe target/stop and report the first barrier
+       touched. If one candle touches both barriers, OHLCV cannot establish
+       which was first, so the outcome is reported as AMBIGUOUS_INTRABAR
+       rather than fabricating an ordering.
+
     Returns:
         (outcome, candles_evaluated, first_touch_price, first_touch_timestamp,
          first_touch_candle_index, exclusion_reason)
     """
+    if not candles:
+        return (
+            OpportunityOutcome.DATA_INSUFFICIENT,
+            0,
+            None,
+            None,
+            None,
+            None,
+        )
+
     is_buy = direction.upper() == "BUY"
 
-    for idx, candle in enumerate(candles):
+    entry_reached, _, entry_index = _determine_entry(
+        direction,
+        entry_zone_lower,
+        entry_zone_upper,
+        signal_timestamp,
+        candles,
+    )
+    if not entry_reached:
+        return (
+            OpportunityOutcome.EXPIRED_BEFORE_ENTRY,
+            len(candles),
+            None,
+            None,
+            None,
+            None,
+        )
+
+    for idx in range(entry_index, len(candles)):
+        candle = candles[idx]
         candle_ts = candle["timestamp"]
         candle_high = candle["high"]
         candle_low = candle["low"]
@@ -93,12 +177,12 @@ def _determine_outcome(
 
         if stop_touched and target_touched:
             return (
-                OpportunityOutcome.UNRESOLVED,
+                OpportunityOutcome.AMBIGUOUS_INTRABAR,
                 idx + 1,
-                reference_price,
-                candle_ts,
-                idx,
                 None,
+                None,
+                None,
+                "ambiguous_intrabar",
             )
 
         if stop_touched:
@@ -122,7 +206,7 @@ def _determine_outcome(
             )
 
     return (
-        OpportunityOutcome.EXPIRED,
+        OpportunityOutcome.EXPIRED_AFTER_ENTRY,
         len(candles),
         None,
         None,
@@ -189,6 +273,31 @@ class OutcomeResolutionService:
             candles=tuple(candles_raw),
         )
 
+        entry_reached, entry_timestamp, entry_candle_index = _determine_entry(
+            direction=direction,
+            entry_zone_lower=plan.entry_zone.lower,
+            entry_zone_upper=plan.entry_zone.upper,
+            signal_timestamp=signal_timestamp,
+            candles=tuple(candles_raw),
+        )
+
+        if outcome is OpportunityOutcome.TARGET_HIT:
+            first_barrier = "TARGET"
+        elif outcome is OpportunityOutcome.STOP_HIT:
+            first_barrier = "STOP"
+        elif outcome is OpportunityOutcome.AMBIGUOUS_INTRABAR:
+            first_barrier = "AMBIGUOUS"
+        else:
+            first_barrier = None
+
+        resolution_reason = f"outcome.{outcome.value.lower()}"
+        data_quality = (
+            "INSUFFICIENT"
+            if outcome is OpportunityOutcome.DATA_INSUFFICIENT
+            else "OK"
+        )
+        risk_reward = plan.targets[0].risk_reward if plan.targets else None
+
         resolved_at = max(datetime.now(timezone.utc), valid_until)
 
         source_refs = (
@@ -236,6 +345,13 @@ class OutcomeResolutionService:
             first_touch_price=first_touch_price,
             first_touch_timestamp=first_touch_timestamp,
             first_touch_candle_index=first_touch_candle_index,
+            entry_reached=entry_reached,
+            entry_timestamp=entry_timestamp,
+            entry_candle_index=entry_candle_index,
+            first_barrier=first_barrier,
+            resolution_reason=resolution_reason,
+            data_quality=data_quality,
+            risk_reward=risk_reward,
             exclusion_reason=exclusion_reason,
             policy=self._policy,
             evidence_references=source_refs,

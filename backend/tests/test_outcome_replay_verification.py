@@ -148,7 +148,7 @@ class ReplaySellStopHit(unittest.TestCase):
 
 
 class ReplayDualTouch(unittest.TestCase):
-    """BUY: both barriers touched in the same candle."""
+    """BUY: both barriers touched in the same candle -> order unknowable."""
 
     def test_buy_dual_touch(self) -> None:
         candles = (
@@ -165,13 +165,14 @@ class ReplayDualTouch(unittest.TestCase):
             valid_until=_VALID_UNTIL,
             candles=candles,
         )
-        self.assertEqual(outcome, OpportunityOutcome.UNRESOLVED)
+        self.assertEqual(outcome, OpportunityOutcome.AMBIGUOUS_INTRABAR)
         self.assertEqual(count, 1)
-        self.assertEqual(price, _BUY_REF)
+        self.assertIsNone(price)
+        self.assertEqual(reason, "ambiguous_intrabar")
 
 
 class ReplayExpired(unittest.TestCase):
-    """BUY: price oscillates but never touches either barrier."""
+    """BUY: entry reached, price oscillates but never touches either barrier."""
 
     def test_expired(self) -> None:
         candles = (
@@ -192,7 +193,7 @@ class ReplayExpired(unittest.TestCase):
             valid_until=_VALID_UNTIL,
             candles=candles,
         )
-        self.assertEqual(outcome, OpportunityOutcome.EXPIRED)
+        self.assertEqual(outcome, OpportunityOutcome.EXPIRED_AFTER_ENTRY)
         self.assertEqual(count, 5)
         self.assertIsNone(price)
 

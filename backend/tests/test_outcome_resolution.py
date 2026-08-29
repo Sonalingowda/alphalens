@@ -271,7 +271,7 @@ class ExpiredTests(unittest.TestCase):
             valid_until=_VALID_UNTIL,
             candles=candles,
         )
-        self.assertEqual(outcome, OpportunityOutcome.EXPIRED)
+        self.assertEqual(outcome, OpportunityOutcome.EXPIRED_AFTER_ENTRY)
         self.assertEqual(count, 1)
         self.assertIsNone(price)
         self.assertIsNone(ts)
@@ -289,7 +289,7 @@ class ExpiredTests(unittest.TestCase):
             valid_until=_VALID_UNTIL,
             candles=(),
         )
-        self.assertEqual(outcome, OpportunityOutcome.EXPIRED)
+        self.assertEqual(outcome, OpportunityOutcome.DATA_INSUFFICIENT)
         self.assertEqual(count, 0)
 
 
@@ -309,10 +309,10 @@ class DualTouchTests(unittest.TestCase):
             valid_until=_VALID_UNTIL,
             candles=candles,
         )
-        self.assertEqual(outcome, OpportunityOutcome.UNRESOLVED)
+        self.assertEqual(outcome, OpportunityOutcome.AMBIGUOUS_INTRABAR)
         self.assertEqual(count, 1)
-        self.assertEqual(price, Decimal("100"))
-        self.assertIsNone(reason)
+        self.assertIsNone(price)
+        self.assertEqual(reason, "ambiguous_intrabar")
 
     def test_sell_dual_touch_same_candle(self) -> None:
         candles = (
@@ -329,10 +329,10 @@ class DualTouchTests(unittest.TestCase):
             valid_until=_VALID_UNTIL,
             candles=candles,
         )
-        self.assertEqual(outcome, OpportunityOutcome.UNRESOLVED)
+        self.assertEqual(outcome, OpportunityOutcome.AMBIGUOUS_INTRABAR)
         self.assertEqual(count, 1)
-        self.assertEqual(price, Decimal("100"))
-        self.assertIsNone(reason)
+        self.assertIsNone(price)
+        self.assertEqual(reason, "ambiguous_intrabar")
 
 
 class ChronologyTests(unittest.TestCase):
@@ -641,7 +641,7 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
             plan=plan,
         )
 
-        self.assertEqual(result.outcome, OpportunityOutcome.EXPIRED)
+        self.assertEqual(result.outcome, OpportunityOutcome.EXPIRED_AFTER_ENTRY)
         self.assertIsNone(result.first_touch_price)
 
     async def test_resolve_no_plan_raises(self) -> None:
@@ -979,7 +979,7 @@ class V1Dot1SweepWindowDerivationTests(unittest.IsolatedAsyncioTestCase):
             source_integrity_digest=derived.canonical_sha256(),
         )
 
-        self.assertEqual(record_one.outcome, OpportunityOutcome.EXPIRED)
+        self.assertEqual(record_one.outcome, OpportunityOutcome.EXPIRED_AFTER_ENTRY)
         self.assertEqual(evaluated[-1], 10)
         self.assertEqual(record_one, record_two)
         self.assertEqual(record_one.outcome_id, "outcome.opp.test.12345.v1")

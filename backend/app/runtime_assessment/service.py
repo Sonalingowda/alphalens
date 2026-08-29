@@ -173,7 +173,7 @@ class RuntimeAssessmentService:
         )
         if plan is not None:
             plan = await self._plans_repository.save(plan)
-            opportunity = replace(opportunity, plan=plan)
+            opportunity = replace(opportunity, plan=plan, valid_until=plan.valid_until)
             opportunity = replace(
                 opportunity,
                 audit=replace(

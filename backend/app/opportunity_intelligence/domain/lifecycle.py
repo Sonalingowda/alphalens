@@ -29,6 +29,7 @@ class LifecycleState(StrEnum):
     SUPERSEDED = "SUPERSEDED"
     INVALIDATED = "INVALIDATED"
     EXPIRED = "EXPIRED"
+    RESOLVED = "RESOLVED"
     ARCHIVED = "ARCHIVED"
 
 
@@ -54,6 +55,7 @@ _ALLOWED_TRANSITIONS: dict[LifecycleState, frozenset[LifecycleState]] = {
             LifecycleState.SUPERSEDED,
             LifecycleState.INVALIDATED,
             LifecycleState.EXPIRED,
+            LifecycleState.RESOLVED,
         }
     ),
     LifecycleState.PUBLISHED: frozenset(
@@ -75,7 +77,12 @@ _ALLOWED_TRANSITIONS: dict[LifecycleState, frozenset[LifecycleState]] = {
     ),
     LifecycleState.SUPERSEDED: frozenset({LifecycleState.ARCHIVED}),
     LifecycleState.INVALIDATED: frozenset({LifecycleState.ARCHIVED}),
-    LifecycleState.EXPIRED: frozenset({LifecycleState.ARCHIVED}),
+    LifecycleState.EXPIRED: frozenset(
+        {
+            LifecycleState.ARCHIVED,
+            LifecycleState.RESOLVED,
+        }
+    ),
     LifecycleState.ARCHIVED: frozenset(),
 }
 

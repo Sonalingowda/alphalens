@@ -21,6 +21,23 @@ class OpportunityOutcome(StrEnum):
     """Canonical terminal outcome for a V2 opportunity evaluation.
 
     Each resolved opportunity produces exactly one terminal outcome.
+
+    The granular outcomes below distinguish what actually happened to a
+    genuine opportunity after generation:
+
+    - TARGET_HIT / STOP_HIT: the displayed target / invalidation was reached
+      first after the entry was reached.
+    - EXPIRED_BEFORE_ENTRY: the observation window closed without the market
+      ever reaching the displayed entry.
+    - EXPIRED_AFTER_ENTRY: the entry was reached but neither barrier was
+      touched before the window closed.
+    - AMBIGUOUS_INTRABAR: a single candle touched both barriers so OHLCV
+      cannot establish which was first; no fabricated ordering is recorded.
+    - DATA_INSUFFICIENT: no market candles were available for the observation
+      window, so the outcome cannot be determined.
+
+    EXPIRED / UNRESOLVED / INVALIDATED are retained for backward
+    compatibility with earlier persisted records.
     """
 
     TARGET_HIT = "TARGET_HIT"
@@ -28,6 +45,10 @@ class OpportunityOutcome(StrEnum):
     EXPIRED = "EXPIRED"
     UNRESOLVED = "UNRESOLVED"
     INVALIDATED = "INVALIDATED"
+    EXPIRED_BEFORE_ENTRY = "EXPIRED_BEFORE_ENTRY"
+    EXPIRED_AFTER_ENTRY = "EXPIRED_AFTER_ENTRY"
+    AMBIGUOUS_INTRABAR = "AMBIGUOUS_INTRABAR"
+    DATA_INSUFFICIENT = "DATA_INSUFFICIENT"
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,6 +83,13 @@ class OutcomeRecord(CanonicalModel):
     policy: PolicyReference
     evidence_references: tuple[IntegrityReference, ...]
     audit: AuditMetadata
+    entry_reached: bool = False
+    entry_timestamp: datetime | None = None
+    entry_candle_index: int | None = None
+    first_barrier: str | None = None
+    resolution_reason: str | None = None
+    data_quality: str = "OK"
+    risk_reward: Decimal | None = None
 
     def __post_init__(self) -> None:
         validate_identifier(self.outcome_id, "Outcome identifier")
@@ -124,7 +152,6 @@ class OutcomeRecord(CanonicalModel):
         if self.outcome in (
             OpportunityOutcome.TARGET_HIT,
             OpportunityOutcome.STOP_HIT,
-            OpportunityOutcome.UNRESOLVED,
         ):
             if self.first_touch_price is None:
                 raise DomainValidationError(

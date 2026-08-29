@@ -44,6 +44,11 @@ _PLAN_CONTRACT_VERSION: Final[str] = "1.0.0"
 _REWARD_MULTIPLE: Final[Decimal] = Decimal("1.5")
 _ATR_EVIDENCE_SUFFIX: Final[str] = "atr_true_range"
 
+# V1.1 observation/validity window. Matches the established 10-minute active
+# expiration policy used by the runtime lifecycle sweep, so an opportunity's
+# outcome is resolved over exactly the window it was considered live.
+_V1_HORIZON_MINUTES: Final[int] = 10
+
 _TARGET_ID_SUFFIX: Final[str] = "tp1"
 
 
@@ -300,7 +305,7 @@ class RuntimeOpportunityPlanService:
             risk_unit="price_distance",
             assumptions=assumptions,
             limitations=limitations,
-            valid_until=None,
+            valid_until=available_at + timedelta(minutes=_V1_HORIZON_MINUTES),
             audit=AuditMetadata(
                 created_at=available_at,
                 evidence_cutoff=evidence_cutoff,

@@ -11,6 +11,7 @@ from app.opportunity_intelligence.domain import (
     LifecycleState,
     Opportunity,
     OpportunityLifecycle,
+    OpportunityOutcome,
     OpportunityStance,
     PolicyReference,
     Provenance,
@@ -435,6 +436,149 @@ class RuntimeLifecycleService:
             events=events,
             current_event_id=event.event_id,
             current_state=LifecycleState.EXPIRED,
+            audit=lifecycle_audit,
+        )
+
+        lifecycle = replace(
+            provisional,
+            audit=replace(
+                lifecycle_audit,
+                result_hash=canonical_sha256(
+                    provisional,
+                    exclude=frozenset({"result_hash"}),
+                ),
+            ),
+        )
+
+        await self._lifecycles.save_event(event)
+        await self._lifecycles.save(lifecycle)
+
+        return lifecycle
+
+    async def resolve_outcome(
+        self,
+        lifecycle: OpportunityLifecycle,
+        outcome: OpportunityOutcome,
+        as_of: datetime,
+    ) -> OpportunityLifecycle:
+        """Append a terminal RESOLVED event carrying the actual market outcome.
+
+        The authoritative granular outcome is persisted on the OutcomeRecord;
+        the lifecycle event records that resolution occurred and encodes the
+        outcome in its reason_code (``outcome.<lowercase_value>``). The
+        lifecycle never claims TARGET_HIT/STOP_HIT as a state — only that the
+        outcome was resolved and what it was.
+
+        Raises ServiceContractError if the lifecycle has already been resolved
+        or archived, preventing duplicate resolution events.
+        """
+        current_event = next(
+            e for e in lifecycle.events if e.event_id == lifecycle.current_event_id
+        )
+
+        if lifecycle.current_state in (
+            LifecycleState.RESOLVED,
+            LifecycleState.ARCHIVED,
+        ):
+            raise ServiceContractError(
+                "Lifecycle outcome is already terminal; cannot resolve again."
+            )
+
+        prior_state = current_event.resulting_state
+        if prior_state not in (
+            LifecycleState.RANKED,
+            LifecycleState.EXPIRED,
+        ):
+            raise ServiceContractError(
+                "Lifecycle state does not permit outcome resolution."
+            )
+
+        source_refs = (
+            IntegrityReference(
+                artifact_id=lifecycle.current_event_id,
+                artifact_type="lifecycle_event",
+                artifact_version="1.0.0",
+                integrity_digest=lifecycle.canonical_sha256(),
+                available_at=current_event.available_at,
+            ),
+        )
+
+        cutoff = as_of
+
+        audit = AuditMetadata(
+            created_at=as_of,
+            evidence_cutoff=cutoff,
+            available_at=as_of,
+            provenance=Provenance(
+                source_references=source_refs,
+                policy_references=(self._policy,),
+                code_version=self._code_version,
+                configuration_hash=self._policy.integrity_digest,
+                lineage_hash=canonical_sha256(source_refs),
+            ),
+            result_hash="0" * 64,
+        )
+
+        event = LifecycleEvent(
+            contract_version="1.0.0",
+            event_id=(
+                f"lifecycle.event."
+                f"{lifecycle.opportunity_id}."
+                f"{len(lifecycle.events) + 1}"
+            ),
+            opportunity_id=lifecycle.opportunity_id,
+            opportunity_version_id=lifecycle.events[-1].opportunity_version_id,
+            prior_state=prior_state,
+            resulting_state=LifecycleState.RESOLVED,
+            sequence=len(lifecycle.events) + 1,
+            policy=self._policy,
+            reason_code=f"outcome.{outcome.value.lower()}",
+            occurred_at=as_of,
+            available_at=as_of,
+            assessment_reference=current_event.assessment_reference,
+            evidence_references=current_event.evidence_references,
+            predecessor_event_id=current_event.event_id,
+            successor_opportunity_version_id=None,
+            audit=audit,
+        )
+
+        event = replace(
+            event,
+            audit=replace(
+                audit,
+                result_hash=canonical_sha256(
+                    event,
+                    exclude=frozenset({"result_hash"}),
+                ),
+            ),
+        )
+
+        events = (*lifecycle.events, event)
+        lifecycle_audit = AuditMetadata(
+            created_at=as_of,
+            evidence_cutoff=cutoff,
+            available_at=as_of,
+            provenance=Provenance(
+                source_references=source_refs,
+                policy_references=(self._policy,),
+                code_version=self._code_version,
+                configuration_hash=self._policy.integrity_digest,
+                lineage_hash=canonical_sha256(source_refs),
+            ),
+            result_hash="0" * 64,
+        )
+
+        provisional = OpportunityLifecycle(
+            contract_version="1.0.0",
+            opportunity_id=lifecycle.opportunity_id,
+            scope=lifecycle.scope,
+            direction=lifecycle.direction,
+            identity_policy=lifecycle.identity_policy,
+            originating_candidate_id=lifecycle.originating_candidate_id,
+            initial_evidence_cutoff=lifecycle.initial_evidence_cutoff,
+            events=events,
+            current_event_id=event.event_id,
+            current_state=LifecycleState.RESOLVED,
             audit=lifecycle_audit,
         )
 
