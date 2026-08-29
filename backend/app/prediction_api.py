@@ -223,20 +223,20 @@ async def pipeline_diagnose_latest() -> dict:
     latest BTCUSDT/5m snapshot. Reconstructs persisted inputs exactly as
     detection does; does not alter detection semantics.
     """
-    from app.market_configuration import get_default_scope
-    from app.opportunity_intelligence.repositories import ScopedRepositoryQuery
-    from app.opportunity_intelligence.persistence import (
-        FeatureSnapshotPostgreSQLRepository,
-        MarketContextPostgreSQLRepository,
-    )
-    from app.runtime_detection.service import (
-        _REQUIRED_FEATURES,
-        _load_persisted_inputs,
-        _required_values,
-        _validate_inputs,
-    )
-
     try:
+        from app.market_configuration import get_default_scope
+        from app.opportunity_intelligence.repositories import ScopedRepositoryQuery
+        from app.opportunity_intelligence.persistence import (
+            FeatureSnapshotPostgreSQLRepository,
+            MarketContextPostgreSQLRepository,
+        )
+        from app.runtime_detection.service import (
+            _REQUIRED_FEATURES,
+            _load_persisted_inputs,
+            _required_values,
+            _validate_inputs,
+        )
+
         scope = get_default_scope()
         now = datetime.now(timezone.utc)
         market = await market_snapshot_repository.get_latest(
