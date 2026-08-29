@@ -161,6 +161,7 @@ async def pipeline_health() -> dict:
         "last_snapshot_id": _pipeline_health.last_snapshot_id,
         "last_outcome": _pipeline_health.last_outcome,
         "pending_tasks": len(_pipeline_tasks),
+        "warmup_rest_base_url": settings.market_data_rest_base_url,
     }
 
 
