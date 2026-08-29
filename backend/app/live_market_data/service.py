@@ -60,6 +60,20 @@ def _provider_for_url(url: str) -> str:
     return "binance"
 
 
+def _is_valid_ingestion_candle(candle: CompletedCandle) -> bool:
+    """Reject obviously invalid market data at the ingestion boundary.
+
+    BTCUSDT trades continuously with deep liquidity, so a completed candle with
+    zero volume is not real market data and must not become a canonical market
+    snapshot.  This guard is intentionally placed at the ingestion boundary
+    rather than the domain model: the domain ``CompletedCandle`` contract
+    permits ``volume >= 0`` because a universal zero-volume rule could wrongly
+    reject legitimate (non-production) instruments.  Here we only protect the
+    supported production instrument, BTCUSDT, from malformed/empty provider rows.
+    """
+    return candle.volume > 0
+
+
 class LiveMarketIngestionService:
     """Persist validated completed candles as immutable market snapshots."""
 
@@ -275,6 +289,16 @@ class LiveMarketIngestionService:
         klines = await self._fetch_klines(symbol, timeframe, limit, end_ms)
         for kline in klines:
             candle = _completed_candle_from_rest_kline(kline)
+            if not _is_valid_ingestion_candle(candle):
+                self._metrics.increment("invalid_candles")
+                logger.warning(
+                    "invalid_warmup_candle_rejected symbol=%s timeframe=%s open_time=%s volume=%s",
+                    candle.symbol,
+                    candle.timeframe.value,
+                    candle.open_time.isoformat(),
+                    str(candle.volume),
+                )
+                continue
             snapshot = build_market_snapshot(
                 candle, code_version=self._code_version
             )
@@ -368,6 +392,16 @@ class LiveMarketIngestionService:
             return
         if candle is None:
             self._metrics.increment("incomplete_updates")
+            return
+        if not _is_valid_ingestion_candle(candle):
+            self._metrics.increment("invalid_candles")
+            logger.warning(
+                "invalid_candle_rejected symbol=%s timeframe=%s open_time=%s volume=%s",
+                candle.symbol,
+                candle.timeframe.value,
+                candle.open_time.isoformat(),
+                str(candle.volume),
+            )
             return
         self._metrics.increment("completed_candles")
         stored = await self._persist(candle)

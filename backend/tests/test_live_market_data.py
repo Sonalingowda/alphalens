@@ -21,6 +21,8 @@ from app.live_market_data import (
     build_market_snapshot,
 )
 from app.live_market_data import CompletedCandle
+from app.prediction_api import _supervise_ingestion
+from websockets.exceptions import InvalidHandshake, InvalidStatus, WebSocketException
 from app.market_data.models import CandleTimeframe
 from app.opportunity_intelligence.domain import MarketScope
 from app.opportunity_intelligence.persistence import MarketSnapshotMemoryRepository
@@ -618,6 +620,78 @@ class BinanceWebSocketClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(session.closed)
         self.assertEqual(client.metrics.snapshot().heartbeat_timeouts, 1)
 
+    async def test_websocket_handshake_exception_reconnects_without_terminating(self):
+        # A handshake/status failure surfaces as a websockets WebSocketException
+        # (e.g. InvalidStatus 451 from Render egress). Previously this escaped
+        # the reconnect handler and killed the ingestion task. It must now be
+        # caught and trigger reconnect/backoff while ingestion stays alive.
+        stop = asyncio.Event()
+        sessions = [
+            _FakeWebSocket([WebSocketException("handshake rejected")]),
+            _FakeWebSocket([InvalidStatus(451)]),
+            _FakeWebSocket([_message(START, "5m")]),
+        ]
+        connector = _FakeConnector(sessions)
+        sleeps: list[float] = []
+
+        async def sleep(delay: float) -> None:
+            sleeps.append(delay)
+
+        async def handler(message: str | bytes) -> None:
+            self.assertEqual(message, _message(START, "5m"))
+            stop.set()
+
+        client = BinanceWebSocketClient(
+            connector=connector,
+            sleeper=sleep,
+            backoff_initial_seconds=1,
+            backoff_max_seconds=8,
+        )
+        # Must return normally: the WebSocketException must not terminate the loop.
+        await client.run(handler, stop)
+
+        self.assertEqual(connector.calls, 3)
+        self.assertEqual(sleeps, [1, 2])
+        metrics = client.metrics.snapshot()
+        self.assertEqual(metrics.connections, 3)
+        self.assertEqual(metrics.disconnects, 2)
+        self.assertEqual(metrics.reconnects, 2)
+        self.assertEqual(metrics.messages_received, 1)
+        self.assertTrue(stop.is_set())
+
+    async def test_websocket_exception_and_invalid_handshake_reconnect_bounded(self):
+        # InvalidHandshake is also a WebSocketException subclass; reconnect must
+        # use bounded exponential backoff (capped), not an unbounded loop.
+        stop = asyncio.Event()
+        sessions = [
+            _FakeWebSocket([InvalidHandshake("bad handshake")]),
+            _FakeWebSocket([WebSocketException("transient")]),
+            _FakeWebSocket([InvalidHandshake("bad handshake again")]),
+            _FakeWebSocket([_message(START, "5m")]),
+        ]
+        connector = _FakeConnector(sessions)
+        sleeps: list[float] = []
+
+        async def sleep(delay: float) -> None:
+            sleeps.append(delay)
+
+        async def handler(message: str | bytes) -> None:
+            stop.set()
+
+        client = BinanceWebSocketClient(
+            connector=connector,
+            sleeper=sleep,
+            backoff_initial_seconds=1,
+            backoff_max_seconds=4,
+        )
+        await client.run(handler, stop)
+
+        self.assertEqual(connector.calls, 4)
+        # 3 failures -> backoff 1, 2, 4 (capped at max 4): strictly increasing
+        # and bounded.
+        self.assertEqual(sleeps, [1, 2, 4])
+        self.assertEqual(client.metrics.snapshot().messages_received, 1)
+
 
 class _FakeWebSocket:
     def __init__(self, messages: list[str | bytes | BaseException]) -> None:
@@ -888,6 +962,170 @@ class WarmupRetryTests(unittest.IsolatedAsyncioTestCase):
             await service.warmup_history_with_retry(
                 attempts=2, backoff_seconds=0
             )
+
+class IngestionSupervisorTests(unittest.IsolatedAsyncioTestCase):
+    async def test_unexpected_exception_is_restarted_with_backoff(self) -> None:
+        class FakeService:
+            def __init__(self) -> None:
+                self.calls = 0
+                self.active = 0
+                self.max_active = 0
+
+            async def run(self, stop_event: asyncio.Event) -> None:
+                self.calls += 1
+                self.active += 1
+                self.max_active = max(self.max_active, self.active)
+                try:
+                    if self.calls < 3:
+                        raise RuntimeError(f"boom {self.calls}")
+                    await stop_event.wait()
+                finally:
+                    self.active -= 1
+
+        stop = asyncio.Event()
+        service = FakeService()
+        task = asyncio.create_task(
+            _supervise_ingestion(
+                stop,
+                service,
+                backoff_initial_seconds=0.001,
+                backoff_max_seconds=0.005,
+            )
+        )
+        await asyncio.sleep(0.05)
+        stop.set()
+        await asyncio.wait_for(task, timeout=1)
+
+        # Crashed twice, then ran until shutdown -> exactly 3 invocations.
+        self.assertEqual(service.calls, 3)
+        # Never two ingestion loops concurrently (no duplicate WS connections).
+        self.assertEqual(service.max_active, 1)
+
+    async def test_graceful_shutdown_does_not_restart(self) -> None:
+        class FakeService:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            async def run(self, stop_event: asyncio.Event) -> None:
+                self.calls += 1
+                raise RuntimeError("boom")
+
+        stop = asyncio.Event()
+        stop.set()
+        service = FakeService()
+        await _supervise_ingestion(stop, service, backoff_initial_seconds=0.001)
+
+        self.assertEqual(service.calls, 0)
+
+    async def test_cancellation_does_not_cause_restart(self) -> None:
+        class FakeService:
+            async def run(self, stop_event: asyncio.Event) -> None:
+                raise asyncio.CancelledError()
+
+        stop = asyncio.Event()
+        service = FakeService()
+        with self.assertRaises(asyncio.CancelledError):
+            await _supervise_ingestion(stop, service)
+
+    async def test_no_concurrent_ingestion_loops_after_restart(self) -> None:
+        # Mirror test_unexpected_exception_is_restarted but assert explicitly that
+        # the supervisor awaits the previous run before starting the next one.
+        class FakeService:
+            def __init__(self) -> None:
+                self.active = 0
+                self.max_active = 0
+
+            async def run(self, stop_event: asyncio.Event) -> None:
+                self.active += 1
+                self.max_active = max(self.max_active, self.active)
+                try:
+                    if not stop_event.is_set():
+                        raise RuntimeError("fail first")
+                    await stop_event.wait()
+                finally:
+                    self.active -= 1
+
+        stop = asyncio.Event()
+        service = FakeService()
+        task = asyncio.create_task(
+            _supervise_ingestion(
+                stop,
+                service,
+                backoff_initial_seconds=0.001,
+                backoff_max_seconds=0.005,
+            )
+        )
+        await asyncio.sleep(0.03)
+        stop.set()
+        await asyncio.wait_for(task, timeout=1)
+        self.assertLessEqual(service.max_active, 1)
+
+
+class InvalidCandleTests(unittest.IsolatedAsyncioTestCase):
+    async def test_invalid_zero_volume_candle_rejected_from_live(self) -> None:
+        repository = MarketSnapshotMemoryRepository()
+        service = LiveMarketIngestionService(
+            repository=repository,
+            code_version="git:abcdef123456",
+        )
+        await service.initialize(START)
+
+        await service.process_message(_message(START, "5m", volume="0.00000000"))
+
+        metrics = service.metrics.snapshot()
+        self.assertEqual(metrics.invalid_candles, 1)
+        self.assertEqual(metrics.completed_candles, 0)
+        page = await repository.get_by_scope(_scope_query("5m"))
+        self.assertEqual(len(page.items), 0)
+
+    async def test_valid_candle_still_persists(self) -> None:
+        repository = MarketSnapshotMemoryRepository()
+        service = LiveMarketIngestionService(
+            repository=repository,
+            code_version="git:abcdef123456",
+        )
+        await service.initialize(START)
+
+        await service.process_message(_message(START, "5m", volume="2.50000000"))
+
+        self.assertEqual(service.metrics.snapshot().invalid_candles, 0)
+        page = await repository.get_by_scope(_scope_query("5m"))
+        self.assertEqual(len(page.items), 1)
+
+    async def test_invalid_zero_volume_candle_rejected_from_warmup(self) -> None:
+        repository = MarketSnapshotMemoryRepository()
+        service = LiveMarketIngestionService(
+            repository=repository,
+            code_version="git:abcdef123456",
+        )
+        open_ms = int(START.timestamp() * 1000)
+        close_ms = int(
+            (START + timedelta(minutes=5) - timedelta(milliseconds=1)).timestamp() * 1000
+        )
+        zero_kline = [
+            open_ms,
+            "100.00000000",
+            "100.00000000",
+            "100.00000000",
+            "100.00000000",
+            "0.00000000",
+            close_ms,
+            "0.00000000",
+            0,
+            "0.00000000",
+            "0.00000000",
+            "0",
+        ]
+
+        with patch("app.live_market_data.service.httpx") as mock_httpx:
+            mock_httpx.AsyncClient.return_value.__aenter__.return_value.get.return_value = (
+                _make_mock_response([zero_kline])
+            )
+            count = await service.warmup_history(limit=1)
+
+        self.assertEqual(count, 0)
+        self.assertEqual(service.metrics.snapshot().invalid_candles, 1)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -543,6 +543,58 @@ async def _resolve_outcome_for_expired(
             )
 
 
+async def _supervise_ingestion(
+    stop_event: asyncio.Event,
+    service: LiveMarketIngestionService,
+    *,
+    backoff_initial_seconds: float = 1.0,
+    backoff_max_seconds: float = 30.0,
+    max_restarts: int | None = None,
+) -> None:
+    """Keep live market ingestion alive across unexpected failures.
+
+    The ingestion loop is fail-closed and the WebSocket client only handles its
+    own transport/timeout reconnect; an exception that escapes the client (e.g. a
+    transient repository error surfaced from ``_persist``) must not silently
+    terminate live processing forever.  On any unexpected exception we log the
+    full traceback, wait with bounded exponential backoff, and restart exactly
+    one ingestion loop.
+
+    Guarantees:
+    * ``stop_event`` set -> the loop stops without restarting (graceful shutdown).
+    * ``asyncio.CancelledError`` propagates (no infinite restart on cancellation).
+    * only one ingestion loop runs at a time (the previous one has returned
+      before the next is started), so there are never duplicate WebSocket
+      connections or concurrent ingestion loops.
+    """
+    restarts = 0
+    while not stop_event.is_set():
+        try:
+            await service.run(stop_event)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            if stop_event.is_set():
+                break
+            restarts += 1
+            if max_restarts is not None and restarts > max_restarts:
+                logger.exception(
+                    "ingestion_supervisor_giving_up restarts=%d", restarts
+                )
+                break
+            delay = min(
+                backoff_initial_seconds * (2 ** (restarts - 1)),
+                backoff_max_seconds,
+            )
+            logger.exception(
+                "ingestion_task_crashed restarting_in_seconds=%s restart=%d",
+                delay,
+                restarts,
+            )
+            await asyncio.sleep(delay)
+    logger.info("ingestion_supervisor_stopped")
+
+
 @asynccontextmanager
 async def _infrastructure_lifespan(application):
     global _runtime_pipeline
@@ -561,7 +613,7 @@ async def _infrastructure_lifespan(application):
                 logger.info("runtime_pipeline_upgraded_to_v2")
             stop_event = asyncio.Event()
             ingestion_task = asyncio.create_task(
-                live_market_ingestion.run(stop_event),
+                _supervise_ingestion(stop_event, live_market_ingestion),
                 name="alphalens-live-market-ingestion",
             )
             application.state.live_market_ingestion = live_market_ingestion

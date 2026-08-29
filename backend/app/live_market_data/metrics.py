@@ -20,6 +20,7 @@ class LiveIngestionMetricsSnapshot:
     missing_intervals: int
     persistence_failures: int
     heartbeat_timeouts: int
+    invalid_candles: int
 
 
 class LiveIngestionMetrics:

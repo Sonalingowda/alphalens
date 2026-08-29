@@ -1,6 +1,7 @@
 """Binance Spot WebSocket transport and completed-kline parser."""
 
 import asyncio
+import logging
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
@@ -8,7 +9,9 @@ from hashlib import sha256
 import json
 from typing import Any, Protocol
 
-from websockets.exceptions import ConnectionClosed
+from websockets.exceptions import ConnectionClosed, WebSocketException
+
+logger = logging.getLogger("alphalens.live_market_data.binance")
 
 from app.live_market_data.metrics import LiveIngestionMetrics
 from app.live_market_data.models import (
@@ -26,6 +29,11 @@ BINANCE_MARKET_STREAM_BASE_URL = "wss://data-stream.binance.vision"
 BINANCE_STREAM_PATH = (
     "/stream?streams=btcusdt@kline_5m/btcusdt@kline_15m"
 )
+
+# No unvalidated fallback host by default. The primary Binance market stream is
+# retried with exponential backoff; operators may configure a known, validated
+# Binance-compatible WebSocket base URL here once confirmed reachable.
+DEFAULT_WS_FALLBACK_BASE_URLS: tuple[str, ...] = ()
 
 
 class WebSocketSession(Protocol):
@@ -114,6 +122,7 @@ class BinanceWebSocketClient:
         self,
         *,
         base_url: str = BINANCE_MARKET_STREAM_BASE_URL,
+        fallback_base_urls: tuple[str, ...] = DEFAULT_WS_FALLBACK_BASE_URLS,
         heartbeat_timeout_seconds: float = 60.0,
         backoff_initial_seconds: float = 1.0,
         backoff_max_seconds: float = 30.0,
@@ -124,11 +133,19 @@ class BinanceWebSocketClient:
     ) -> None:
         if not base_url.startswith("wss://"):
             raise ValueError("Binance WebSocket base URL must use wss://.")
+        for fallback in fallback_base_urls:
+            if not fallback.startswith("wss://"):
+                raise ValueError("Binance WebSocket fallback URLs must use wss://.")
         if heartbeat_timeout_seconds <= 0:
             raise ValueError("Heartbeat timeout must be positive.")
         if not 0 < backoff_initial_seconds <= backoff_max_seconds:
             raise ValueError("Reconnect backoff bounds are invalid.")
-        self._url = f"{base_url.rstrip('/')}{BINANCE_STREAM_PATH}"
+        self._base_url = base_url.rstrip("/")
+        self._fallback_base_urls = tuple(u.rstrip("/") for u in fallback_base_urls)
+        self._url = f"{self._base_url}{BINANCE_STREAM_PATH}"
+        self._fallback_urls = tuple(
+            f"{u}{BINANCE_STREAM_PATH}" for u in self._fallback_base_urls
+        )
         self._heartbeat_timeout_seconds = heartbeat_timeout_seconds
         self._backoff_initial_seconds = backoff_initial_seconds
         self._backoff_max_seconds = backoff_max_seconds
@@ -158,11 +175,15 @@ class BinanceWebSocketClient:
         if not callable(handler) or not isinstance(stop_event, asyncio.Event):
             raise TypeError("Client run requires a handler and asyncio.Event.")
         first_connection = True
+        endpoints = [self._url, *self._fallback_urls]
+        endpoint_index = 0
         while not stop_event.is_set():
+            url = endpoints[endpoint_index % len(endpoints)]
             self._state = ConnectionState.CONNECTING
+            session_established = False
             try:
                 async with self._connector(
-                    self._url,
+                    url,
                     ping_interval=20,
                     ping_timeout=60,
                     close_timeout=10,
@@ -176,6 +197,7 @@ class BinanceWebSocketClient:
                         self._reconnect_count += 1
                         self._metrics.increment("reconnects")
                     first_connection = False
+                    session_established = True
                     while not stop_event.is_set():
                         try:
                             message = await asyncio.wait_for(
@@ -199,12 +221,35 @@ class BinanceWebSocketClient:
             except asyncio.CancelledError:
                 self._state = ConnectionState.STOPPED
                 raise
-            except (OSError, ConnectionError, ConnectionClosed):
+            except (OSError, ConnectionError, ConnectionClosed, WebSocketException):
                 self._state = ConnectionState.DISCONNECTED
                 self._metrics.increment("disconnects")
                 self._consecutive_failures += 1
                 if stop_event.is_set():
                     break
+                # Only rotate to the next configured endpoint when the connection
+                # never established (handshake/connect failure). A mid-session
+                # failure reconnects to the same endpoint. Catch errors broadly
+                # enough to survive Binance egress blocking (HTTP 451/418 from
+                # the handshake raises websockets InvalidStatus/InvalidHandshake,
+                # which are WebSocketException subclasses and escape the narrow
+                # OSError/ConnectionClosed handlers used previously).
+                if not session_established:
+                    endpoint_index += 1
+                    next_url = endpoints[endpoint_index % len(endpoints)]
+                    logger.warning(
+                        "ws_connect_failed rotating_endpoint url=%s next=%s "
+                        "consecutive_failures=%d",
+                        url,
+                        next_url,
+                        self._consecutive_failures,
+                    )
+                else:
+                    logger.warning(
+                        "ws_session_lost reconnecting url=%s consecutive_failures=%d",
+                        url,
+                        self._consecutive_failures,
+                    )
                 delay = min(
                     self._backoff_initial_seconds
                     * (2 ** (self._consecutive_failures - 1)),
