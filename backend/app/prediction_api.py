@@ -2,7 +2,7 @@
 
 import asyncio
 from contextlib import asynccontextmanager, suppress
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 import logging
 
@@ -41,6 +41,22 @@ market_snapshot_repository = MarketSnapshotPostgreSQLRepository(session_factory)
 _runtime_pipeline = build_runtime_pipeline(session_factory)
 
 
+@dataclass
+class _PipelineHealth:
+    """Observable runtime pipeline execution state for production diagnostics."""
+
+    last_run_at: str | None = None
+    run_count: int = 0
+    last_error: str | None = None
+    last_snapshot_id: str | None = None
+    last_outcome: str | None = None
+    pending_tasks: int = 0
+
+
+_pipeline_health = _PipelineHealth()
+_pipeline_tasks: set[asyncio.Task] = set()
+
+
 class _PipelineAwareLiveMarketIngestionService(LiveMarketIngestionService):
     """Extend live ingestion to trigger the runtime pipeline after each 5m persist."""
 
@@ -48,38 +64,52 @@ class _PipelineAwareLiveMarketIngestionService(LiveMarketIngestionService):
         snapshot = await super()._persist(candle)
 
         if snapshot is not None:
-            logger.info(
-                "pipeline_task_scheduled snapshot_id=%s",
-                snapshot.snapshot_id,
-            )
-
-            async def _run_pipeline() -> None:
-                logger.info(
-                    "pipeline_task_started snapshot_id=%s",
-                    snapshot.snapshot_id,
-                )
-                try:
-                    await _runtime_pipeline.run_for_snapshot(
-                        snapshot,
-                        snapshot.audit.available_at,
-                    )
-                except Exception:
-                    logger.exception(
-                        "pipeline_task_crashed snapshot_id=%s",
-                        snapshot.snapshot_id,
-                    )
-                else:
-                    logger.info(
-                        "pipeline_task_finished snapshot_id=%s",
-                        snapshot.snapshot_id,
-                    )
-
-            asyncio.create_task(
-                _run_pipeline(),
-                name=f"alphalens-runtime-pipeline-{snapshot.snapshot_id}",
-            )
+            self._schedule_pipeline(snapshot)
 
         return snapshot
+
+    def _schedule_pipeline(self, snapshot: MarketSnapshot) -> None:
+        logger.info(
+            "pipeline_task_scheduled snapshot_id=%s",
+            snapshot.snapshot_id,
+        )
+        task = asyncio.create_task(
+            self._run_pipeline(snapshot),
+            name=f"alphalens-runtime-pipeline-{snapshot.snapshot_id}",
+        )
+        _pipeline_tasks.add(task)
+        task.add_done_callback(_pipeline_tasks.discard)
+
+    async def _run_pipeline(self, snapshot: MarketSnapshot) -> None:
+        _pipeline_health.last_run_at = datetime.now(timezone.utc).isoformat()
+        _pipeline_health.run_count += 1
+        _pipeline_health.last_snapshot_id = snapshot.snapshot_id
+        _pipeline_health.pending_tasks = len(_pipeline_tasks)
+        logger.info(
+            "pipeline_task_started snapshot_id=%s",
+            snapshot.snapshot_id,
+        )
+        try:
+            result = await _runtime_pipeline.run_for_snapshot(
+                snapshot,
+                snapshot.audit.available_at,
+            )
+        except Exception:
+            _pipeline_health.last_error = "pipeline_task_crashed"
+            logger.exception(
+                "pipeline_task_crashed snapshot_id=%s",
+                snapshot.snapshot_id,
+            )
+        else:
+            _pipeline_health.last_error = None
+            _pipeline_health.last_outcome = (
+                result.outcome.value if result is not None else None
+            )
+            logger.info(
+                "pipeline_task_finished snapshot_id=%s outcome=%s",
+                snapshot.snapshot_id,
+                _pipeline_health.last_outcome,
+            )
 
 
 live_market_ingestion = _PipelineAwareLiveMarketIngestionService(
@@ -117,6 +147,61 @@ app.add_exception_handler(
     RepositoryError,
     opportunity_app.exception_handlers[RepositoryError],
 )
+
+
+@app.get("/api/v1/pipeline/health", include_in_schema=False)
+async def pipeline_health() -> dict:
+    """Read-only diagnostic: runtime pipeline execution state."""
+    return {
+        "contract_version": "1.0.0",
+        "last_run_at": _pipeline_health.last_run_at,
+        "run_count": _pipeline_health.run_count,
+        "last_error": _pipeline_health.last_error,
+        "last_snapshot_id": _pipeline_health.last_snapshot_id,
+        "last_outcome": _pipeline_health.last_outcome,
+        "pending_tasks": len(_pipeline_tasks),
+    }
+
+
+@app.post("/api/v1/pipeline/run-latest", include_in_schema=False)
+async def pipeline_run_latest() -> dict:
+    """Diagnostic: force one pipeline run for the latest BTCUSDT/5m snapshot.
+
+    Surfaces the actual outcome or error so production failures are observable
+    without log access.  May create a real opportunity if detection triggers.
+    """
+    from app.market_configuration import get_default_scope
+    from app.opportunity_intelligence.repositories import ScopedRepositoryQuery
+
+    scope = get_default_scope()
+    try:
+        latest = await market_snapshot_repository.get_latest(
+            ScopedRepositoryQuery(
+                scope=scope,
+                as_of=datetime.now(timezone.utc),
+                limit=1,
+            )
+        )
+    except Exception as error:  # noqa: BLE001 - diagnostic surface
+        return {"status": "snapshot_lookup_failed", "error": repr(error)}
+    try:
+        result = await _runtime_pipeline.run_for_snapshot(
+            latest,
+            latest.audit.available_at,
+        )
+    except Exception as error:  # noqa: BLE001 - diagnostic surface
+        return {
+            "status": "pipeline_failed",
+            "snapshot_id": latest.snapshot_id,
+            "error": repr(error),
+        }
+    return {
+        "status": "ok",
+        "snapshot_id": latest.snapshot_id,
+        "outcome": result.outcome.value if result is not None else None,
+    }
+
+
 redis_infrastructure = RedisInfrastructure.from_url(settings.redis_url)
 _application_lifespan = app.router.lifespan_context
 

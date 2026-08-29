@@ -281,6 +281,11 @@ class RuntimeIntelligencePipeline:
         a single cycle failure does not crash the ingestion loop.
         """
         if snapshot.scope != self._scope:
+            logger.info(
+                "runtime_pipeline_scope_skip snapshot_scope=%s pipeline_scope=%s",
+                snapshot.scope,
+                self._scope,
+            )
             return None
 
         import datetime as dt
