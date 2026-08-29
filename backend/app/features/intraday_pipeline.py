@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 import hashlib
 import json
+import os
 from uuid import UUID
 
 from app.features.contracts import (
@@ -49,6 +50,21 @@ EMA_FAMILY_INTRADAY_PIPELINE_VERSION = "2.4.0"
 MACD_INTRADAY_PIPELINE_VERSION = "2.5.0"
 STATISTICAL_VOLATILITY_INTRADAY_PIPELINE_VERSION = "2.6.0"
 INTRADAY_PIPELINE_VERSION = "2.7.0"
+
+# Prefix-invariance verification recomputes every feature for every prefix length
+# (O(n^2) in history length). It is a valuable correctness safeguard but must not
+# run on the production hot path, where warmup histories are hundreds of candles
+# long and the quadratic cost hangs the runtime pipeline. It runs by default under
+# the test environment (ALPHALENS_ENVIRONMENT=test) and can be forced on/off via
+# ALPHALENS_FEATURE_INVARIANCE_CHECK; it is disabled by default in production.
+def _prefix_invariance_enabled() -> bool:
+    flag = os.getenv("ALPHALENS_FEATURE_INVARIANCE_CHECK")
+    if flag not in (None, ""):
+        return flag not in ("0", "false", "False", "no", "off")
+    return os.getenv("ALPHALENS_ENVIRONMENT", "") == "test"
+
+
+_VERIFY_PREFIX_INVARIANCE = _prefix_invariance_enabled()
 
 
 @dataclass(frozen=True, slots=True)
@@ -218,12 +234,13 @@ def run_intraday_feature_pipeline(
             raw_values,
             snapshot,
         )
-        _verify_prefix_invariance(
-            definition,
-            raw_values,
-            snapshot,
-            dependency_inputs,
-        )
+        if _VERIFY_PREFIX_INVARIANCE:
+            _verify_prefix_invariance(
+                definition,
+                raw_values,
+                snapshot,
+                dependency_inputs,
+            )
         current_pipeline_values = tuple(
             PipelineFeatureValue(
                 feature_identifier=metadata.identifier,
