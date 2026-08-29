@@ -2,6 +2,8 @@
 
 import asyncio
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
+from hashlib import sha256
 import json
 import unittest
 from unittest.mock import AsyncMock, patch
@@ -16,10 +18,11 @@ from app.live_market_data import (
     TenMinuteCandleAggregator,
     build_market_snapshot,
 )
+from app.live_market_data import CompletedCandle
 from app.market_data.models import CandleTimeframe
 from app.opportunity_intelligence.domain import MarketScope
 from app.opportunity_intelligence.persistence import MarketSnapshotMemoryRepository
-from app.opportunity_intelligence.repositories import ScopedRepositoryQuery
+from app.opportunity_intelligence.repositories import EntityId, ScopedRepositoryQuery
 from app.opportunity_intelligence.services import MarketScannerService
 
 
@@ -312,13 +315,176 @@ class LiveIngestionServiceTests(unittest.IsolatedAsyncioTestCase):
         with patch("app.live_market_data.service.httpx") as mock_httpx:
             mock_response = _make_mock_response(klines)
             mock_httpx.AsyncClient.return_value.__aenter__.return_value.get.return_value = mock_response
-            count = await service2.warmup_history(limit=10)
+            await service2.warmup_history(limit=10)
 
         # Repository should not have grown
         page_after = await repository.get_by_scope(_scope_query("5m", limit=20))
         self.assertEqual(len(page_after.items), count_before)
         # All 10 klines from the first warmup should be present
         self.assertEqual(len(page_after.items), 10)
+
+    async def test_warmup_history_defaults_to_public_binance_vision_host(self) -> None:
+        service = LiveMarketIngestionService(
+            repository=MarketSnapshotMemoryRepository(),
+            code_version="git:abcdef123456",
+        )
+        self.assertEqual(service._rest_base_url, "https://data-api.binance.vision")
+
+    async def test_warmup_history_uses_configured_rest_base_url(self) -> None:
+        service = LiveMarketIngestionService(
+            repository=MarketSnapshotMemoryRepository(),
+            code_version="git:abcdef123456",
+            rest_base_url="https://example.test/rest",
+        )
+        with patch("app.live_market_data.service.httpx") as mock_httpx:
+            mock_httpx.AsyncClient.return_value.__aenter__.return_value.get.return_value = (
+                _make_mock_response(_fake_binance_klines(3))
+            )
+            await service.warmup_history(limit=3)
+            called = mock_httpx.AsyncClient.return_value.__aenter__.return_value.get
+        called_url = called.call_args[0][0]
+        self.assertEqual(called_url, "https://example.test/rest/api/v3/klines")
+        self.assertNotIn("api.binance.com", called_url)
+
+    async def test_warmup_history_no_longer_uses_banned_api_binance_com(self) -> None:
+        service = LiveMarketIngestionService(
+            repository=MarketSnapshotMemoryRepository(),
+            code_version="git:abcdef123456",
+        )
+        with patch("app.live_market_data.service.httpx") as mock_httpx:
+            mock_httpx.AsyncClient.return_value.__aenter__.return_value.get.return_value = (
+                _make_mock_response(_fake_binance_klines(3))
+            )
+            await service.warmup_history(limit=3)
+            called = mock_httpx.AsyncClient.return_value.__aenter__.return_value.get
+        called_url = called.call_args[0][0]
+        self.assertNotIn("api.binance.com", called_url)
+        self.assertIn("data-api.binance.vision", called_url)
+
+    async def test_gap_repair_backfills_missing_candle_via_rest(self) -> None:
+        repository = MarketSnapshotMemoryRepository()
+        service = LiveMarketIngestionService(
+            repository=repository,
+            code_version="git:abcdef123456",
+        )
+        # Persist a contiguous prefix, then leave a gap at index 10.
+        prefix = tuple(_market_snapshot(i) for i in list(range(10)) + list(range(11, 25)))
+        await repository.save_batch(prefix)
+
+        # REST returns the full contiguous range, including the missing candle.
+        klines = [_kline_for_index(i) for i in range(25)]
+        with patch("app.live_market_data.service.httpx") as mock_httpx:
+            mock_httpx.AsyncClient.return_value.__aenter__.return_value.get.return_value = (
+                _make_mock_response(klines)
+            )
+            persisted = await service.warmup_history(limit=25)
+
+        self.assertEqual(persisted, 1)
+        page = await repository.get_by_scope(
+            ScopedRepositoryQuery(
+                scope=MarketScope(instrument="BTCUSDT", timeframe="5m"),
+                as_of=START + timedelta(hours=3),
+                limit=30,
+            )
+        )
+        self.assertEqual(len(page.items), 25)
+        missing = _market_snapshot(10)
+        fetched = await repository.get_by_id(EntityId(missing.snapshot_id))
+        self.assertIsNotNone(fetched)
+
+    async def test_gap_backfill_restores_ema26_and_detection(self) -> None:
+        """End-to-end: a history gap blocks EMA26/detection; REST backfill fixes it.
+
+        Mirrors the production incident where ``api.binance.com`` returned HTTP 418,
+        so historical gaps were never repaired and detection stayed UNAVAILABLE.
+        """
+        from app.runtime_features import RuntimeFeatureEngine
+        from app.runtime_context import RuntimeMarketContextService
+        from app.runtime_detection import RuntimeOpportunityDetectionService
+        from app.opportunity_intelligence.persistence import (
+            DetectionMemoryRepository,
+            FeatureSnapshotMemoryRepository,
+            MarketContextMemoryRepository,
+        )
+
+        markets = MarketSnapshotMemoryRepository()
+        features = FeatureSnapshotMemoryRepository()
+        contexts = MarketContextMemoryRepository()
+        detections = DetectionMemoryRepository()
+
+        # History with a single missing candle at index 19 (0..18, 20..39).
+        indices = [i for i in range(40) if i != 19]
+        snapshots = {i: _market_snapshot(i) for i in indices}
+        await markets.save_batch(tuple(snapshots.values()))
+
+        engine = RuntimeFeatureEngine(
+            market_snapshots=markets,
+            feature_snapshots=features,
+            code_version="git:restored",
+        )
+        context_svc = RuntimeMarketContextService(
+            market_snapshots=markets,
+            feature_snapshots=features,
+            market_contexts=contexts,
+            code_version="git:restored",
+        )
+        detection_svc = RuntimeOpportunityDetectionService(
+            market_snapshots=markets,
+            feature_snapshots=features,
+            market_contexts=contexts,
+            detections=detections,
+            code_version="git:restored",
+        )
+
+        # Before repair: latest candle cannot compute EMA26 -> detection UNAVAILABLE.
+        latest_before = snapshots[39]
+        feature_before = await engine.resolve(latest_before)
+        await features.save(feature_before)
+        context_before = await context_svc.build(latest_before, feature_before)
+        await contexts.save(context_before)
+        attempt_before, _ = await detection_svc.detect(
+            latest_before, feature_before, context_before
+        )
+        self.assertEqual(attempt_before.state.value, "UNAVAILABLE")
+
+        # REST backfill (now via the public binance.vision host) fills the gap.
+        service = LiveMarketIngestionService(
+            repository=markets,
+            code_version="git:restored",
+        )
+        klines = [_kline_for_index(i) for i in range(40)]
+        with patch("app.live_market_data.service.httpx") as mock_httpx:
+            mock_httpx.AsyncClient.return_value.__aenter__.return_value.get.return_value = (
+                _make_mock_response(klines)
+            )
+            await service.warmup_history(limit=40)
+        page = await markets.get_by_scope(
+            ScopedRepositoryQuery(
+                scope=MarketScope(instrument="BTCUSDT", timeframe="5m"),
+                as_of=START + timedelta(hours=4),
+                limit=50,
+            )
+        )
+        self.assertEqual(len(page.items), 40)
+
+        # A new candle after repair sees the now-contiguous history -> EMA26 present.
+        new_index = 40
+        new_snapshot = _market_snapshot(new_index)
+        await markets.save(new_snapshot)
+        feature_after = await engine.resolve(new_snapshot)
+        await features.save(feature_after)
+        ema26 = [
+            v
+            for v in feature_after.values
+            if v.feature_identifier == "exponential_moving_average_26"
+        ]
+        self.assertTrue(ema26, "EMA26 must be restored after gap repair")
+        context_after = await context_svc.build(new_snapshot, feature_after)
+        await contexts.save(context_after)
+        attempt_after, _ = await detection_svc.detect(
+            new_snapshot, feature_after, context_after
+        )
+        self.assertNotEqual(attempt_after.state.value, "UNAVAILABLE")
 
     async def test_production_lifespan_starts_and_stops_live_ingestion(self) -> None:
         from app import prediction_api
@@ -537,6 +703,53 @@ def _message(
         },
     }
     return json.dumps(payload, sort_keys=True, separators=(",", ":"))
+
+
+def _market_snapshot(index: int):
+    """Build a deterministic BTCUSDT/5m market snapshot for index ``i`` (5m steps)."""
+    timestamp = START + timedelta(minutes=5 * index)
+    base = Decimal(10_000 + index)
+    event_time = timestamp + timedelta(minutes=5)
+    candle = CompletedCandle(
+        provider="binance_spot",
+        symbol="BTCUSDT",
+        timeframe=CandleTimeframe.MINUTE_5,
+        event_time=event_time,
+        open_time=timestamp,
+        close_time=timestamp + timedelta(minutes=5) - timedelta(milliseconds=1),
+        open=base,
+        high=base + Decimal(5),
+        low=base - Decimal(5),
+        close=base + Decimal(1),
+        volume=Decimal(10 + index),
+        number_of_trades=100 + index,
+        source_payload_hash=sha256(f"source:{index}".encode()).hexdigest(),
+    )
+    return build_market_snapshot(candle, code_version="git:abcdef123456")
+
+
+def _kline_for_index(index: int) -> list:
+    """Build a Binance REST kline array matching ``_market_snapshot(index)`` OHLC."""
+    open_time = START + timedelta(minutes=5 * index)
+    open_ms = int(open_time.timestamp() * 1000)
+    close_ms = int(
+        (open_time + timedelta(minutes=5) - timedelta(milliseconds=1)).timestamp() * 1000
+    )
+    base = 10_000 + index
+    return [
+        open_ms,
+        f"{base}.00000000",
+        f"{base + 5}.00000000",
+        f"{base - 5}.00000000",
+        f"{base + 1}.00000000",
+        f"{10 + index}.00000000",
+        close_ms,
+        "42.00000000",
+        100 + index,
+        "21.00000000",
+        "20.00000000",
+        "0",
+    ]
 
 
 def _fake_binance_klines(count: int) -> list[list]:

@@ -115,6 +115,7 @@ class _PipelineAwareLiveMarketIngestionService(LiveMarketIngestionService):
 live_market_ingestion = _PipelineAwareLiveMarketIngestionService(
     repository=market_snapshot_repository,
     code_version="alphalens.prediction_api.1.0.0",
+    rest_base_url=settings.market_data_rest_base_url,
 )
 app = create_prediction_app(
     maximum_request_bytes=settings.prediction_api_max_request_bytes,

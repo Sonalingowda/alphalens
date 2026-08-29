@@ -51,6 +51,7 @@ class LiveMarketIngestionService:
         client: BinanceWebSocketClient | None = None,
         parser: BinanceKlineParser | None = None,
         metrics: LiveIngestionMetrics | None = None,
+        rest_base_url: str = "https://data-api.binance.vision",
     ) -> None:
         if not code_version.strip():
             raise ValueError("Live ingestion code version must be non-empty.")
@@ -66,6 +67,7 @@ class LiveMarketIngestionService:
         self._deduplicator = CandleDeduplicator()
         self._gaps = CandleGapDetector()
         self._ten_minute = TenMinuteCandleAggregator()
+        self._rest_base_url = rest_base_url.rstrip("/")
         self._initialized = False
         self._warmup_history_fetched = False
 
@@ -104,7 +106,7 @@ class LiveMarketIngestionService:
             "limit": min(limit, 1000),
             "endTime": end_ms,
         }
-        url = "https://api.binance.com/api/v3/klines"
+        url = f"{self._rest_base_url}/api/v3/klines"
         persisted = 0
         async with httpx.AsyncClient() as client:
             response = await client.get(url, params=params, timeout=30)

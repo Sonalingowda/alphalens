@@ -20,6 +20,7 @@ class Settings:
     log_level: str
     cors_allowed_origins: tuple[str, ...]
     market_data_base_url: str
+    market_data_rest_base_url: str
     market_data_timeout_seconds: float
     history_backfill_start: datetime
     history_backfill_max_pages: int
@@ -53,6 +54,10 @@ def load_settings() -> Settings:
         market_data_base_url=os.getenv(
             "ALPHALENS_MARKET_DATA_BASE_URL",
             "https://api.kraken.com",
+        ),
+        market_data_rest_base_url=os.getenv(
+            "ALPHALENS_MARKET_DATA_REST_BASE_URL",
+            "https://data-api.binance.vision",
         ),
         market_data_timeout_seconds=float(
             os.getenv("ALPHALENS_MARKET_DATA_TIMEOUT_SECONDS", "10")
