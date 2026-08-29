@@ -50,7 +50,14 @@ def _interval_ms(timeframe: CandleTimeframe) -> int:
 
 
 def _provider_for_url(url: str) -> str:
-    return "bybit" if "bybit" in url else "binance"
+    lowered = url.lower()
+    if "bybit" in lowered:
+        return "bybit"
+    if "coinbase" in lowered:
+        return "coinbase"
+    if "okx" in lowered:
+        return "okx"
+    return "binance"
 
 
 class LiveMarketIngestionService:
@@ -69,6 +76,8 @@ class LiveMarketIngestionService:
             "https://api.binance.com",
             "https://data.binance.com",
             "https://api.bybit.com",
+            "https://api.exchange.coinbase.com",
+            "https://www.okx.com",
         ),
     ) -> None:
         if not code_version.strip():
@@ -108,11 +117,11 @@ class LiveMarketIngestionService:
         Binance public REST hosts are frequently IP-blocked from cloud egress
         (HTTP 418/451), while the public WebSocket host often is not.  To keep
         the feature-engine warmup prefix populated, fall back through multiple
-        Binance hosts and a non-Binance public source (Bybit) before failing.
-        A browser User-Agent is sent because some hosts reject the default
-        client user-agent.
+        providers (Binance, Bybit, Coinbase, OKX) before failing.  A browser
+        User-Agent is sent because some hosts reject the default client UA.
         """
         limit = min(limit, 1000)
+        step = _interval_ms(timeframe)
         last_error: Exception | None = None
         for url, provider in self._rest_sources:
             try:
@@ -124,7 +133,7 @@ class LiveMarketIngestionService:
                         "limit": limit,
                         "endTime": end_time_ms,
                     }
-                else:
+                elif provider == "bybit":
                     full = f"{url}/v5/market/kline"
                     params = {
                         "category": "spot",
@@ -132,6 +141,14 @@ class LiveMarketIngestionService:
                         "interval": timeframe.value.rstrip("m"),
                         "limit": limit,
                     }
+                elif provider == "coinbase":
+                    product = f"{symbol[:-3]}-USD"
+                    full = f"{url}/products/{product}/candles"
+                    params = {"granularity": step // 1000}
+                else:  # okx
+                    inst = f"{symbol[:-3]}-{symbol[-3:]}"
+                    full = f"{url}/api/v5/market/candles"
+                    params = {"instId": inst, "bar": timeframe.value}
                 async with httpx.AsyncClient() as client:
                     response = await client.get(
                         full,
@@ -141,34 +158,10 @@ class LiveMarketIngestionService:
                     )
                     response.raise_for_status()
                     data = response.json()
-                if provider == "binance":
-                    if not isinstance(data, list) or not data:
-                        raise ValueError("empty binance klines payload")
-                    klines = [tuple(row) for row in data]
-                else:
-                    if not isinstance(data, dict) or data.get("retCode") != 0:
-                        raise ValueError(f"bybit klines error: {data}")
-                    rows = data.get("result", {}).get("list", [])
-                    if not rows:
-                        raise ValueError("empty bybit klines payload")
-                    step = _interval_ms(timeframe)
-                    klines = []
-                    for row in reversed(rows):
-                        start_ms = int(row[0])
-                        close_ms = start_ms + step - 1
-                        klines.append(
-                            (
-                                start_ms,
-                                row[1],
-                                row[2],
-                                row[3],
-                                row[4],
-                                row[5],
-                                close_ms,
-                                str(row[5]),
-                                0,
-                            )
-                        )
+                rows = self._parse_klines(provider, data, step)
+                if not rows:
+                    raise ValueError(f"empty {provider} klines payload")
+                klines = [tuple(r) for r in rows]
                 logger.info(
                     "rest_klines_fetched provider=%s url=%s symbol=%s count=%s",
                     provider,
@@ -187,6 +180,67 @@ class LiveMarketIngestionService:
                 )
         assert last_error is not None
         raise last_error
+
+    @staticmethod
+    def _parse_klines(
+        provider: str, data: object, step: int
+    ) -> list[list[object]]:
+        if provider == "binance":
+            if not isinstance(data, list) or not data:
+                raise ValueError("empty binance klines payload")
+            return [list(row) for row in data]
+        if provider == "bybit":
+            if not isinstance(data, dict) or data.get("retCode") != 0:
+                raise ValueError(f"bybit klines error: {data}")
+            return [
+                [
+                    int(row[0]),
+                    row[1],
+                    row[2],
+                    row[3],
+                    row[4],
+                    row[5],
+                    int(row[0]) + step - 1,
+                    str(row[5]),
+                    0,
+                ]
+                for row in reversed(data.get("result", {}).get("list", []))
+            ]
+        if provider == "coinbase":
+            if not isinstance(data, list) or not data:
+                raise ValueError("empty coinbase klines payload")
+            # coinbase: [time_sec, low, high, open, close, volume] (newest first)
+            return [
+                [
+                    int(row[0]) * 1000,
+                    row[3],
+                    row[2],
+                    row[1],
+                    row[4],
+                    row[5],
+                    int(row[0]) * 1000 + step - 1,
+                    str(row[5]),
+                    0,
+                ]
+                for row in reversed(data)
+            ]
+        # okx: {data: [[ts_ms, open, high, low, close, vol, ...]]} (newest first)
+        if not isinstance(data, dict) or not data.get("data"):
+            raise ValueError(f"okx klines error: {data}")
+        return [
+            [
+                int(row[0]),
+                row[1],
+                row[2],
+                row[3],
+                row[4],
+                row[5],
+                int(row[0]) + step - 1,
+                str(row[5]),
+                0,
+            ]
+            for row in reversed(data["data"])
+        ]
 
     @property
     def metrics(self) -> LiveIngestionMetrics:

@@ -8,6 +8,8 @@ import json
 import unittest
 from unittest.mock import AsyncMock, patch
 
+import httpx
+
 from app.live_market_data import (
     BinanceKlineParser,
     BinanceWebSocketClient,
@@ -361,6 +363,36 @@ class LiveIngestionServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("api.binance.com", called_url)
         self.assertIn("data-api.binance.vision", called_url)
 
+    async def test_warmup_history_falls_back_to_bybit_when_binance_blocked(self) -> None:
+        self._assert_provider_fallback("bybit")
+
+    async def test_warmup_history_falls_back_to_coinbase_when_binance_blocked(self) -> None:
+        self._assert_provider_fallback("coinbase")
+
+    async def test_warmup_history_falls_back_to_okx_when_binance_blocked(self) -> None:
+        self._assert_provider_fallback("okx")
+
+    async def _assert_provider_fallback(self, provider: str) -> None:
+        repository = MarketSnapshotMemoryRepository()
+        service = LiveMarketIngestionService(
+            repository=repository,
+            code_version="git:abcdef123456",
+        )
+
+        def fake_get(url, params=None, timeout=None, headers=None):
+            if provider in url:
+                return _make_mock_response(_provider_payload(provider, 20))
+            return _make_failing_response(418)
+
+        with patch("app.live_market_data.service.httpx") as mock_httpx:
+            mock_httpx.AsyncClient.return_value.__aenter__.return_value.get.side_effect = (
+                fake_get
+            )
+            count = await service.warmup_history(limit=20)
+        self.assertEqual(count, 20)
+        page = await repository.get_by_scope(_scope_query("5m", limit=20))
+        self.assertEqual(len(page.items), 20)
+
     async def test_gap_repair_backfills_missing_candle_via_rest(self) -> None:
         repository = MarketSnapshotMemoryRepository()
         service = LiveMarketIngestionService(
@@ -651,6 +683,49 @@ class _FakeHttpResponse:
 
 def _make_mock_response(json_data: object) -> _FakeHttpResponse:
     return _FakeHttpResponse(json_data)
+
+
+class _FakeFailingResponse:
+    """Mock httpx.Response that fails raise_for_status for 4xx/5xx."""
+
+    def __init__(self, status_code: int) -> None:
+        self.status_code = status_code
+
+    def raise_for_status(self) -> None:
+        if self.status_code >= 400:
+            raise httpx.HTTPStatusError(
+                f"status {self.status_code}",
+                request=object(),
+                response=object(),
+            )
+
+    def json(self) -> object:
+        return {}
+
+
+def _make_failing_response(status_code: int) -> _FakeFailingResponse:
+    return _FakeFailingResponse(status_code)
+
+
+def _provider_payload(provider: str, count: int) -> object:
+    """Build a REST payload for ``provider`` containing ``count`` candles.
+
+    Candle ``i`` borrows the OHLC from ``_kline_for_index(i)`` so the parsed
+    result is identical regardless of which provider supplied it.
+    """
+    rows = []
+    for i in range(count):
+        kl = _kline_for_index(i)
+        rows.append([kl[0], kl[1], kl[2], kl[3], kl[4], kl[5]])
+    if provider == "binance":
+        return rows
+    if provider == "bybit":
+        return {"retCode": 0, "result": {"list": list(reversed(rows))}}
+    if provider == "okx":
+        return {"data": list(reversed(rows))}
+    # coinbase: [time_sec, low, high, open, close, volume] newest first
+    cb = [[kl[0] // 1000, kl[3], kl[2], kl[1], kl[4], kl[5]] for kl in rows]
+    return list(reversed(cb))
 
 
 async def _unused_handler(message: str | bytes) -> None:
