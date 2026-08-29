@@ -236,31 +236,31 @@ async def pipeline_diagnose_latest() -> dict:
         _validate_inputs,
     )
 
-    scope = get_default_scope()
-    now = datetime.now(timezone.utc)
-    market = await market_snapshot_repository.get_latest(
-        ScopedRepositoryQuery(scope=scope, as_of=now, limit=1)
-    )
-    feature_repo = FeatureSnapshotPostgreSQLRepository(session_factory)
-    context_repo = MarketContextPostgreSQLRepository(session_factory)
-    as_of = market.audit.available_at
-    recent = await market_snapshot_repository.get_by_scope(
-        ScopedRepositoryQuery(scope=scope, as_of=now, limit=600)
-    )
-    history_depth = len(recent.items)
-    oldest_ts = (
-        recent.items[-1].candles[0].timestamp.isoformat() if recent.items else None
-    )
-    newest_ts = (
-        recent.items[0].candles[0].timestamp.isoformat() if recent.items else None
-    )
-    payload: dict = {
-        "snapshot_id": market.snapshot_id,
-        "history_depth": history_depth,
-        "history_oldest": oldest_ts,
-        "history_newest": newest_ts,
-    }
     try:
+        scope = get_default_scope()
+        now = datetime.now(timezone.utc)
+        market = await market_snapshot_repository.get_latest(
+            ScopedRepositoryQuery(scope=scope, as_of=now, limit=1)
+        )
+        feature_repo = FeatureSnapshotPostgreSQLRepository(session_factory)
+        context_repo = MarketContextPostgreSQLRepository(session_factory)
+        as_of = market.audit.available_at
+        recent = await market_snapshot_repository.get_by_scope(
+            ScopedRepositoryQuery(scope=scope, as_of=now, limit=600)
+        )
+        history_depth = len(recent.items)
+        oldest_ts = (
+            recent.items[-1].candles[0].timestamp.isoformat() if recent.items else None
+        )
+        newest_ts = (
+            recent.items[0].candles[0].timestamp.isoformat() if recent.items else None
+        )
+        payload: dict = {
+            "snapshot_id": market.snapshot_id,
+            "history_depth": history_depth,
+            "history_oldest": oldest_ts,
+            "history_newest": newest_ts,
+        }
         features = await feature_repo.get_latest(
             ScopedRepositoryQuery(scope=scope, as_of=as_of, limit=1)
         )
@@ -298,9 +298,9 @@ async def pipeline_diagnose_latest() -> dict:
                 "market_available_at": str(market.audit.available_at),
             }
         )
+        return payload
     except Exception as exc:  # noqa: BLE001 - diagnostic surface
-        payload["inputs_error"] = repr(exc)
-    return payload
+        return {"diagnose_error": repr(exc), "error_type": type(exc).__name__}
 
 
 redis_infrastructure = RedisInfrastructure.from_url(settings.redis_url)
