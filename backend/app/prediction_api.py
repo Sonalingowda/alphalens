@@ -232,7 +232,6 @@ async def pipeline_diagnose_latest() -> dict:
         )
         from app.runtime_detection.service import (
             _REQUIRED_FEATURES,
-            _load_persisted_inputs,
             _required_values,
             _validate_inputs,
         )
@@ -267,7 +266,9 @@ async def pipeline_diagnose_latest() -> dict:
         context = await context_repo.get_latest(
             ScopedRepositoryQuery(scope=scope, as_of=as_of, limit=1)
         )
-        inputs = await _load_persisted_inputs(market, features, context)
+        inputs = await _runtime_pipeline.detection._load_persisted_inputs(
+            market, features, context
+        )
         reason = _validate_inputs(inputs, scope.instrument)
         present: set[tuple[str, str]] = set()
         try:
