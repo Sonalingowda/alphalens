@@ -266,7 +266,7 @@ async def pipeline_diagnose_latest() -> dict:
         context = await context_repo.get_latest(
             ScopedRepositoryQuery(scope=scope, as_of=as_of, limit=1)
         )
-        inputs = await _runtime_pipeline.detection._load_persisted_inputs(
+        inputs = await _runtime_pipeline._pipeline.detection._load_persisted_inputs(
             market, features, context
         )
         reason = _validate_inputs(inputs, scope.instrument)
