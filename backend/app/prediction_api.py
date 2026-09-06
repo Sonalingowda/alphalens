@@ -74,7 +74,7 @@ _pipeline_tasks: set[asyncio.Task] = set()
 async def _run_periodic_prefix_invariance_check(
     stop_event: asyncio.Event,
     *,
-    candles_sample_size: int = 20,
+    candles_sample_size: int = 50,
     check_interval_seconds: int = 3600,
 ) -> _PrefixInvarianceCheckResult:
     """Background task that runs prefix invariance checks on random recent candle samples.
@@ -128,16 +128,16 @@ async def _run_periodic_prefix_invariance_check(
                 result.features_checked += 1
                 try:
                     definition = feature_meta
-                    # Compute feature values for the full sample (run in thread to avoid blocking event loop)
-                    full_feature_values = await asyncio.to_thread(
-                        _compute_feature_values_full, definition, tuple(sample_candles)
+                    # Compute feature values for the full sample
+                    full_feature_values = _compute_feature_values_full(
+                        definition, tuple(sample_candles)
                     )
 
-                    # Verify prefix invariance for each prefix length (run in thread)
+                    # Verify prefix invariance for each prefix length
                     for prefix_length in range(1, len(sample_candles) + 1):
                         prefix_candles = sample_candles[:prefix_length]
-                        prefix_feature_values = await asyncio.to_thread(
-                            _compute_feature_values_prefix, definition, tuple(prefix_candles)
+                        prefix_feature_values = _compute_feature_values_prefix(
+                            definition, tuple(prefix_candles)
                         )
 
                         # Determine prefix end timestamp
