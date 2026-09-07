@@ -30,7 +30,6 @@ from app.opportunity_intelligence.persistence import (
 from app.opportunity_intelligence.repositories import RepositoryError
 from app.features.registry import INTRADAY_FEATURE_REGISTRY
 from app.features.contracts import FeatureValue, FeatureDependencyInput, FeatureComputationError
-from app.features.intraday_pipeline import _verify_prefix_invariance
 from app.persistence.database import session_factory
 from app.runtime_pipeline import build_runtime_pipeline
 from app.inference.repository import load_expected_move_artifact
@@ -59,127 +58,8 @@ class _PipelineHealth:
     pending_tasks: int = 0
 
 
-class _PrefixInvarianceCheckResult:
-    """Result of a single prefix invariance check run."""
-
-    violations: int = 0
-    features_checked: int = 0
-    candles_sampled: int = 0
-
-
 _pipeline_health = _PipelineHealth()
 _pipeline_tasks: set[asyncio.Task] = set()
-
-
-async def _run_periodic_prefix_invariance_check(
-    stop_event: asyncio.Event,
-    *,
-    candles_sample_size: int = 50,
-    check_interval_seconds: int = 3600,
-) -> _PrefixInvarianceCheckResult:
-    """Background task that runs prefix invariance checks on random recent candle samples.
-
-    Runs once per hour (default) as a non-blocking background task. On each cycle:
-    1. Samples ``candles_sample_size`` recent candles from the market data pipeline.
-    2. For each feature in the registry, verifies prefix invariance on increasing prefix lengths.
-    3. Logs any violations (feature computation depending on future/non-prefix candles).
-    4. Sleeps until the next cycle, respecting ``stop_event`` for graceful shutdown.
-
-    This is additive — it does not affect the hot path (the main pipeline call site
-    remains off-by-default per ``ALPHALENS_FEATURE_INVARIANCE_CHECK``).
-    """
-    from app.features.registry import INTRADAY_FEATURE_REGISTRY
-    from app.features.contracts import FeatureValue, FeatureDependencyInput
-
-    result = _PrefixInvarianceCheckResult()
-    logger = logging.getLogger("alphalens.prefix_invariance_check")
-
-    cycle_id = 0
-    while not stop_event.is_set():
-        try:
-            cycle_id += 1
-            # Sample recent candles: query recent feature snapshot values
-            async with session_factory() as session:
-                from app.opportunity_intelligence.persistence import (
-                    FeatureSnapshotValuePostgreSQLRepository,
-                )
-                repo = FeatureSnapshotValuePostgreSQLRepository(session_factory=session)
-                recent_values = await repo.query_recent(limit=candles_sample_size * 2)
-
-            if len(recent_values) < candles_sample_size:
-                logger.warning(
-                    "Insufficient recent candles for prefix invariance check: got %d, need %d",
-                    len(recent_values),
-                    candles_sample_size,
-                )
-                await stop_event.wait(min(check_interval_seconds, 60))
-                continue
-
-            # Sort by timestamp and take the most recent `candles_sample_size`
-            recent_values.sort(key=lambda v: v.candle_timestamp, reverse=True)
-            sample_candles = recent_values[:candles_sample_size]
-            result.candles_sampled += candles_sample_size
-
-            # Sort chronologically (oldest first) for prefix computation
-            sample_candles.sort(key=lambda v: v.candle_timestamp)
-
-            # Verify prefix invariance for each feature in the registry
-            for feature_meta in INTRADAY_FEATURE_REGISTRY.features:
-                result.features_checked += 1
-                try:
-                    definition = feature_meta
-                    # Compute feature values for the full sample
-                    full_feature_values = _compute_feature_values_full(
-                        definition, tuple(sample_candles)
-                    )
-
-                    # Verify prefix invariance for each prefix length
-                    for prefix_length in range(1, len(sample_candles) + 1):
-                        prefix_candles = sample_candles[:prefix_length]
-                        prefix_feature_values = _compute_feature_values_prefix(
-                            definition, tuple(prefix_candles)
-                        )
-
-                        # Determine prefix end timestamp
-                        prefix_end = max(
-                            (c.candle_timestamp for c in prefix_candles),
-                            default=datetime.min.replace(tzinfo=timezone.utc),
-                        )
-
-                        # Filter full_feature_values to those at or before prefix_end
-                        expected_for_prefix = tuple(
-                            v
-                            for v in full_feature_values
-                            if v.candle_timestamp <= prefix_end
-                        )
-
-                        if prefix_feature_values != expected_for_prefix:
-                            logger.error(
-                                "Prefix invariance violation for feature %s "
-                                "at prefix_length %d",
-                                definition.identifier,
-                                prefix_length,
-                            )
-                            result.violations += 1
-
-                except Exception:
-                    logger.exception(
-                        "Error checking prefix invariance for feature %s",
-                        feature_meta.identifier,
-                    )
-
-            # Sleep until next cycle, respecting stop_event
-            await stop_event.wait(check_interval_seconds)
-
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            logger.exception(
-                "Unexpected error in prefix invariance check cycle %d", cycle_id
-            )
-            await asyncio.sleep(min(check_interval_seconds, 60))
-
-    return result
 
 
 class _PipelineAwareLiveMarketIngestionService(LiveMarketIngestionService):
@@ -796,15 +676,6 @@ async def _infrastructure_lifespan(application):
                 name="alphalens-lifecycle-sweep",
             )
             application.state.lifecycle_sweep_task = lifecycle_sweep_task
-            prefix_invariance_task = asyncio.create_task(
-                _run_periodic_prefix_invariance_check(
-                    stop_event,
-                    candles_sample_size=50,
-                    check_interval_seconds=3600,
-                ),
-                name="alphalens-prefix-invariance-check",
-            )
-            application.state.prefix_invariance_task = prefix_invariance_task
             warmup_task = asyncio.create_task(
                 _supervise_warmup(stop_event, live_market_ingestion),
                 name="alphalens-warmup-supervisor",
@@ -816,14 +687,11 @@ async def _infrastructure_lifespan(application):
                 stop_event.set()
                 ingestion_task.cancel()
                 lifecycle_sweep_task.cancel()
-                prefix_invariance_task.cancel()
                 warmup_task.cancel()
                 with suppress(asyncio.CancelledError):
                     await ingestion_task
                 with suppress(asyncio.CancelledError):
                     await lifecycle_sweep_task
-                with suppress(asyncio.CancelledError):
-                    await prefix_invariance_task
                 with suppress(asyncio.CancelledError):
                     await warmup_task
     finally:
