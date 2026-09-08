@@ -90,6 +90,64 @@ class OperationalEndpointTests(TestCase):
         )
         self.assertIn("alphalens_http_requests_total", metrics.text)
 
+    def test_readiness_logs_check_and_total_durations(self) -> None:
+        app = FastAPI()
+
+        async def ready() -> bool:
+            return True
+
+        install_observability(
+            app,
+            readiness_checks={"postgresql": ready, "redis": ready},
+            metrics_enabled=False,
+        )
+
+        with self.assertLogs(
+            "alphalens.infrastructure.observability", level="INFO"
+        ) as captured:
+            with TestClient(app) as client:
+                response = client.get("/health/readiness")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(
+            any(
+                "readiness_check_duration check=postgresql duration_ms=" in line
+                for line in captured.output
+            )
+        )
+        self.assertTrue(
+            any(
+                "readiness_check_duration check=redis duration_ms=" in line
+                for line in captured.output
+            )
+        )
+        self.assertTrue(
+            any("readiness_duration duration_ms=" in line for line in captured.output)
+        )
+
+    def test_event_loop_lag_supervisor_logs_delay_without_io(self) -> None:
+        async def exercise() -> list[str]:
+            from app.prediction_api import _supervise_event_loop_lag
+
+            stop_event = asyncio.Event()
+            with self.assertLogs(
+                "alphalens.prediction_api", level="WARNING"
+            ) as captured:
+                task = asyncio.create_task(
+                    _supervise_event_loop_lag(
+                        stop_event,
+                        interval_seconds=0.001,
+                        warning_threshold_seconds=0.0,
+                    )
+                )
+                await asyncio.sleep(0.005)
+                stop_event.set()
+                await asyncio.wait_for(task, timeout=1)
+            return captured.output
+
+        captured = asyncio.run(exercise())
+        self.assertTrue(any("event_loop_lag duration_ms=" in line for line in captured))
+
     def test_readiness_fails_closed(self) -> None:
         app = FastAPI()
 

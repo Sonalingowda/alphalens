@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from hashlib import sha256
 import unittest
+from unittest.mock import patch
 
 from app.features.registry import INTRADAY_FEATURE_REGISTRY
 from app.live_market_data import CompletedCandle, build_market_snapshot
@@ -46,6 +47,19 @@ EXPECTED_DEFINITIONS = {
 
 
 class RuntimeFeatureEngineTests(unittest.IsolatedAsyncioTestCase):
+    async def test_feature_pipeline_duration_is_logged_without_changing_result(self) -> None:
+        markets, features, engine, snapshots = await _engine_with_history(200)
+
+        with patch("app.runtime_features.engine.logger") as logger:
+            result = await engine.resolve(snapshots[-1])
+
+        logger.info.assert_called_once()
+        message, snapshot_id, duration_ms = logger.info.call_args.args
+        self.assertIn("runtime_feature_pipeline_duration", message)
+        self.assertEqual(snapshot_id, snapshots[-1].snapshot_id)
+        self.assertGreaterEqual(duration_ms, 0)
+        self.assertEqual(result.market_snapshot.artifact_id, snapshots[-1].snapshot_id)
+
     async def test_full_approved_family_computes_after_warmup(self) -> None:
         markets, features, engine, snapshots = await _engine_with_history(200)
 

@@ -3,6 +3,8 @@
 from datetime import datetime
 from hashlib import sha256
 import json
+import logging
+from time import perf_counter
 from uuid import NAMESPACE_URL, uuid5
 
 from app.features.atr import ATR_FEATURE_METADATA
@@ -42,6 +44,9 @@ from app.opportunity_intelligence.services import (
     ServiceContractError,
     ServiceUnavailableError,
 )
+
+
+logger = logging.getLogger("alphalens.runtime_features.engine")
 
 
 RUNTIME_FEATURE_ENGINE_VERSION = "1.0.0"
@@ -100,7 +105,15 @@ class RuntimeFeatureEngine:
         await self._verify_persisted_input(market_snapshot)
         history = await self._load_prefix(market_snapshot)
         source = _build_source(history, market_snapshot.scope.timeframe, self._scope.instrument)
-        pipeline_result = run_intraday_feature_pipeline(source)
+        pipeline_started = perf_counter()
+        try:
+            pipeline_result = run_intraday_feature_pipeline(source)
+        finally:
+            logger.info(
+                "runtime_feature_pipeline_duration snapshot_id=%s duration_ms=%.3f",
+                market_snapshot.snapshot_id,
+                (perf_counter() - pipeline_started) * 1000,
+            )
         current_timestamp = market_snapshot.candles[0].timestamp
         current_values = tuple(
             value

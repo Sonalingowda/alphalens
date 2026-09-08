@@ -596,6 +596,32 @@ async def _supervise_warmup(
             backoff = min(backoff * 2, max_backoff)
             await sleep_fn(backoff)
 
+
+async def _supervise_event_loop_lag(
+    stop_event: asyncio.Event,
+    *,
+    interval_seconds: float = 1.0,
+    warning_threshold_seconds: float = 0.25,
+) -> None:
+    """Log material asyncio scheduling delays without performing I/O."""
+    loop = asyncio.get_running_loop()
+    while not stop_event.is_set():
+        expected = loop.time() + interval_seconds
+        try:
+            await asyncio.wait_for(
+                stop_event.wait(),
+                timeout=interval_seconds,
+            )
+            break
+        except asyncio.TimeoutError:
+            delay = max(loop.time() - expected, 0.0)
+            if delay >= warning_threshold_seconds:
+                logger.warning(
+                    "event_loop_lag duration_ms=%.3f",
+                    delay * 1000,
+                )
+
+
 async def _supervise_ingestion(
     stop_event: asyncio.Event,
     service: LiveMarketIngestionService,
@@ -680,7 +706,12 @@ async def _infrastructure_lifespan(application):
                 _supervise_warmup(stop_event, live_market_ingestion),
                 name="alphalens-warmup-supervisor",
             )
+            event_loop_lag_task = asyncio.create_task(
+                _supervise_event_loop_lag(stop_event),
+                name="alphalens-event-loop-lag-supervisor",
+            )
             application.state.warmup_task = warmup_task
+            application.state.event_loop_lag_task = event_loop_lag_task
             try:
                 yield
             finally:
@@ -688,12 +719,15 @@ async def _infrastructure_lifespan(application):
                 ingestion_task.cancel()
                 lifecycle_sweep_task.cancel()
                 warmup_task.cancel()
+                event_loop_lag_task.cancel()
                 with suppress(asyncio.CancelledError):
                     await ingestion_task
                 with suppress(asyncio.CancelledError):
                     await lifecycle_sweep_task
                 with suppress(asyncio.CancelledError):
                     await warmup_task
+                with suppress(asyncio.CancelledError):
+                    await event_loop_lag_task
     finally:
         await redis_infrastructure.close()
 

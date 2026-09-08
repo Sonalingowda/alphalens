@@ -2,6 +2,7 @@
 
 from collections.abc import Awaitable, Callable, Mapping
 from contextvars import ContextVar
+import logging
 import re
 from time import perf_counter
 from uuid import uuid4
@@ -25,6 +26,7 @@ _LATENCY = Histogram(
     "AlphaLens HTTP request latency",
     ("method", "path"),
 )
+logger = logging.getLogger("alphalens.infrastructure.observability")
 
 
 def install_observability(
@@ -66,13 +68,26 @@ def install_observability(
 
     @app.get("/health/readiness", include_in_schema=False)
     async def readiness() -> JSONResponse:
+        started = perf_counter()
         results: dict[str, str] = {}
         for name in sorted(readiness_checks):
+            check_started = perf_counter()
             try:
                 results[name] = "ready" if await readiness_checks[name]() else "failed"
             except Exception:
                 results[name] = "failed"
+            finally:
+                logger.info(
+                    "readiness_check_duration check=%s duration_ms=%.3f",
+                    name,
+                    (perf_counter() - check_started) * 1000,
+                )
         ready = all(value == "ready" for value in results.values())
+        logger.info(
+            "readiness_duration duration_ms=%.3f status=%s",
+            (perf_counter() - started) * 1000,
+            "ready" if ready else "unavailable",
+        )
         return JSONResponse(
             status_code=200 if ready else 503,
             content={"status": "ready" if ready else "unavailable", "checks": results},
