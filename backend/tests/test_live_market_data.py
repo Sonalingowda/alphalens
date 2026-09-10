@@ -26,7 +26,12 @@ from websockets.exceptions import InvalidHandshake, InvalidStatus, WebSocketExce
 from app.market_data.models import CandleTimeframe
 from app.opportunity_intelligence.domain import MarketScope
 from app.opportunity_intelligence.persistence import MarketSnapshotMemoryRepository
-from app.opportunity_intelligence.repositories import EntityId, ScopedRepositoryQuery
+from app.opportunity_intelligence.repositories import (
+    DuplicateEntityError,
+    EntityId,
+    EntityNotFoundError,
+    ScopedRepositoryQuery,
+)
 from app.opportunity_intelligence.services import MarketScannerService
 
 
@@ -156,6 +161,93 @@ class LiveProcessingTests(unittest.TestCase):
 
 
 class LiveIngestionServiceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_concurrent_snapshot_conflict_does_not_crash_ingestion(self) -> None:
+        conflict_time = datetime.fromtimestamp(1789057500, tz=timezone.utc)
+        existing_candle = BinanceKlineParser().parse(
+            _message(conflict_time, "5m", close="108.00000000")
+        )
+        assert existing_candle is not None
+        existing = build_market_snapshot(
+            existing_candle,
+            code_version="git:existing",
+        )
+
+        class ConflictOnSaveRepository:
+            def __init__(self) -> None:
+                self.save_attempts = 0
+
+            async def get_by_id(self, _entity_id):
+                if self.save_attempts == 0:
+                    raise EntityNotFoundError(existing.snapshot_id)
+                return existing
+
+            async def save(self, _snapshot):
+                self.save_attempts += 1
+                raise DuplicateEntityError(
+                    f"Immutable identity {existing.snapshot_id!r} already has different content."
+                )
+
+        repository = ConflictOnSaveRepository()
+        service = LiveMarketIngestionService(
+            repository=repository,
+            code_version="git:conflict-test",
+        )
+
+        await service.process_message(
+            _message(conflict_time, "5m", close="109.00000000")
+        )
+
+        metrics = service.metrics.snapshot()
+        self.assertEqual(repository.save_attempts, 1)
+        self.assertEqual(metrics.conflicting_candles, 1)
+        self.assertEqual(metrics.persistence_failures, 0)
+
+    async def test_concurrent_snapshot_conflict_does_not_restart_supervisor(self) -> None:
+        conflict_time = datetime.fromtimestamp(1789057500, tz=timezone.utc)
+        existing_candle = BinanceKlineParser().parse(
+            _message(conflict_time, "5m", close="108.00000000")
+        )
+        assert existing_candle is not None
+        existing = build_market_snapshot(
+            existing_candle,
+            code_version="git:existing",
+        )
+
+        class ConflictOnSaveRepository:
+            async def get_by_id(self, _entity_id):
+                raise EntityNotFoundError(existing.snapshot_id)
+
+            async def save(self, _snapshot):
+                raise DuplicateEntityError(
+                    f"Immutable identity {existing.snapshot_id!r} already has different content."
+                )
+
+        service = LiveMarketIngestionService(
+            repository=ConflictOnSaveRepository(),
+            code_version="git:conflict-test",
+        )
+
+        class OneShotService:
+            runs = 0
+
+            async def run(self, stop_event: asyncio.Event) -> None:
+                self.runs += 1
+                await service.process_message(
+                    _message(conflict_time, "5m", close="109.00000000")
+                )
+                stop_event.set()
+
+        one_shot = OneShotService()
+        stop_event = asyncio.Event()
+        await _supervise_ingestion(
+            stop_event,
+            one_shot,
+            backoff_initial_seconds=0.001,
+            backoff_max_seconds=0.005,
+        )
+
+        self.assertEqual(one_shot.runs, 1)
+
     async def test_completed_native_and_derived_candles_are_persisted(self) -> None:
         repository = MarketSnapshotMemoryRepository()
         service = LiveMarketIngestionService(

@@ -500,6 +500,19 @@ class LiveMarketIngestionService:
             await self._repair_gap_history(gap)
         try:
             stored = await self._repository.save(snapshot)
+        except DuplicateEntityError:
+            # A concurrent warmup/gap-repair/live writer may have committed the
+            # same immutable identity after the read above. The repository has
+            # already enforced canonical immutability and rejected this content;
+            # keep the persisted winner and continue ingestion without restarting
+            # the supervisor for a controlled identity conflict.
+            self._metrics.increment("conflicting_candles")
+            logger.warning(
+                "live_snapshot_conflict_rejected snapshot_id=%s identity_conflict=%s",
+                snapshot.snapshot_id,
+                candle.identity,
+            )
+            return None
         except Exception:
             self._metrics.increment("persistence_failures")
             logger.exception(
