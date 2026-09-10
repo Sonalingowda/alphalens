@@ -78,10 +78,19 @@ class _PipelineAwareLiveMarketIngestionService(LiveMarketIngestionService):
             "pipeline_task_scheduled snapshot_id=%s",
             snapshot.snapshot_id,
         )
-        task = asyncio.create_task(
-            self._run_pipeline(snapshot),
-            name=f"alphalens-runtime-pipeline-{snapshot.snapshot_id}",
-        )
+        pipeline_coroutine = self._run_pipeline(snapshot)
+        try:
+            task = asyncio.create_task(
+                pipeline_coroutine,
+                name=f"alphalens-runtime-pipeline-{snapshot.snapshot_id}",
+            )
+        except Exception:
+            pipeline_coroutine.close()
+            logger.exception(
+                "pipeline_task_create_failed snapshot_id=%s",
+                snapshot.snapshot_id,
+            )
+            raise
         _pipeline_tasks.add(task)
         task.add_done_callback(_pipeline_tasks.discard)
 
@@ -99,6 +108,13 @@ class _PipelineAwareLiveMarketIngestionService(LiveMarketIngestionService):
                 snapshot,
                 snapshot.audit.available_at,
             )
+        except asyncio.CancelledError:
+            _pipeline_health.last_error = "pipeline_task_cancelled"
+            logger.warning(
+                "pipeline_task_cancelled snapshot_id=%s",
+                snapshot.snapshot_id,
+            )
+            raise
         except Exception:
             _pipeline_health.last_error = "pipeline_task_crashed"
             logger.exception(
