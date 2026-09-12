@@ -64,9 +64,6 @@ def _prefix_invariance_enabled() -> bool:
     return os.getenv("ALPHALENS_ENVIRONMENT", "") == "test"
 
 
-_VERIFY_PREFIX_INVARIANCE = _prefix_invariance_enabled()
-
-
 @dataclass(frozen=True, slots=True)
 class SourceCandleObservation:
     candle: Candle
@@ -234,7 +231,7 @@ def run_intraday_feature_pipeline(
             raw_values,
             snapshot,
         )
-        if _VERIFY_PREFIX_INVARIANCE:
+        if _prefix_invariance_enabled():
             _verify_prefix_invariance(
                 definition,
                 raw_values,

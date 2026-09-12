@@ -23,6 +23,9 @@ from tests.test_opportunity_domain_models import _market_snapshot
     "PostgreSQL integration environment is not enabled.",
 )
 class PostgreSQLRepositoryIntegrationTests(IsolatedAsyncioTestCase):
+    async def asyncSetUp(self) -> None:
+        await engine.dispose()
+
     async def asyncTearDown(self) -> None:
         await engine.dispose()
 
@@ -90,7 +93,7 @@ class PostgreSQLRepositoryIntegrationTests(IsolatedAsyncioTestCase):
             datetime(2026, 8, 4, 13, 50, tzinfo=timezone.utc),
         )
 
-    async def test_market_snapshot_scope_keeps_prefix_before_trailing_gap(self) -> None:
+    async def test_market_snapshot_scope_returns_full_history_unfiltered_by_gaps(self) -> None:
         repository = MarketSnapshotPostgreSQLRepository(session_factory)
         scope = MarketScope(
             instrument="TESTBTC_GAP",
@@ -145,6 +148,7 @@ class PostgreSQLRepositoryIntegrationTests(IsolatedAsyncioTestCase):
                 datetime(2026, 8, 10, 17, 15, tzinfo=timezone.utc),
                 datetime(2026, 8, 10, 17, 20, tzinfo=timezone.utc),
                 datetime(2026, 8, 10, 17, 25, tzinfo=timezone.utc),
+                datetime(2026, 8, 10, 17, 35, tzinfo=timezone.utc),
             ),
         )
         self.assertEqual(
@@ -154,6 +158,7 @@ class PostgreSQLRepositoryIntegrationTests(IsolatedAsyncioTestCase):
                 "market.snapshot.gap.two.20260810",
                 "market.snapshot.gap.three.20260810",
                 "market.snapshot.gap.four.20260810",
+                "market.snapshot.gap.trailing.20260810",
             ),
         )
         self.assertIsNone(page.next_cursor)
