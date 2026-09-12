@@ -483,7 +483,7 @@ class LiveMarketIngestionService:
                 return None
             self._deduplicator.remember(candle)
             self._metrics.increment("duplicate_candles")
-            return None
+            return existing
 
         gap = self._gaps.inspect(candle)
         if gap is not None:
@@ -512,6 +512,14 @@ class LiveMarketIngestionService:
                 snapshot.snapshot_id,
                 candle.identity,
             )
+            try:
+                winner = await self._repository.get_by_id(
+                    EntityId(snapshot.snapshot_id)
+                )
+            except EntityNotFoundError:
+                return None
+            if _same_market_content(winner, snapshot):
+                return winner
             return None
         except Exception:
             self._metrics.increment("persistence_failures")

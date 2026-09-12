@@ -248,6 +248,135 @@ class LiveIngestionServiceTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(one_shot.runs, 1)
 
+    async def test_persist_returns_canonical_snapshot_for_pre_save_duplicate(
+        self,
+    ) -> None:
+        """A prior writer (e.g. gap-repair) already persisted this exact
+        identity with identical content before our own save attempt. _persist
+        must return that canonical snapshot (not None) so pipeline scheduling
+        still fires for this candle -- without this, any candle a non-live
+        writer wins the race for would never produce a FeatureSnapshot.
+        """
+        conflict_time = datetime.fromtimestamp(1789057500, tz=timezone.utc)
+        candle = BinanceKlineParser().parse(
+            _message(conflict_time, "5m", close="108.00000000")
+        )
+        assert candle is not None
+        existing = build_market_snapshot(candle, code_version="git:conflict-test")
+
+        class PreSavedDuplicateRepository:
+            def __init__(self) -> None:
+                self.save_attempts = 0
+
+            async def get_by_id(self, _entity_id):
+                return existing
+
+            async def save(self, _snapshot):
+                self.save_attempts += 1
+                raise AssertionError(
+                    "save() must not be reached when the pre-save existence "
+                    "check already finds an identical persisted snapshot"
+                )
+
+        repository = PreSavedDuplicateRepository()
+        service = LiveMarketIngestionService(
+            repository=repository,
+            code_version="git:conflict-test",
+        )
+
+        result = await service._persist(candle)
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.snapshot_id, existing.snapshot_id)
+        self.assertEqual(repository.save_attempts, 0)
+        metrics = service.metrics.snapshot()
+        self.assertEqual(metrics.duplicate_candles, 1)
+
+    async def test_persist_returns_canonical_snapshot_for_post_save_race(
+        self,
+    ) -> None:
+        """A concurrent writer commits the same identity with identical
+        content between our existence check and our save() call. _persist
+        must fetch and return that canonical snapshot (not None) so pipeline
+        scheduling still fires -- this is the exact race _repair_gap_history
+        can trigger against this same _persist call's own save.
+        """
+        conflict_time = datetime.fromtimestamp(1789057500, tz=timezone.utc)
+        candle = BinanceKlineParser().parse(
+            _message(conflict_time, "5m", close="108.00000000")
+        )
+        assert candle is not None
+        winner = build_market_snapshot(candle, code_version="git:conflict-test")
+
+        class RaceOnSaveRepository:
+            def __init__(self) -> None:
+                self.get_calls = 0
+
+            async def get_by_id(self, _entity_id):
+                self.get_calls += 1
+                if self.get_calls == 1:
+                    raise EntityNotFoundError(winner.snapshot_id)
+                return winner
+
+            async def save(self, _snapshot):
+                raise DuplicateEntityError(
+                    f"Immutable identity {winner.snapshot_id!r} already has content."
+                )
+
+        repository = RaceOnSaveRepository()
+        service = LiveMarketIngestionService(
+            repository=repository,
+            code_version="git:conflict-test",
+        )
+
+        result = await service._persist(candle)
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.snapshot_id, winner.snapshot_id)
+        metrics = service.metrics.snapshot()
+        self.assertEqual(metrics.conflicting_candles, 1)
+
+    async def test_persist_still_returns_none_for_genuinely_mismatched_content(
+        self,
+    ) -> None:
+        """When the persisted winner has genuinely different market content
+        (not just a racing writer with the same content), _persist must keep
+        the conservative pre-existing behavior of returning None -- we should
+        not schedule a pipeline run when we cannot confirm which content is
+        correct.
+        """
+        conflict_time = datetime.fromtimestamp(1789057500, tz=timezone.utc)
+        existing_candle = BinanceKlineParser().parse(
+            _message(conflict_time, "5m", close="108.00000000")
+        )
+        assert existing_candle is not None
+        existing = build_market_snapshot(
+            existing_candle,
+            code_version="git:existing",
+        )
+
+        class MismatchOnSaveRepository:
+            async def get_by_id(self, _entity_id):
+                raise EntityNotFoundError(existing.snapshot_id)
+
+            async def save(self, _snapshot):
+                raise DuplicateEntityError(
+                    f"Immutable identity {existing.snapshot_id!r} already has different content."
+                )
+
+        service = LiveMarketIngestionService(
+            repository=MismatchOnSaveRepository(),
+            code_version="git:conflict-test",
+        )
+        candle = BinanceKlineParser().parse(
+            _message(conflict_time, "5m", close="109.00000000")
+        )
+        assert candle is not None
+
+        result = await service._persist(candle)
+
+        self.assertIsNone(result)
+
     async def test_completed_native_and_derived_candles_are_persisted(self) -> None:
         repository = MarketSnapshotMemoryRepository()
         service = LiveMarketIngestionService(
