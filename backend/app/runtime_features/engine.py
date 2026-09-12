@@ -1,5 +1,6 @@
 """Runtime adapter from closed market snapshots to approved feature snapshots."""
 
+import asyncio
 from datetime import datetime
 from hashlib import sha256
 import json
@@ -107,7 +108,9 @@ class RuntimeFeatureEngine:
         source = _build_source(history, market_snapshot.scope.timeframe, self._scope.instrument)
         pipeline_started = perf_counter()
         try:
-            pipeline_result = run_intraday_feature_pipeline(source)
+            pipeline_result = await asyncio.to_thread(
+                run_intraday_feature_pipeline, source
+            )
         finally:
             logger.info(
                 "runtime_feature_pipeline_duration snapshot_id=%s duration_ms=%.3f",
