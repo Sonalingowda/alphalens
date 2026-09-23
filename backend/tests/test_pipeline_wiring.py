@@ -12,7 +12,10 @@ from app.live_market_data.models import CompletedCandle
 from app.market_data.models import CandleTimeframe
 from app.opportunity_intelligence.domain import MarketScope
 from app.opportunity_intelligence.persistence import MarketSnapshotMemoryRepository
-from app.opportunity_intelligence.repositories import ScopedRepositoryQuery
+from app.opportunity_intelligence.repositories import (
+    EntityNotFoundError,
+    ScopedRepositoryQuery,
+)
 from app.prediction_api import (
     _PipelineAwareLiveMarketIngestionService,
     _pipeline_tasks,
@@ -144,6 +147,39 @@ class PipelineWiringTest(IsolatedAsyncioTestCase):
         self.assertEqual(len(calls), 1)
         self.assertEqual(calls[0].scope.instrument, "BTCUSDT")
         self.assertEqual(calls[0].scope.timeframe, "5m")
+
+    async def test_warmup_live_content_conflict_schedules_canonical_snapshot(self) -> None:
+        conflict_time = datetime(2026, 9, 23, 16, 30, tzinfo=timezone.utc)
+        parser = BinanceKlineParser()
+        warmup_candle = parser.parse(
+            _message(conflict_time, "5m", close="108.00000000")
+        )
+        live_candle = parser.parse(
+            _message(conflict_time, "5m", close="109.00000000")
+        )
+        assert warmup_candle is not None
+        assert live_candle is not None
+        canonical = build_market_snapshot(warmup_candle, code_version="git:warmup")
+
+        class WarmupWinnerRepository:
+            async def get_latest(self, _query):
+                raise EntityNotFoundError(canonical.snapshot_id)
+
+            async def get_by_id(self, _entity_id):
+                return canonical
+
+            async def save(self, _snapshot):
+                raise AssertionError("conflicting live content must not overwrite")
+
+        service = _PipelineAwareLiveMarketIngestionService(
+            repository=WarmupWinnerRepository(),
+            code_version="git:live",
+        )
+        with patch.object(service, "_schedule_pipeline") as schedule:
+            result = await service._persist(live_candle)
+
+        self.assertIs(result, canonical)
+        schedule.assert_called_once_with(canonical)
 
     async def test_pipeline_task_lifecycle_logs_include_snapshot_id(self) -> None:
         import app.prediction_api as prediction_api

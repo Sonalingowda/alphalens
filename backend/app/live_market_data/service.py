@@ -474,13 +474,11 @@ class LiveMarketIngestionService:
                     snapshot.snapshot_id,
                     candle.identity,
                 )
-                # Treat mismatched persisted content as a non-fatal duplicate when
-                # the in-memory prefill may have produced a slightly different
-                # representation than the live websocket event. This avoids aborting
-                # the live ingestion run due to benign provenance/content differences
-                # introduced by historical prefill vs streaming canonicalization.
+                # Preserve the immutable persisted winner. The pipeline layer must
+                # receive that canonical snapshot rather than the conflicting live
+                # payload, so a warmup/live conflict cannot starve processing.
                 self._deduplicator.remember(candle)
-                return None
+                return existing
             self._deduplicator.remember(candle)
             self._metrics.increment("duplicate_candles")
             return existing
