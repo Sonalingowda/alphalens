@@ -17,7 +17,7 @@ from app.infrastructure.schema import schema_is_current
 from app.live_market_data import LiveMarketIngestionService
 from app.observability.logging import configure_structured_logging
 from app.opportunity_intelligence.api import create_opportunity_intelligence_app
-from app.opportunity_intelligence.domain import MarketSnapshot
+from app.opportunity_intelligence.domain import MarketScope, MarketSnapshot
 from app.opportunity_intelligence.persistence import (
     DashboardProjectionPostgreSQLRepository,
     LifecyclePostgreSQLRepository,
@@ -27,7 +27,11 @@ from app.opportunity_intelligence.persistence import (
     OutcomePostgreSQLRepository,
     RuntimeGovernancePostgreSQLRepository,
 )
-from app.opportunity_intelligence.repositories import RepositoryError
+from app.opportunity_intelligence.repositories import (
+    MarketSnapshotRepository,
+    RepositoryError,
+    ScopedRepositoryQuery,
+)
 from app.features.registry import INTRADAY_FEATURE_REGISTRY
 from app.features.contracts import FeatureValue, FeatureDependencyInput, FeatureComputationError
 from app.persistence.database import session_factory
@@ -60,6 +64,54 @@ class _PipelineHealth:
 
 _pipeline_health = _PipelineHealth()
 _pipeline_tasks: set[asyncio.Task] = set()
+
+
+class _LiveCandleQueryAdapter:
+    """Read completed live candles from the canonical snapshot repository."""
+
+    _PAGE_SIZE = 1000
+
+    def __init__(self, market_snapshots: MarketSnapshotRepository) -> None:
+        self._market_snapshots = market_snapshots
+
+    async def query(
+        self,
+        instrument: str,
+        timeframe: str,
+        after: datetime,
+        up_to_and_including: datetime,
+    ) -> tuple[dict, ...]:
+        selected: list[dict] = []
+        cursor: str | None = None
+        scope = MarketScope(instrument=instrument, timeframe=timeframe)
+
+        while True:
+            page = await self._market_snapshots.get_by_scope(
+                ScopedRepositoryQuery(
+                    scope=scope,
+                    as_of=up_to_and_including,
+                    limit=self._PAGE_SIZE,
+                    cursor=cursor,
+                )
+            )
+            for snapshot in page.items:
+                for candle in snapshot.candles:
+                    if after < candle.timestamp <= up_to_and_including:
+                        selected.append(
+                            {
+                                "timestamp": candle.timestamp,
+                                "open": candle.open,
+                                "high": candle.high,
+                                "low": candle.low,
+                                "close": candle.close,
+                                "volume": candle.volume,
+                            }
+                        )
+            if page.next_cursor is None:
+                break
+            cursor = page.next_cursor
+
+        return tuple(sorted(selected, key=lambda candle: candle["timestamp"]))
 
 
 class _PipelineAwareLiveMarketIngestionService(LiveMarketIngestionService):
@@ -365,41 +417,9 @@ async def _run_lifecycle_sweep(stop_event: asyncio.Event) -> None:
     plan_repo = OpportunityPlanPostgreSQLRepository(session_factory)
     outcome_repo = OutcomePostgreSQLRepository(session_factory)
 
-    class _CandleQueryAdapter:
-        async def query(
-            self,
-            instrument: str,
-            timeframe: str,
-            after: datetime,
-            up_to_and_including: datetime,
-        ) -> tuple[dict, ...]:
-            from app.persistence.models import CandleRecord
-            from sqlalchemy import select
-
-            async with session_factory() as session:
-                rows = (
-                    await session.scalars(
-                        select(CandleRecord).where(
-                            CandleRecord.asset_identifier == instrument,
-                            CandleRecord.timeframe == timeframe,
-                            CandleRecord.candle_timestamp > after,
-                            CandleRecord.candle_timestamp <= up_to_and_including,
-                        ).order_by(CandleRecord.candle_timestamp.asc())
-                    )
-                ).all()
-                return tuple(
-                    {
-                        "timestamp": r.candle_timestamp,
-                        "open": r.open_price,
-                        "high": r.high_price,
-                        "low": r.low_price,
-                        "close": r.close_price,
-                        "volume": r.volume,
-                    }
-                    for r in rows
-                )
-
-    outcome_service = OutcomeResolutionService(candle_query=_CandleQueryAdapter())
+    outcome_service = OutcomeResolutionService(
+        candle_query=_LiveCandleQueryAdapter(market_snapshot_repository)
+    )
     lifecycle_service = RuntimeLifecycleService(lifecycles=lifecycle_repo)
 
     while not stop_event.is_set():
