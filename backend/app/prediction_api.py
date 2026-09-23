@@ -89,7 +89,10 @@ class _LiveCandleQueryAdapter:
             page = await self._market_snapshots.get_by_scope(
                 ScopedRepositoryQuery(
                     scope=scope,
-                    as_of=up_to_and_including,
+                    # Snapshot availability may trail the market candle window
+                    # by a small transport delay. The outcome contract filters
+                    # eligibility by candle timestamp below, not audit availability.
+                    as_of=datetime.now(timezone.utc),
                     limit=self._PAGE_SIZE,
                     cursor=cursor,
                 )

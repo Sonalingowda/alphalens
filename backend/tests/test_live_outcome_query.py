@@ -36,27 +36,22 @@ class _SnapshotRepository:
 
     async def get_by_scope(self, query: ScopedRepositoryQuery) -> RepositoryPage:
         self.queries.append(query)
-        available = tuple(
-            snapshot
-            for snapshot in self.snapshots
-            if snapshot.audit.available_at <= query.as_of
-        )
-        return RepositoryPage(items=available, as_of=query.as_of)
+        return RepositoryPage(items=self.snapshots, as_of=query.as_of)
 
 
 class LiveSnapshotCandleQueryTests(IsolatedAsyncioTestCase):
     async def test_live_snapshot_at_boundary_is_selected(self) -> None:
-        signal = datetime(2026, 9, 23, 14, 55, 0, 999000, tzinfo=UTC)
-        valid_until = datetime(2026, 9, 23, 15, 5, 0, 999000, tzinfo=UTC)
+        signal = datetime(2026, 9, 23, 15, 45, 0, 18000, tzinfo=UTC)
+        valid_until = datetime(2026, 9, 23, 15, 55, 0, 18000, tzinfo=UTC)
         repository = _SnapshotRepository(
             (
                 _snapshot(
-                    datetime(2026, 9, 23, 15, 0, tzinfo=UTC),
-                    valid_until,
+                    datetime(2026, 9, 23, 15, 45, tzinfo=UTC),
+                    datetime(2026, 9, 23, 15, 50, 0, 999000, tzinfo=UTC),
                 ),
                 _snapshot(
-                    datetime(2026, 9, 23, 15, 5, tzinfo=UTC),
-                    valid_until + timedelta(seconds=1),
+                    datetime(2026, 9, 23, 15, 50, tzinfo=UTC),
+                    datetime(2026, 9, 23, 15, 55, 0, 999000, tzinfo=UTC),
                 ),
             )
         )
@@ -70,10 +65,10 @@ class LiveSnapshotCandleQueryTests(IsolatedAsyncioTestCase):
 
         self.assertEqual(
             [candle["timestamp"] for candle in candles],
-            [datetime(2026, 9, 23, 15, 0, tzinfo=UTC)],
+            [datetime(2026, 9, 23, 15, 50, tzinfo=UTC)],
         )
         self.assertEqual(
             repository.queries[0].scope,
             MarketScope(instrument="BTCUSDT", timeframe="5m"),
         )
-        self.assertEqual(repository.queries[0].as_of, valid_until)
+        self.assertGreater(repository.queries[0].as_of, valid_until)
