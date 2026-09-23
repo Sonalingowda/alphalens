@@ -67,6 +67,35 @@ class RuntimeAssessmentServiceTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(len(opportunities._records), 1)
 
+    async def test_plan_persistence_receipt_exposes_v11_identity_and_geometry(self) -> None:
+        fixture, service, evidence, _ = await _assessment_fixture(
+            "101.000000000000000000",
+            "100.000000000000000000",
+            "55.000000000000000000",
+        )
+
+        with self.assertLogs("alphalens.runtime_assessment", level="INFO") as captured:
+            opportunity = await service.assess(
+                fixture.candidate,
+                evidence,
+                fixture.context,
+            )
+
+        self.assertIsNotNone(opportunity.plan)
+        message = "\n".join(captured.output)
+        self.assertIn("opportunity_plan_persisted", message)
+        self.assertIn("plan.runtime.opp.", message)
+        self.assertIn("policy_id=alphalens_opportunity_plan_v1", message)
+        self.assertIn("policy_version=1.1.0", message)
+        self.assertIn(
+            "policy_hash=145b25381be7912e3c363df5469e80fc1e1b9b64e787f07768c0feaee410a200",
+            message,
+        )
+        self.assertIn("reference_price=105.000000000000000000", message)
+        self.assertIn("risk=1.000000000000000000", message)
+        self.assertIn("target_price=106.500000000000000000", message)
+        self.assertIn("risk_reward=1.500000000000000000", message)
+
     async def test_sell_assessment_persists_sell_opportunity(self) -> None:
         fixture, service, evidence, _ = await _assessment_fixture(
             "99.000000000000000000",

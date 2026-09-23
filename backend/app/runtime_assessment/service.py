@@ -1,6 +1,7 @@
 """Repository-backed implementation of Assessment Policy v1.0.1."""
 
 from dataclasses import dataclass, replace
+import logging
 
 from app.market_configuration import get_default_scope
 from app.opportunity_intelligence.domain import (
@@ -55,6 +56,7 @@ _EVIDENCE_POLICY_HASH = (
     "9159b3d43cbfeafdbe11f0a9e748119f5ddbac762e2bb89c62fd937dacd913c8"
 )
 _SCOPE_TIMEFRAMES = ("5m", "10m", "15m")
+logger = logging.getLogger("alphalens.runtime_assessment")
 _REQUIRED_EVIDENCE = {
     "market_price_close": (
         EvidenceCategory.MARKET_PRICE,
@@ -173,6 +175,29 @@ class RuntimeAssessmentService:
         )
         if plan is not None:
             plan = await self._plans_repository.save(plan)
+            target = plan.targets[0]
+            logger.info(
+                (
+                    "opportunity_plan_persisted opportunity_id=%s "
+                    "opportunity_version_id=%s plan_id=%s policy_id=%s "
+                    "policy_version=%s policy_hash=%s reference_price=%s "
+                    "risk=%s target_price=%s risk_reward=%s valid_until=%s "
+                    "available_at=%s result_hash=%s"
+                ),
+                plan.opportunity_id,
+                opportunity.opportunity_version_id,
+                plan.plan_id,
+                plan.policy.policy_id,
+                plan.policy.policy_version,
+                plan.policy.integrity_digest,
+                plan.reference_price,
+                plan.risk,
+                target.price,
+                target.risk_reward,
+                plan.valid_until.isoformat() if plan.valid_until is not None else None,
+                plan.audit.available_at.isoformat(),
+                plan.audit.result_hash,
+            )
             opportunity = replace(opportunity, plan=plan, valid_until=plan.valid_until)
             opportunity = replace(
                 opportunity,
