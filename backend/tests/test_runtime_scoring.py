@@ -32,6 +32,7 @@ from app.runtime_scoring import (
     RUNTIME_SCORING_POLICY_VERSION,
     RuntimeScoringService,
 )
+from app.runtime_scoring.service import _compute_opportunity_quality
 from tests.test_runtime_assessment import _assessment_fixture, _request
 
 
@@ -68,6 +69,61 @@ class RuntimeScoringServiceTests(unittest.IsolatedAsyncioTestCase):
             ),
         )
         self.assertEqual(len(scores._records), 1)
+
+    async def test_v11_quality_is_continuous_and_monotonic_for_signal(self) -> None:
+        weak = await _fixture(rsi="56.000000000000000000")
+        strong = await _fixture(rsi="65.000000000000000000")
+
+        weak_score = await weak[4].score(
+            weak[1], weak[2], weak[3], weak[0].context, weak[0].feature
+        )
+        strong_score = await strong[4].score(
+            strong[1], strong[2], strong[3], strong[0].context, strong[0].feature
+        )
+
+        self.assertGreaterEqual(weak_score.aggregate_value, Decimal("50"))
+        self.assertLessEqual(weak_score.aggregate_value, Decimal("100"))
+        self.assertGreater(strong_score.aggregate_value, weak_score.aggregate_value)
+
+    async def test_v11_quantization_and_domain_are_deterministic(self) -> None:
+        first = await _fixture(rsi="60.000000000000000000")
+        second = await _fixture(rsi="60.000000000000000000")
+        first_score = await first[4].score(
+            first[1], first[2], first[3], first[0].context, first[0].feature
+        )
+        second_score = await second[4].score(
+            second[1], second[2], second[3], second[0].context, second[0].feature
+        )
+
+        self.assertEqual(first_score.aggregate_value % Decimal("1"), Decimal("0"))
+        self.assertEqual(first_score.aggregate_value, second_score.aggregate_value)
+        self.assertEqual(first_score.canonical_sha256(), second_score.canonical_sha256())
+
+    async def test_v11_optional_feature_fallback_uses_neutral_components(self) -> None:
+        fixture, opportunity, qualification, evidence, service, _ = await _fixture(
+            rsi="60.000000000000000000"
+        )
+        feature_without_optional = replace(
+            fixture.feature,
+            values=tuple(
+                value
+                for value in fixture.feature.values
+                if value.output_name
+                not in {
+                    "average_directional_index",
+                    "macd_histogram",
+                    "bollinger_band_width",
+                }
+            ),
+        )
+        value = _compute_opportunity_quality(
+            opportunity, evidence, feature_without_optional
+        )
+        self.assertGreaterEqual(value, Decimal("50"))
+        self.assertLessEqual(value, Decimal("100"))
+        self.assertEqual(value, _compute_opportunity_quality(
+            opportunity, evidence, feature_without_optional
+        ))
 
     async def test_missing_opportunity_is_unavailable(self) -> None:
         fixture, opportunity, qualification, evidence, _, scores = await _fixture()

@@ -1,11 +1,11 @@
-"""Repository-backed implementation of Runtime Ranking Policy v1.0.
+"""Repository-backed implementation of Runtime Ranking Policy v1.1.
 
 Policy identifier : alphalens_runtime_ranking_ema_rsi
-Policy version    : 1.0.0
-Configuration hash: fa00f13d2344ed27e415d28955fb7e816a9d38718b4fdad7e76ab2976d42d238
+Policy version    : 1.1.0
+Configuration hash: 9a2e4c60da1f0b80dad6de944acd3092b06f9ef6c158a48b30b356827aecd294
 
 The hash above is SHA-256 of the compact sorted-key UTF-8 JSON payload defined
-in ALPHALENS_RUNTIME_RANKING_POLICY_V1.md §13.  This service MUST verify that
+in ALPHALENS_RUNTIME_RANKING_POLICY_V1.1.md. This service MUST verify that
 constant against the frozen value before executing any ranking logic.
 """
 
@@ -49,15 +49,15 @@ from app.opportunity_intelligence.services import (
 # ---------------------------------------------------------------------------
 
 RUNTIME_RANKING_POLICY_ID = "alphalens_runtime_ranking_ema_rsi"
-RUNTIME_RANKING_POLICY_VERSION = "1.0.0"
+RUNTIME_RANKING_POLICY_VERSION = "1.1.0"
 RUNTIME_RANKING_POLICY_HASH = (
-    "fa00f13d2344ed27e415d28955fb7e816a9d38718b4fdad7e76ab2976d42d238"
+    "9a2e4c60da1f0b80dad6de944acd3092b06f9ef6c158a48b30b356827aecd294"
 )
 
 _SCORING_POLICY = PolicyReference(
     "alphalens_runtime_scoring_ema_rsi",
     "1.1.0",
-    "454a8f2ba78347f37ee797f6d5a8c7f4406051c3fd35ba9256aa9f3f533955c0",
+    "825ee3c060b4badc6d3348d1731dfd0683f46a4ad12f420a5e751e040cbca81b",
 )
 _QUALIFICATION_POLICY = PolicyReference(
     "alphalens_runtime_qualification_ema_rsi",
@@ -109,7 +109,7 @@ def _policy() -> PolicyReference:
 class RuntimeRankingService:
     """Persist a deterministic immutable RankingSnapshot from ScoreResult inputs.
 
-    Implements the frozen ranking policy (ALPHALENS_RUNTIME_RANKING_POLICY_V1):
+    Implements the frozen ranking policy (ALPHALENS_RUNTIME_RANKING_POLICY_V1.1):
     - Resolves and validates the triggering ScoreResult's full lineage.
     - Builds the rolling-15-minute population from the ScoringRepository.
     - Applies the three-key deterministic sort (composite desc, qualification
@@ -157,7 +157,7 @@ class RuntimeRankingService:
         """
         # --- Policy gate (fail-closed: POLICY_BLOCKED) ---
         if self._policy != _policy():
-            raise PolicyUnavailableError("Ranking policy v1.0.0 is unavailable.")
+            raise PolicyUnavailableError("Ranking policy v1.1.0 is unavailable.")
 
         # --- Structural contract: pipeline passes exactly one of each ---
         if len(scores) != 1 or len(qualifications) != 1 or len(opportunities) != 1:

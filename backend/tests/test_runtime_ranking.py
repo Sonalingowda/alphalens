@@ -1,4 +1,4 @@
-"""Tests for Runtime Ranking Policy v1.0.
+"""Tests for Runtime Ranking Policy v1.1.
 
 Covers every required scenario from INT-007:
   - populated ranking (single member)
@@ -43,7 +43,11 @@ from app.runtime_ranking import (
     RUNTIME_RANKING_POLICY_VERSION,
     RuntimeRankingService,
 )
-from app.runtime_ranking.service import _MINIMUM_QUALITY_SCORE, _apply_quality_filter
+from app.runtime_ranking.service import (
+    _MINIMUM_QUALITY_SCORE,
+    _SCORING_POLICY,
+    _apply_quality_filter,
+)
 from app.runtime_scoring import RuntimeScoringService
 from tests.test_runtime_assessment import _assessment_fixture, _request
 
@@ -153,10 +157,10 @@ class RuntimeRankingServiceTests(unittest.IsolatedAsyncioTestCase):
 
     def test_policy_constants(self) -> None:
         self.assertEqual(RUNTIME_RANKING_POLICY_ID, "alphalens_runtime_ranking_ema_rsi")
-        self.assertEqual(RUNTIME_RANKING_POLICY_VERSION, "1.0.0")
+        self.assertEqual(RUNTIME_RANKING_POLICY_VERSION, "1.1.0")
         self.assertEqual(
             RUNTIME_RANKING_POLICY_HASH,
-            "fa00f13d2344ed27e415d28955fb7e816a9d38718b4fdad7e76ab2976d42d238",
+            "9a2e4c60da1f0b80dad6de944acd3092b06f9ef6c158a48b30b356827aecd294",
         )
 
     # --- Populated ranking ---
@@ -514,6 +518,14 @@ class RuntimeRankingServiceTests(unittest.IsolatedAsyncioTestCase):
 
     def test_quality_threshold_constant(self) -> None:
         self.assertEqual(_MINIMUM_QUALITY_SCORE, Decimal("55"))
+
+    def test_ranking_requires_the_approved_scoring_v11_reference(self) -> None:
+        self.assertEqual(_SCORING_POLICY.policy_id, "alphalens_runtime_scoring_ema_rsi")
+        self.assertEqual(_SCORING_POLICY.policy_version, "1.1.0")
+        self.assertEqual(
+            _SCORING_POLICY.integrity_digest,
+            "825ee3c060b4badc6d3348d1731dfd0683f46a4ad12f420a5e751e040cbca81b",
+        )
 
     async def test_weak_score_below_quality_threshold_is_excluded(self) -> None:
         """A score with composite_value < 55 is excluded via quality filter."""

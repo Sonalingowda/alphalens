@@ -1,7 +1,7 @@
-"""Repository-backed implementation of Runtime Scoring Policy v1.1."""
+"""Repository-backed implementation of the approved Runtime Scoring Policy v1.1."""
 
 from dataclasses import replace
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_EVEN
 
 from app.market_configuration import get_default_scope
 from app.opportunity_intelligence.domain import (
@@ -44,7 +44,7 @@ from app.opportunity_intelligence.services import (
 RUNTIME_SCORING_POLICY_ID = "alphalens_runtime_scoring_ema_rsi"
 RUNTIME_SCORING_POLICY_VERSION = "1.1.0"
 RUNTIME_SCORING_POLICY_HASH = (
-    "454a8f2ba78347f37ee797f6d5a8c7f4406051c3fd35ba9256aa9f3f533955c0"
+    "825ee3c060b4badc6d3348d1731dfd0683f46a4ad12f420a5e751e040cbca81b"
 )
 _QUALIFICATION_POLICY = PolicyReference(
     "alphalens_runtime_qualification_ema_rsi",
@@ -388,7 +388,7 @@ def _compute_opportunity_quality(
 
     product = signal_score * vol_score * trend_bonus
     quality = Decimal("50") + Decimal("50") * min(product, Decimal("1"))
-    return quality.quantize(Decimal("1"))
+    return quality.quantize(Decimal("1"), rounding=ROUND_HALF_EVEN)
 
 
 def _record(
