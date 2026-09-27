@@ -4,6 +4,7 @@ from contextlib import AbstractContextManager
 from dataclasses import FrozenInstanceError, replace
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from enum import Enum
 import unittest
 
 from app.opportunity_intelligence.domain import (
@@ -380,6 +381,28 @@ def test_canonical_serialization_is_stable_typed_and_omits_absence() -> None:
     assert "null" not in first
     assert canonical_sha256(candidate) == candidate.canonical_sha256()
     assert len(candidate.canonical_sha256()) == 64
+
+
+def test_canonical_json_normalizes_json_lists_recursively() -> None:
+    class ExampleState(Enum):
+        READY = "READY"
+
+    timestamp = datetime(2025, 1, 1, 0, 5, tzinfo=UTC)
+    nested = [
+        Decimal("1.250000000000000000"),
+        {"timestamp": timestamp, "state": ExampleState.READY},
+        ("tuple", [2, 3]),
+    ]
+
+    assert canonical_json(nested) == (
+        '["1.250000000000000000",'
+        '{"state":"READY","timestamp":"2025-01-01T00:05:00Z"},'
+        '["tuple",[2,3]]]'
+    )
+    assert canonical_json((1, (2, 3))) == canonical_json([1, [2, 3]])
+
+    with _raises(TypeError, "Unsupported canonical value type: object"):
+        canonical_json([object()])
 
 
 def test_domain_models_are_immutable() -> None:

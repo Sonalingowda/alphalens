@@ -10,6 +10,7 @@ from sqlalchemy import (
     Boolean,
     CheckConstraint,
     DateTime,
+    ForeignKeyConstraint,
     ForeignKey,
     Identity,
     Index,
@@ -28,6 +29,69 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 class Base(DeclarativeBase):
     pass
+
+
+class _PaperRecord(Base):
+    """Base shape for isolated paper records; never references production rows."""
+
+    __abstract__ = True
+    identity: Mapped[str] = mapped_column(String(256), primary_key=True)
+    opportunity_version_id: Mapped[str] = mapped_column(String(256), nullable=False)
+    canonical_payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    canonical_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+
+
+class PaperExecutionRecord(_PaperRecord):
+    __tablename__ = "paper_executions"
+
+
+class PaperPositionRecord(_PaperRecord):
+    __tablename__ = "paper_positions"
+    execution_id: Mapped[str] = mapped_column(
+        String(256),
+        ForeignKey("paper_executions.identity", ondelete="RESTRICT"),
+        nullable=False,
+    )
+
+
+class PaperExitRecord(_PaperRecord):
+    __tablename__ = "paper_exits"
+    position_id: Mapped[str] = mapped_column(
+        String(256),
+        ForeignKey("paper_positions.identity", ondelete="RESTRICT"),
+        nullable=False,
+    )
+
+
+class PaperOutcomeRecord(_PaperRecord):
+    __tablename__ = "paper_outcomes"
+    execution_id: Mapped[str] = mapped_column(String(256), nullable=False)
+    position_id: Mapped[str] = mapped_column(String(256), nullable=False)
+    exit_id: Mapped[str] = mapped_column(String(256), nullable=False)
+    __table_args__ = (
+        ForeignKeyConstraint(["execution_id"], ["paper_executions.identity"], ondelete="RESTRICT"),
+        ForeignKeyConstraint(["position_id"], ["paper_positions.identity"], ondelete="RESTRICT"),
+        ForeignKeyConstraint(["exit_id"], ["paper_exits.identity"], ondelete="RESTRICT"),
+    )
+
+
+class PaperSuccessorPlanRecord(Base):
+    """Isolated immutable remediation plan; never joined to production plan reads."""
+
+    __tablename__ = "paper_successor_plans"
+    __table_args__ = (
+        UniqueConstraint("source_opportunity_version_id", name="uq_paper_successor_source_version"),
+        CheckConstraint("char_length(source_plan_canonical_hash) = 64", name="ck_paper_successor_source_hash"),
+        CheckConstraint("char_length(successor_plan_canonical_hash) = 64", name="ck_paper_successor_hash"),
+    )
+
+    successor_plan_id: Mapped[str] = mapped_column(String(256), primary_key=True)
+    source_opportunity_version_id: Mapped[str] = mapped_column(String(256), nullable=False)
+    source_opportunity_id: Mapped[str] = mapped_column(String(256), nullable=False)
+    source_plan_id: Mapped[str] = mapped_column(String(256), nullable=False)
+    source_plan_canonical_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    successor_plan_canonical_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    canonical_payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
 
 
 class ImmutableAggregateRecord(Base):

@@ -93,6 +93,8 @@ def _canonical_value(
         return value.isoformat().replace("+00:00", "Z")
     if isinstance(value, tuple):
         return [_canonical_value(item) for item in value]
+    if isinstance(value, list):
+        return [_canonical_value(item) for item in value]
     if isinstance(value, Mapping):
         if not all(isinstance(key, str) for key in value):
             raise DomainValidationError("Canonical mapping keys must be strings.")
