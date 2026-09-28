@@ -323,15 +323,6 @@ class RuntimeIntelligencePipeline:
                 error.trace_hash,
                 error.__cause__,
             )
-            for stage_record in error.stages:
-                logger.error(
-                    "runtime_pipeline_stage run_id=%s stage=%s status=%s reason=%s artifacts=%s",
-                    run_id,
-                    stage_record.stage.value,
-                    stage_record.status.value,
-                    stage_record.reason_code,
-                    stage_record.artifact_ids,
-                )
             return None
         except Exception:
             logger.exception(

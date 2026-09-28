@@ -365,6 +365,28 @@ class OpportunityIntelligencePipeline:
             _complete(records, active_stage, ranking.snapshot_id)
 
             active_stage = PipelineStage.LIFECYCLE
+            if not any(
+                membership.opportunity_id == opportunity.opportunity_id
+                and membership.opportunity_version_id
+                == opportunity.opportunity_version_id
+                for membership in ranking.memberships
+            ):
+                _block(records, active_stage, "ranking.opportunity_excluded")
+                return _result(
+                    request,
+                    PipelineOutcome.NOT_QUALIFIED,
+                    records,
+                    market,
+                    features,
+                    context,
+                    attempt,
+                    candidate=candidate,
+                    evidence=evidence,
+                    opportunity=opportunity,
+                    qualification=qualification,
+                    score=score,
+                    ranking=ranking,
+                )
             lifecycle = await self.lifecycle.advance(
                 opportunity,
                 qualification,

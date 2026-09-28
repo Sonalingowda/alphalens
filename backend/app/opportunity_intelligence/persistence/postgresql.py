@@ -134,7 +134,7 @@ class PostgreSQLImmutableRepository(Generic[T]):
                     if self._entity_type is MarketSnapshot:
                         existing_entity = self._decode(current)
                         if self._equivalent_market_snapshot_content(existing_entity, entity):
-                            logger.warning(
+                            logger.debug(
                                 "transport_lineage_conflict_resolved identity=%s",
                                 identity,
                             )

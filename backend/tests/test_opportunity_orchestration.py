@@ -197,6 +197,46 @@ class OpportunityOrchestrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(error.stages[-1].reason_code, "service.failure")
         self.assertEqual(len(error.trace_hash), 64)
 
+    async def test_excluded_ranking_stops_before_lifecycle(self) -> None:
+        candidate = _candidate()
+        lifecycle = SimpleNamespace(advance=AsyncMock())
+        pipeline = _pipeline(
+            detection=SimpleNamespace(
+                detect=AsyncMock(
+                    return_value=(
+                        _attempt(CandidateAttemptState.DETECTED, candidate.candidate_id),
+                        candidate,
+                    )
+                )
+            ),
+            evidence=SimpleNamespace(
+                assemble=AsyncMock(return_value=_evidence_package())
+            ),
+            assessment=SimpleNamespace(assess=AsyncMock(return_value=_opportunity())),
+            qualification=SimpleNamespace(
+                qualify=AsyncMock(return_value=_qualification())
+            ),
+            scoring=SimpleNamespace(
+                score=AsyncMock(return_value=SimpleNamespace(score_id="score.1"))
+            ),
+            ranking=SimpleNamespace(
+                rank=AsyncMock(
+                    return_value=SimpleNamespace(
+                        snapshot_id="ranking.empty", memberships=()
+                    )
+                )
+            ),
+            lifecycle=lifecycle,
+        )
+
+        result = await pipeline.run(_request())
+
+        self.assertIs(result.outcome, PipelineOutcome.NOT_QUALIFIED)
+        self.assertIs(result.stages[-1].stage, PipelineStage.LIFECYCLE)
+        self.assertIs(result.stages[-1].status, PipelineStageStatus.BLOCKED)
+        self.assertEqual(result.stages[-1].reason_code, "ranking.opportunity_excluded")
+        lifecycle.advance.assert_not_awaited()
+
 
 if __name__ == "__main__":
     unittest.main()

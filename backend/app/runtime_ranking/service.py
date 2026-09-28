@@ -264,9 +264,11 @@ class RuntimeRankingService:
         )
         excluded_pairs.extend(freshness_excluded_pairs)
 
-        # --- Recompute ranking cutoff after freshness filtering ---
-        if admitted:
-            ranking_cutoff = max(s.audit.available_at for s, _, _ in admitted)
+        # Keep the triggering score's cutoff as the ranking cutoff. Recomputing
+        # it from the admitted population can move the cutoff backwards when the
+        # triggering score is excluded by the quality gate. That makes the
+        # triggering score's own provenance appear unavailable at the ranking
+        # cutoff and causes an otherwise valid empty ranking to fail closed.
 
         # --- Deterministic three-key sort (policy §8) ---
         admitted_sorted = sorted(
