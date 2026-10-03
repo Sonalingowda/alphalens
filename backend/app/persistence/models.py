@@ -4145,6 +4145,11 @@ class ModelInferenceArtifactRecord(Base):
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    release_status: Mapped[str] = mapped_column(
+        String(16),
+        nullable=False,
+        server_default="ACTIVE",
+    )
     artifact_version: Mapped[str] = mapped_column(
         String(32),
         nullable=False,
