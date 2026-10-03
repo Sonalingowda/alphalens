@@ -25,6 +25,7 @@ from app.opportunity_intelligence.services import (
     ServiceContractError,
     ServiceUnavailableError,
 )
+from app.inference.service import ProductionPrediction
 from app.runtime_qualification import RuntimeQualificationService
 from app.runtime_scoring import (
     RUNTIME_SCORING_POLICY_HASH,
@@ -32,7 +33,13 @@ from app.runtime_scoring import (
     RUNTIME_SCORING_POLICY_VERSION,
     RuntimeScoringService,
 )
-from app.runtime_scoring.service import _compute_opportunity_quality
+from app.runtime_scoring.service import (
+    APPROVED_RIDGE_ARTIFACT_ID,
+    APPROVED_RIDGE_ARTIFACT_SHA256,
+    _approved_ridge_component,
+    _compute_opportunity_quality,
+)
+from tests.test_opportunity_domain_models import START
 from tests.test_runtime_assessment import _assessment_fixture, _request
 
 
@@ -394,6 +401,59 @@ class RuntimeScoringServiceTests(unittest.IsolatedAsyncioTestCase):
             },
         )
 
+    async def test_approved_ridge_prediction_component_binds_artifact_and_prediction(
+        self,
+    ) -> None:
+        prediction = ProductionPrediction(
+            prediction_timestamp=START,
+            predicted_forward_return=Decimal("0.0125"),
+            predicted_float_hex="0x1.999999999999ap-7",
+            prediction_hash="a" * 64,
+            feature_vector_hash="b" * 64,
+            schema_hash="c" * 64,
+            artifact_id=APPROVED_RIDGE_ARTIFACT_ID,
+            artifact_sha256=APPROVED_RIDGE_ARTIFACT_SHA256,
+            configuration_hash="d" * 64,
+        )
+
+        component = _approved_ridge_component(prediction, prediction.prediction_timestamp)
+
+        self.assertEqual(component.component_id, "approved_ridge_prediction")
+        self.assertEqual(component.raw_value, Decimal("0.0125"))
+        self.assertEqual(component.weight, Decimal("0"))
+        self.assertEqual(component.contribution, Decimal("0"))
+        self.assertEqual(
+            component.source_evidence[0].artifact_id,
+            str(APPROVED_RIDGE_ARTIFACT_ID),
+        )
+        self.assertEqual(
+            component.source_evidence[0].integrity_digest,
+            APPROVED_RIDGE_ARTIFACT_SHA256,
+        )
+        self.assertEqual(
+            component.source_evidence[1].integrity_digest,
+            prediction.prediction_hash,
+        )
+
+    async def test_unavailable_approved_ridge_fails_before_score_persistence(self) -> None:
+        fixture, opportunity, qualification, evidence, service, scores = await _fixture()
+        service = _service(
+            opportunities=service._opportunities,
+            qualifications=service._qualifications,
+            evidence=service._evidence,
+            market_contexts=service._market_contexts,
+            scores=scores,
+            approved_artifact_provider=AsyncMock(
+                side_effect=ValueError("artifact unavailable")
+            ),
+        )
+
+        with self.assertRaises(ServiceUnavailableError):
+            await service.score(
+                opportunity, qualification, evidence, fixture.context, fixture.feature
+            )
+        self.assertEqual(len(scores._records), 0)
+
 
 async def _fixture(ema_12="101.000000000000000000", ema_26="100.000000000000000000",
                     rsi="55.000000000000000000"):
@@ -437,6 +497,7 @@ def _service(
     market_contexts,
     scores,
     policy=None,
+    approved_artifact_provider=None,
 ):
     return RuntimeScoringService(
         opportunities=opportunities,
@@ -446,4 +507,5 @@ def _service(
         scores=scores,
         code_version="git:runtimescoring100",
         policy=policy,
+        approved_artifact_provider=approved_artifact_provider,
     )

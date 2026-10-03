@@ -13,7 +13,19 @@ from app.inference.artifact import (
     load_expected_move_inference_artifact,
     load_ridge_inference_artifact,
 )
-from app.persistence.models import ModelInferenceArtifactRecord
+from app.inference.lineage import verify_ridge_artifact_lineage
+from app.persistence.models import (
+    FinalModelSelectionReportRecord,
+    HoldoutConsumptionRecord,
+    HoldoutEvaluationReportRecord,
+    ModelInferenceArtifactRecord,
+    RegressionExperimentRecord,
+    ValidationRunRecord,
+)
+
+
+ACTIVE_ARTIFACT_STATUS = "ACTIVE"
+RETIRED_ARTIFACT_STATUS = "RETIRED"
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,25 +60,51 @@ class LoadedExpectedMoveArtifact:
 async def load_production_artifact(
     session: AsyncSession,
 ) -> LoadedProductionArtifact:
-    """Verify and load the sole production artifact without training code."""
-    record = (
+    """Verify and load the explicitly active production artifact."""
+    records = (
         await session.scalars(
-            select(ModelInferenceArtifactRecord)
+            select(ModelInferenceArtifactRecord).where(
+                ModelInferenceArtifactRecord.release_status
+                == ACTIVE_ARTIFACT_STATUS
+            )
         )
-    ).one()
-    if (
-        hash_json(record.artifact_payload) != record.artifact_sha256
-        or hash_json(record.artifact_payload["core"])
-        != record.state_sha256
-        or hash_json(record.verification_evidence)
-        != record.verification_evidence_hash
-        or not record.official_prediction_hash_verified
-        or not record.artifact_only_inference_verified
-        or record.model_tuned
-        or record.experiment_modified
-        or record.research_artifacts_modified
-    ):
-        raise ValueError("Production inference artifact failed verification.")
+    ).all()
+    if len(records) != 1:
+        raise ValueError("Production requires exactly one inference artifact.")
+    record = records[0]
+    experiment = await session.get(RegressionExperimentRecord, record.selected_experiment_id)
+    holdout = await session.get(HoldoutEvaluationReportRecord, record.holdout_evaluation_report_id)
+    if experiment is None or holdout is None:
+        raise ValueError("Production artifact lineage is incomplete.")
+    selection = await session.get(FinalModelSelectionReportRecord, holdout.final_model_selection_report_id)
+    validation = await session.get(ValidationRunRecord, record.validation_run_id)
+    consumptions = (await session.scalars(
+        select(HoldoutConsumptionRecord).where(
+            HoldoutConsumptionRecord.validation_run_id == record.validation_run_id,
+            HoldoutConsumptionRecord.holdout_evaluation_report_id == holdout.id,
+        )
+    )).all()
+    if selection is None or validation is None:
+        raise ValueError("Production artifact lineage is incomplete.")
+    verify_ridge_artifact_lineage(
+        artifact=record,
+        experiment=experiment,
+        selection=selection,
+        holdout=holdout,
+        validation=validation,
+        holdout_consumption_count=len(consumptions),
+        artifact_count=len(records),
+        holdout_consumption_verified=all(
+            item.validation_run_id == record.validation_run_id
+            and item.holdout_evaluation_report_id == holdout.id
+            and item.selected_experiment_id == record.selected_experiment_id
+            and
+            item.purpose == "official_final_evaluation"
+            and item.official
+            and item.irreversible
+            for item in consumptions
+        ),
+    )
     inference = load_ridge_inference_artifact(
         record.artifact_payload,
         expected_artifact_sha256=record.artifact_sha256,
@@ -129,4 +167,3 @@ async def load_expected_move_artifact(
         feature_pipeline_version=record.feature_pipeline_version,
         inference=inference,
     )
-

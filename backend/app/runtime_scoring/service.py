@@ -2,6 +2,8 @@
 
 from dataclasses import replace
 from decimal import Decimal, ROUND_HALF_EVEN
+from typing import Awaitable, Callable
+from uuid import UUID
 
 from app.market_configuration import get_default_scope
 from app.opportunity_intelligence.domain import (
@@ -24,6 +26,8 @@ from app.opportunity_intelligence.domain import (
     ScoreResult,
     canonical_sha256,
 )
+from app.inference.repository import LoadedProductionArtifact
+from app.inference.service import ProductionPrediction, ProductionPredictionService
 from app.opportunity_intelligence.repositories import (
     EntityAsOfQuery,
     EntityId,
@@ -84,6 +88,24 @@ _UNAVAILABLE_DIMENSION_REASON_CODES = (
     "scoring.confidence_unavailable",
     "scoring.reward_unavailable",
 )
+_APPROVED_RIDGE_FEATURE_NAMES = (
+    "bollinger_20_2_lower",
+    "bollinger_20_2_middle",
+    "bollinger_20_2_upper",
+    "ema_20",
+    "ema_50",
+    "macd_12_26_9_histogram",
+    "macd_12_26_9_line",
+    "macd_12_26_9_signal",
+    "rsi_14",
+    "sma_20",
+    "sma_50",
+    "volume_sma_20",
+)
+APPROVED_RIDGE_ARTIFACT_ID = UUID("a6576881-77d2-4947-a8b6-5b3707d8e76a")
+APPROVED_RIDGE_ARTIFACT_SHA256 = (
+    "88644e3d2316f3c0ef99a40761aecabd1206d63f0c39784a6bb2475b07832bcd"
+)
 
 
 class RuntimeScoringService:
@@ -100,6 +122,9 @@ class RuntimeScoringService:
         code_version: str,
         policy: PolicyReference | None = None,
         scope: MarketScope | None = None,
+        approved_artifact_provider: Callable[
+            [], Awaitable[LoadedProductionArtifact]
+        ] | None = None,
     ) -> None:
         if not code_version.strip():
             raise ValueError("Runtime scoring code version must be non-empty.")
@@ -111,6 +136,7 @@ class RuntimeScoringService:
         self._code_version = code_version
         self._policy = policy if policy is not None else _policy()
         self._scope = scope or get_default_scope()
+        self._approved_artifact_provider = approved_artifact_provider
 
     async def score(
         self,
@@ -185,8 +211,67 @@ class RuntimeScoringService:
             limitations,
             self._policy,
             self._code_version,
+            model_component=(
+                await self._approved_ridge_component(
+                    feature_snapshot,
+                    cutoff,
+                )
+                if self._approved_artifact_provider is not None
+                else None
+            ),
         )
         return await self._scores.save(record)
+
+    async def _approved_ridge_component(
+        self,
+        feature_snapshot: FeatureSnapshot,
+        cutoff,
+    ) -> ScoreComponent:
+        """Run the canonical approved loader/inference path once per score.
+
+        This component is deliberately informational and has zero contribution;
+        the existing qualification, score aggregate, and ranking semantics remain
+        unchanged while the runtime records the approved model result.
+        """
+        assert self._approved_artifact_provider is not None
+        try:
+            artifact = await self._approved_artifact_provider()
+            if (
+                artifact.artifact_id != APPROVED_RIDGE_ARTIFACT_ID
+                or artifact.artifact_sha256 != APPROVED_RIDGE_ARTIFACT_SHA256
+            ):
+                raise ValueError("Loaded artifact is not the approved Ridge artifact.")
+            service = ProductionPredictionService(artifact)
+            values_by_name = {}
+            for value in feature_snapshot.values:
+                if value.output_name in values_by_name:
+                    raise ValueError("Approved Ridge feature output is duplicated.")
+                values_by_name[value.output_name] = value
+            missing = tuple(
+                name
+                for name in service.ordered_feature_names
+                if name not in values_by_name
+            )
+            if missing or tuple(service.ordered_feature_names) != _APPROVED_RIDGE_FEATURE_NAMES:
+                raise ValueError("Approved Ridge feature schema is unavailable.")
+            selected = tuple(values_by_name[name] for name in service.ordered_feature_names)
+            timestamps = {value.candle_timestamp for value in selected}
+            if len(timestamps) != 1 or any(
+                value.available_at > cutoff for value in selected
+            ):
+                raise ValueError("Approved Ridge features have inconsistent timestamps.")
+            timestamp = next(iter(timestamps))
+            prediction = service.predict(
+                prediction_timestamp=timestamp,
+                feature_names=service.ordered_feature_names,
+                feature_values=tuple(value.value for value in selected),
+                schema_hash=service.schema_hash,
+            )
+        except Exception as error:
+            raise ServiceUnavailableError(
+                "Approved Ridge inference is unavailable; no score was persisted."
+            ) from error
+        return _approved_ridge_component(prediction, cutoff)
 
 
 def _validate(
@@ -399,6 +484,7 @@ def _record(
     limitations: tuple[str, ...],
     policy: PolicyReference,
     code_version: str,
+    model_component: ScoreComponent | None = None,
 ) -> ScoreResult:
     qualification_reference = _reference(
         qualification.qualification_id,
@@ -435,6 +521,9 @@ def _record(
         ),
     )
     sources = opportunity.audit.provenance.source_references
+    components = (component,)
+    if model_component is not None:
+        components += (model_component,)
     audit = AuditMetadata(
         created_at=qualification.audit.evidence_cutoff,
         evidence_cutoff=qualification.audit.evidence_cutoff,
@@ -454,7 +543,7 @@ def _record(
         opportunity_id=opportunity.opportunity_version_id,
         qualification_reference=qualification_reference,
         policy=policy,
-        components=(component,),
+        components=components,
         aggregation_definition="ordinal_quality_v1",
         aggregate_value=value,
         aggregate_unit="ordinal_priority",
@@ -467,6 +556,50 @@ def _record(
         audit=replace(
             audit,
             result_hash=canonical_sha256(record, exclude=frozenset({"result_hash"})),
+        ),
+    )
+
+
+def _approved_ridge_component(
+    prediction: ProductionPrediction,
+    available_at,
+) -> ScoreComponent:
+    artifact_reference = IntegrityReference(
+        artifact_id=str(prediction.artifact_id),
+        artifact_type="model_inference_artifact",
+        artifact_version="1.0.0",
+        integrity_digest=prediction.artifact_sha256,
+        available_at=available_at,
+    )
+    prediction_reference = IntegrityReference(
+        artifact_id=f"model.prediction.{prediction.prediction_hash}",
+        artifact_type="model_prediction",
+        artifact_version="1.0.0",
+        integrity_digest=prediction.prediction_hash,
+        available_at=available_at,
+    )
+    component = ScoreComponent(
+        component_id="approved_ridge_prediction",
+        component_version="1.0.0",
+        meaning="forward_return_forecast",
+        availability=ScoreComponentAvailability.AVAILABLE,
+        source_evidence=(artifact_reference, prediction_reference),
+        raw_value=prediction.predicted_forward_return,
+        normalized_value=prediction.predicted_forward_return,
+        weight=Decimal("0"),
+        contribution=Decimal("0"),
+        normalization_reference=None,
+        weight_reference=None,
+        limitations=(
+            "informational_only",
+            "not_used_for_qualification_or_ranking",
+        ),
+        component_hash="0" * 64,
+    )
+    return replace(
+        component,
+        component_hash=canonical_sha256(
+            component, exclude=frozenset({"component_hash"})
         ),
     )
 

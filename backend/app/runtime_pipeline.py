@@ -47,7 +47,7 @@ from app.runtime_detection import RuntimeOpportunityDetectionService
 from app.runtime_evidence import RuntimeEvidenceService
 from app.runtime_features import RuntimeFeatureEngine
 from app.runtime_indicators import RuntimeIndicatorService
-from app.inference.repository import load_expected_move_artifact
+from app.inference.repository import load_production_artifact
 from app.inference.artifact import PackagedExpectedMoveInference
 from app.runtime_notification import RuntimeNotificationService
 from app.runtime_lifecycle import RuntimeLifecycleService
@@ -197,6 +197,9 @@ def build_runtime_pipeline(
         scores=scores,
         code_version=_CODE_VERSION,
         scope=pipeline_scope,
+        approved_artifact_provider=(
+            lambda: _load_approved_artifact(session_factory)
+        ),
     )
     ranking_service = RuntimeRankingService(
         scores=scores,
@@ -255,6 +258,14 @@ def build_runtime_pipeline(
         pipeline=pipeline,
         scope=pipeline_scope,
     )
+
+
+async def _load_approved_artifact(
+    session_factory: async_sessionmaker[AsyncSession],
+):
+    """Load the sole approved artifact through the canonical fail-closed loader."""
+    async with session_factory() as session:
+        return await load_production_artifact(session)
 
 
 class RuntimeIntelligencePipeline:
