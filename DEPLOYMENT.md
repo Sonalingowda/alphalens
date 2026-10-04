@@ -231,6 +231,71 @@ committed.
 Never use recovery to rewrite, delete, or silently replace historical
 experimental evidence.
 
+## Artifact release boundary
+
+Artifact existence never authorizes a release. The external controlled release
+manifest must bind the artifact ID and SHA-256, Ridge model/configuration,
+feature and target versions, dataset and validation lineage, split hash,
+holdout report and irreversible consumption status, deterministic prediction
+hash, target identity, operator, approval timestamp, intended action, backup
+checksum, and rollback reference. Its own SHA-256 and explicit human approval
+are required before import.
+
+Before any future release, the operator must create and checksum a complete
+PostgreSQL backup, run the read-only target identity check, independently run
+the shared fail-closed lineage verifier, and validate the release manifest.
+The target check does not print credentials or mutate the target:
+
+```shell
+cd backend
+uv run python scripts/transfer_approved_state.py verify-target \
+  --url "$TARGET_DATABASE_URL" --manifest /secure/release-manifest.json
+```
+
+Only then may the approved transfer preflight run. Transfer is an atomic,
+idempotent import-for-release-review and rejects conflicting identity or hash.
+
+For a new production database, use the canonical fresh-target bootstrap after
+the database has reached the current Alembic head:
+
+```shell
+cd backend
+uv run python scripts/transfer_approved_state.py bootstrap-release \
+  --url "$TARGET_DATABASE_URL" \
+  --closure /secure/approved-closure.json \
+  --manifest /secure/render-release-manifest.json
+```
+
+The closure and manifest must be produced by the approved release process. The
+manifest must bind the approved artifact, its complete parent closure (closure
+hash, row-binding hash, record count, and source schema heads), the exact target
+database identity, backup, rollback reference, and human release approval.
+`bootstrap-release` accepts an empty target closure, inserts the closure and
+activates the already-verified artifact in one transaction, then loads it
+through the production readiness verifier. An exact repeat is a verified
+no-op; partial or conflicting state is rejected. It does not create or modify
+artifact content. The legacy `restore-release` command remains reserved for the
+controlled replacement path with its explicitly bound predecessor.
+
+After transfer, recheck the artifact hash and parent closure. Deploy an
+immutable compatible application image, validate startup/readiness, and run a
+controlled prediction smoke test. For replacement transfers, activation is
+separate and requires a second explicit human release sign-off; the fresh-target
+bootstrap is itself the explicitly approved activation transaction. Deployment
+and artifact existence must never activate live inference automatically.
+
+Monitor readiness, artifact identity/hash, prediction errors, latency, and
+logs. A rollback trigger is any failed integrity/readiness check, unexpected
+identity/hash, failed smoke test, or authorized operational stop. Normal
+rollback restores the previous immutable artifact reference and compatible
+image, then verifies the previous artifact ID/hash, readiness, and controlled
+prediction and records the result. Database restoration is the fallback
+recovery mechanism, not the normal artifact replacement path; restore only
+into an isolated recovery target first and repeat readiness and deterministic
+replay checks before traffic resumes.
+
+The transfer command never deploys or activates an artifact.
+
 ## CI/CD
 
 GitHub Actions run independently for:
