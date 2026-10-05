@@ -10,12 +10,19 @@ COPY backend/pyproject.toml backend/uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project
 
 FROM python:3.11.9-slim-bookworm@sha256:8fb099199b9f2d70342674bd9dbccd3ed03a258f26bbd1d556822c6dfc60c317 AS runtime
+ARG ALPHALENS_BUILD_GIT_SHA
+ARG ALPHALENS_BUILD_APP_VERSION=1.0.0
+ARG ALPHALENS_BUILD_TIME
 ENV PATH="/opt/venv/bin:${PATH}" \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
 RUN groupadd --system --gid 10001 alphalens \
     && useradd --system --uid 10001 --gid alphalens --home /app alphalens
 WORKDIR /app
+RUN ALPHALENS_BUILD_GIT_SHA="${ALPHALENS_BUILD_GIT_SHA}" \
+    ALPHALENS_BUILD_APP_VERSION="${ALPHALENS_BUILD_APP_VERSION}" \
+    ALPHALENS_BUILD_TIME="${ALPHALENS_BUILD_TIME}" \
+    python -c 'import json, os; payload = {"git_sha": os.getenv("ALPHALENS_BUILD_GIT_SHA") or None, "app_version": os.getenv("ALPHALENS_BUILD_APP_VERSION") or "1.0.0", "build_time": os.getenv("ALPHALENS_BUILD_TIME") or None}; open("/app/build-provenance.json", "w", encoding="utf-8").write(json.dumps(payload, sort_keys=True, separators=(",", ":")))'
 COPY --from=dependencies /opt/venv /opt/venv
 COPY --chown=alphalens:alphalens backend/alembic.ini ./
 COPY --chown=alphalens:alphalens backend/alembic ./alembic

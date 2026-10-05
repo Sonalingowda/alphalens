@@ -29,6 +29,13 @@ docker compose --env-file /secure/path/alphalens.env \
 
 The backend startup sequence validates configuration, applies migrations, verifies PostgreSQL, verifies Redis, checks the migration head, validates the production artifact, and only then starts Uvicorn. A failure terminates startup.
 
+Release images MUST embed the exact committed source SHA, application version,
+and UTC build timestamp through the backend Docker build arguments
+`ALPHALENS_BUILD_GIT_SHA`, `ALPHALENS_BUILD_APP_VERSION`, and
+`ALPHALENS_BUILD_TIME`. The readiness response exposes them under `build`;
+missing SHA or timestamp values remain `null` and are never inferred from a
+mutable runtime working tree.
+
 ## Verification and rollback
 
 - `/health/liveness` confirms the API process is responsive.

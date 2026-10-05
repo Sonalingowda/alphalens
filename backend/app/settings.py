@@ -2,7 +2,9 @@
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import json
 import os
+from pathlib import Path
 from urllib.parse import urlsplit
 
 
@@ -34,9 +36,13 @@ class Settings:
     worker_concurrency: int
     worker_poll_seconds: float
     worker_max_retries: int
+    build_git_sha: str | None
+    build_app_version: str
+    build_time: str | None
 
 
 def load_settings() -> Settings:
+    build_git_sha, build_app_version, build_time = _build_provenance()
     settings = Settings(
         environment=os.getenv(
             "ALPHALENS_ENVIRONMENT",
@@ -94,6 +100,9 @@ def load_settings() -> Settings:
         worker_concurrency=int(os.getenv("ALPHALENS_WORKER_CONCURRENCY", "2")),
         worker_poll_seconds=float(os.getenv("ALPHALENS_WORKER_POLL_SECONDS", "1")),
         worker_max_retries=int(os.getenv("ALPHALENS_WORKER_MAX_RETRIES", "3")),
+        build_git_sha=build_git_sha,
+        build_app_version=build_app_version,
+        build_time=build_time,
     )
     validate_settings(settings)
     return settings
@@ -284,3 +293,42 @@ def _secret_environment(name: str, default: str) -> str:
     if not value:
         raise ConfigurationError(f"Secret file for {name} is empty.")
     return value
+
+
+def _optional_environment(name: str) -> str | None:
+    value = os.getenv(name)
+    if value is None:
+        return None
+    value = value.strip()
+    return value or None
+
+
+def _build_provenance() -> tuple[str | None, str, str | None]:
+    """Load immutable image metadata, with environment fallback for local runs."""
+    image_path = Path("/app/build-provenance.json")
+    if image_path.is_file():
+        try:
+            payload = json.loads(image_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            raise ConfigurationError("Image build provenance is unreadable.") from error
+        if not isinstance(payload, dict):
+            raise ConfigurationError("Image build provenance must be an object.")
+        return (
+            _provenance_value(payload, "git_sha"),
+            _provenance_value(payload, "app_version") or "1.0.0",
+            _provenance_value(payload, "build_time"),
+        )
+    return (
+        _optional_environment("ALPHALENS_BUILD_GIT_SHA"),
+        _optional_environment("ALPHALENS_BUILD_APP_VERSION") or "1.0.0",
+        _optional_environment("ALPHALENS_BUILD_TIME"),
+    )
+
+
+def _provenance_value(payload: dict[str, object], name: str) -> str | None:
+    value = payload.get(name)
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ConfigurationError(f"Image build provenance field {name} is invalid.")
+    return value.strip() or None

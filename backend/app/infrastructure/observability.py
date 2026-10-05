@@ -34,8 +34,16 @@ def install_observability(
     *,
     readiness_checks: Mapping[str, HealthCheck],
     metrics_enabled: bool,
+    build_provenance: Mapping[str, str | None] | None = None,
 ) -> None:
     """Install infrastructure-only middleware and operational endpoints."""
+
+    build = {
+        "git_sha": None,
+        "app_version": "1.0.0",
+        "build_time": None,
+        **(build_provenance or {}),
+    }
 
     @app.middleware("http")
     async def request_context(request: Request, call_next):
@@ -90,7 +98,11 @@ def install_observability(
         )
         return JSONResponse(
             status_code=200 if ready else 503,
-            content={"status": "ready" if ready else "unavailable", "checks": results},
+            content={
+                "status": "ready" if ready else "unavailable",
+                "checks": results,
+                "build": build,
+            },
         )
 
     if metrics_enabled:

@@ -38,6 +38,10 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile
+      args:
+        ALPHALENS_BUILD_GIT_SHA: ${ALPHALENS_BUILD_GIT_SHA:-}
+        ALPHALENS_BUILD_APP_VERSION: ${ALPHALENS_BUILD_APP_VERSION:-1.0.0}
+        ALPHALENS_BUILD_TIME: ${ALPHALENS_BUILD_TIME:-}
     environment: &backend-environment
       ALPHALENS_ENVIRONMENT: ${ALPHALENS_ENVIRONMENT:-development}
       ALPHALENS_API_NAME: AlphaLens API

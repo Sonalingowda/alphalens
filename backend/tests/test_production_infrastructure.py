@@ -56,6 +56,25 @@ class ConfigurationSecretTests(TestCase):
             with self.assertRaisesRegex(ConfigurationError, "only one"):
                 load_settings()
 
+    def test_build_provenance_loads_from_build_environment(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "ALPHALENS_BUILD_GIT_SHA": "1693f71cc4fd5caa4b6e82a196bc0d43bf900d0e",
+                "ALPHALENS_BUILD_APP_VERSION": "1.0.0",
+                "ALPHALENS_BUILD_TIME": "2026-10-05T12:00:00Z",
+            },
+            clear=True,
+        ):
+            settings = load_settings()
+
+        self.assertEqual(
+            settings.build_git_sha,
+            "1693f71cc4fd5caa4b6e82a196bc0d43bf900d0e",
+        )
+        self.assertEqual(settings.build_app_version, "1.0.0")
+        self.assertEqual(settings.build_time, "2026-10-05T12:00:00Z")
+
 
 class OperationalEndpointTests(TestCase):
     def test_trace_headers_metrics_and_health_are_deterministic(self) -> None:
@@ -86,6 +105,11 @@ class OperationalEndpointTests(TestCase):
             {
                 "status": "ready",
                 "checks": {"postgresql": "ready", "redis": "ready"},
+                "build": {
+                    "git_sha": None,
+                    "app_version": "1.0.0",
+                    "build_time": None,
+                },
             },
         )
         self.assertIn("alphalens_http_requests_total", metrics.text)
@@ -164,6 +188,40 @@ class OperationalEndpointTests(TestCase):
 
         self.assertEqual(response.status_code, 503)
         self.assertEqual(response.json()["status"], "unavailable")
+        self.assertEqual(
+            response.json()["build"],
+            {"git_sha": None, "app_version": "1.0.0", "build_time": None},
+        )
+
+    def test_readiness_surfaces_build_provenance(self) -> None:
+        app = FastAPI()
+
+        async def ready() -> bool:
+            return True
+
+        install_observability(
+            app,
+            readiness_checks={"schema": ready},
+            metrics_enabled=False,
+            build_provenance={
+                "git_sha": "1693f71cc4fd5caa4b6e82a196bc0d43bf900d0e",
+                "app_version": "1.0.0",
+                "build_time": "2026-10-05T12:00:00Z",
+            },
+        )
+
+        with TestClient(app) as client:
+            response = client.get("/health/readiness")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json()["build"],
+            {
+                "git_sha": "1693f71cc4fd5caa4b6e82a196bc0d43bf900d0e",
+                "app_version": "1.0.0",
+                "build_time": "2026-10-05T12:00:00Z",
+            },
+        )
 
 
 class MigrationGraphTests(TestCase):

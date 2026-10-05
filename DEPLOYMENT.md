@@ -143,6 +143,13 @@ The backend startup sequence validates configuration, applies migrations,
 verifies database connectivity and the immutable artifact, and then executes
 Uvicorn. Any failed check terminates the container.
 
+Release images MUST receive build provenance through the backend Docker build
+arguments `ALPHALENS_BUILD_GIT_SHA`, `ALPHALENS_BUILD_APP_VERSION`, and
+`ALPHALENS_BUILD_TIME`. The Git SHA MUST identify the exact committed release
+source; builds MUST NOT use a dirty working tree. `GET /health/readiness`
+returns these values in its `build` object. An unprovided Git SHA or build time
+is returned as `null` and is not inferred from runtime source files.
+
 Health and monitoring endpoints:
 
 | Endpoint | Purpose |

@@ -791,4 +791,9 @@ install_observability(
         "schema": schema_is_current,
     },
     metrics_enabled=settings.metrics_enabled,
+    build_provenance={
+        "git_sha": settings.build_git_sha,
+        "app_version": settings.build_app_version,
+        "build_time": settings.build_time,
+    },
 )
