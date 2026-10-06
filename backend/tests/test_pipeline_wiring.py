@@ -181,6 +181,47 @@ class PipelineWiringTest(IsolatedAsyncioTestCase):
         self.assertIs(result, canonical)
         schedule.assert_called_once_with(canonical)
 
+    async def test_duplicate_snapshot_is_not_scheduled_concurrently(self) -> None:
+        """The same canonical snapshot has at most one in-flight pipeline task."""
+        import app.prediction_api as prediction_api
+
+        snapshot = self._snapshot()
+        original = prediction_api._runtime_pipeline
+        release = asyncio.Event()
+
+        async def block(*args, **kwargs):
+            await release.wait()
+            return SimpleNamespace(outcome=SimpleNamespace(value="COMPLETED"), stages=[])
+
+        fake_pipeline = AsyncMock()
+        fake_pipeline.run_for_snapshot = AsyncMock(side_effect=block)
+        prediction_api._runtime_pipeline = fake_pipeline
+        try:
+            service = self._pipeline_service()
+            service._schedule_pipeline(snapshot)
+            await asyncio.sleep(0)
+            service._schedule_pipeline(snapshot)
+            await asyncio.sleep(0)
+
+            self.assertEqual(fake_pipeline.run_for_snapshot.await_count, 1)
+            self.assertEqual(
+                len(
+                    [
+                        task
+                        for task in _pipeline_tasks
+                        if snapshot.snapshot_id in task.get_name()
+                    ]
+                ),
+                1,
+            )
+        finally:
+            release.set()
+            prediction_api._runtime_pipeline = original
+            for task in list(_pipeline_tasks):
+                if snapshot.snapshot_id in task.get_name():
+                    task.cancel()
+            await asyncio.sleep(0)
+
     async def test_pipeline_task_lifecycle_logs_include_snapshot_id(self) -> None:
         import app.prediction_api as prediction_api
 
