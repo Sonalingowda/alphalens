@@ -64,6 +64,24 @@ class _PipelineHealth:
 
 _pipeline_health = _PipelineHealth()
 _pipeline_tasks: set[asyncio.Task] = set()
+_pipeline_tasks_by_snapshot: dict[str, asyncio.Task] = {}
+
+
+def _forget_pipeline_task(task: asyncio.Task) -> None:
+    """Remove a completed pipeline task from both tracking indexes."""
+    _pipeline_tasks.discard(task)
+    for snapshot_id, current in tuple(_pipeline_tasks_by_snapshot.items()):
+        if current is task:
+            _pipeline_tasks_by_snapshot.pop(snapshot_id, None)
+_pipeline_tasks_by_snapshot: dict[str, asyncio.Task] = {}
+
+
+def _forget_pipeline_task(task: asyncio.Task) -> None:
+    """Remove a completed pipeline task from both tracking indexes."""
+    _pipeline_tasks.discard(task)
+    for snapshot_id, current in tuple(_pipeline_tasks_by_snapshot.items()):
+        if current is task:
+            _pipeline_tasks_by_snapshot.pop(snapshot_id, None)
 
 
 class _LiveCandleQueryAdapter:
@@ -129,6 +147,23 @@ class _PipelineAwareLiveMarketIngestionService(LiveMarketIngestionService):
         return snapshot
 
     def _schedule_pipeline(self, snapshot: MarketSnapshot) -> None:
+        """Schedule at most one live pipeline task for each snapshot identity.
+
+        Warmup/backfill and the live transport can legitimately converge on the
+        same canonical snapshot. Running that snapshot twice races the immutable
+        lifecycle append and can produce a false cycle failure. Deduplicate only
+        the in-flight task; a completed task may be scheduled again explicitly.
+        """
+        existing = _pipeline_tasks_by_snapshot.get(snapshot.snapshot_id)
+        if existing is not None:
+            if not existing.done():
+                logger.info(
+                    "pipeline_task_duplicate_skipped snapshot_id=%s",
+                    snapshot.snapshot_id,
+                )
+                return
+            _pipeline_tasks_by_snapshot.pop(snapshot.snapshot_id, None)
+
         logger.info(
             "pipeline_task_scheduled snapshot_id=%s",
             snapshot.snapshot_id,
@@ -147,7 +182,8 @@ class _PipelineAwareLiveMarketIngestionService(LiveMarketIngestionService):
             )
             raise
         _pipeline_tasks.add(task)
-        task.add_done_callback(_pipeline_tasks.discard)
+        _pipeline_tasks_by_snapshot[snapshot.snapshot_id] = task
+        task.add_done_callback(_forget_pipeline_task)
 
     async def _run_pipeline(self, snapshot: MarketSnapshot) -> None:
         _pipeline_health.last_run_at = datetime.now(timezone.utc).isoformat()
