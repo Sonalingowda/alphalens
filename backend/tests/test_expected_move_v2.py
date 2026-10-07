@@ -730,11 +730,8 @@ class TestDashboardItemQualityScore(unittest.TestCase):
     def _make_dashboard_item(self, *, quality_score=None):
         from app.opportunity_intelligence.domain.presentation import DashboardItem
         from app.opportunity_intelligence.domain.primitives import (
-            AuditMetadata,
             IntegrityReference,
             MarketScope,
-            Provenance,
-            PolicyReference,
         )
         from app.opportunity_intelligence.domain.stances import OpportunityStance
         from app.opportunity_intelligence.domain.lifecycle import LifecycleState
@@ -742,7 +739,6 @@ class TestDashboardItemQualityScore(unittest.TestCase):
 
         now = datetime(2026, 1, 1, tzinfo=timezone.utc)
         scope = MarketScope(instrument="BTCUSDT", timeframe="5m")
-        policy = PolicyReference("test", "1.0.0", "0" * 64)
         source = IntegrityReference(
             artifact_id="src.test.1",
             artifact_type="evidence_package",
@@ -756,19 +752,6 @@ class TestDashboardItemQualityScore(unittest.TestCase):
             artifact_version="1.0.0",
             integrity_digest="0" * 64,
             available_at=now,
-        )
-        audit = AuditMetadata(
-            created_at=now,
-            evidence_cutoff=now,
-            available_at=now,
-            provenance=Provenance(
-                source_references=(source,),
-                policy_references=(policy,),
-                code_version="test",
-                configuration_hash="0" * 64,
-                lineage_hash="0" * 64,
-            ),
-            result_hash="0" * 64,
         )
         return DashboardItem(
             opportunity_id="opp.test.1",

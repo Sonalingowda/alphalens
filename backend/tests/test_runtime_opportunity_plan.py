@@ -9,12 +9,6 @@ import unittest
 from decimal import Decimal
 
 from app.opportunity_intelligence.domain.primitives import DECIMAL_QUANTUM
-from app.runtime_opportunity_plan.service import (
-    RUNTIME_OPPORTUNITY_PLAN_POLICY_HASH,
-    RUNTIME_OPPORTUNITY_PLAN_POLICY_ID,
-    RUNTIME_OPPORTUNITY_PLAN_POLICY_VERSION,
-    RuntimeOpportunityPlanService,
-)
 
 
 class TestDecimalQuantization(unittest.TestCase):

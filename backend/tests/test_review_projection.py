@@ -154,9 +154,12 @@ def test_source_lineage_mismatch_fails_closed(mutation):
             ranking = SimpleNamespace(snapshot_id="ranking.1", generated_at=AS_OF, memberships=ranked)
             projection = HumanReviewProjectionService(opportunities=Repo((item,)), rankings=Repo((ranking,)))
         else:
-            if mutation == "scope": item = replace(item, scope=MarketScope("ETHUSDT", "5m"))
-            if mutation == "plan_identity": item = replace(item, plan=replace(item.plan, opportunity_id="bad"))
-            if mutation == "lineage": item = replace(item, plan=replace(item.plan, assessment_id="bad"))
+            if mutation == "scope":
+                item = replace(item, scope=MarketScope("ETHUSDT", "5m"))
+            if mutation == "plan_identity":
+                item = replace(item, plan=replace(item.plan, opportunity_id="bad"))
+            if mutation == "lineage":
+                item = replace(item, plan=replace(item.plan, assessment_id="bad"))
             projection = service((item,), (item,))
         with pytest.raises(ReviewProjectionIntegrityError):
             await projection.build(scope=SCOPE, as_of=AS_OF)

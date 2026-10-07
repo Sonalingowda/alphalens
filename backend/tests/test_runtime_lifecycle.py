@@ -16,7 +16,7 @@ Covers the critical scenario that caused the live pipeline failure:
 
 import unittest
 from dataclasses import replace
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from app.opportunity_intelligence.domain import (
     IntegrityReference,

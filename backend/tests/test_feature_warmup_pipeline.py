@@ -5,25 +5,19 @@ cannot advance through FEATURE_SNAPSHOT because the feature engine lacks
 sufficient historical prefix for indicator warmup.
 """
 
-from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from hashlib import sha256
 import unittest
 
-from app.features.registry import INTRADAY_FEATURE_REGISTRY
 from app.live_market_data import CompletedCandle, build_market_snapshot
 from app.market_data.models import CandleTimeframe
-from app.market_data.validation import timeframe_duration
 from app.opportunity_intelligence.domain import MarketScope
 from app.opportunity_intelligence.persistence import (
     FeatureSnapshotMemoryRepository,
     MarketSnapshotMemoryRepository,
 )
-from app.opportunity_intelligence.repositories import (
-    EntityId,
-    ScopedRepositoryQuery,
-)
+from app.opportunity_intelligence.repositories import ScopedRepositoryQuery
 from app.runtime_features import (
     FeatureWarmupIncompleteError,
     RuntimeFeatureEngine,

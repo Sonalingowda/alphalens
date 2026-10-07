@@ -72,11 +72,6 @@ async def _dashboard_fixture():
     # reads opportunity_id and current_state from each lifecycle, so a
     # SimpleNamespace suffices for every test that does not exercise
     # lifecycle-specific assertions.
-    lifecycle = SimpleNamespace(
-        opportunity_id=opportunity.opportunity_id,
-        current_state=LifecycleState.RANKED,
-    )
-
     # Build and persist a real lifecycle for repository-based lookup
     from tests.test_runtime_detail import _make_lifecycle
     real_lifecycle = _make_lifecycle(opportunity)

@@ -28,7 +28,6 @@ Covers:
 import unittest
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
-from types import SimpleNamespace
 
 from app.outcome_resolution.service import (
     OutcomeResolutionService,
@@ -47,7 +46,6 @@ from app.opportunity_intelligence.domain import (
     PolicyReference,
     PriceRange,
     Provenance,
-    canonical_sha256,
 )
 from app.opportunity_intelligence.persistence import (
     OutcomeMemoryRepository,
@@ -527,7 +525,7 @@ class NoMutationTests(unittest.TestCase):
 
 class ServiceTests(unittest.IsolatedAsyncioTestCase):
     def _make_opportunity(self, plan: OpportunityPlan):
-        from app.opportunity_intelligence.domain import Opportunity, OpportunityStance
+        from app.opportunity_intelligence.domain import Opportunity
         return Opportunity(
             contract_version="1.0.0",
             opportunity_id=plan.opportunity_id,
@@ -585,7 +583,6 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_resolve_produces_valid_record(self) -> None:
         plan = _make_plan()
-        opportunity = self._make_opportunity(plan)
         candle = {
             "timestamp": _SIGNAL_TIME + timedelta(minutes=1),
             "open": Decimal("100.1"),
@@ -617,7 +614,6 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_resolve_expired(self) -> None:
         plan = _make_plan()
-        opportunity = self._make_opportunity(plan)
         candle = {
             "timestamp": _SIGNAL_TIME + timedelta(minutes=1),
             "open": Decimal("100.1"),
@@ -646,8 +642,6 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_resolve_no_plan_raises(self) -> None:
         from dataclasses import replace
-        from app.opportunity_intelligence.domain.plan import OpportunityPlan
-
         plan_no_valid_until = replace(_make_plan(), valid_until=None)
 
         class _FakeCandleQuery:
@@ -741,7 +735,6 @@ class OutcomeMemoryRepositoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.outcome, OpportunityOutcome.TARGET_HIT)
 
     async def test_different_outcomes_saved_separately(self) -> None:
-        from app.opportunity_intelligence.domain import OutcomeRecord as OR
         from dataclasses import replace
 
         repo = OutcomeMemoryRepository()

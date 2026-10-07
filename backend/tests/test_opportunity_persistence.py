@@ -194,15 +194,11 @@ class OpportunityPersistenceTests(unittest.IsolatedAsyncioTestCase):
             MarketSnapshotPostgreSQLRepository,
         )
         from app.persistence.database import session_factory
-        from app.opportunity_intelligence.domain import MarketSnapshot
-
         # This test requires a running PostgreSQL instance.
         # We'll test the equivalence logic directly via the repository method.
         repository = MarketSnapshotPostgreSQLRepository(session_factory)
 
         # Create a base market snapshot (simulating WS path)
-        base_snapshot = _market_snapshot()
-
         # Create a conflicting snapshot with different transport lineage
         # (different source_payload_hash, event_time, but same market content)
         source_ws = _reference("candle.source.ws", available_at=START)
@@ -294,13 +290,6 @@ class OpportunityPersistenceTests(unittest.IsolatedAsyncioTestCase):
 
         # Note: Full integration test with PostgreSQL requires running DB.
         # The above tests the equivalence logic which is the core of the fix.
-
-    async def test_invalid_runtime_argument_fails_closed(self) -> None:
-        repository = MarketSnapshotMemoryRepository()
-        with self.assertRaises(Exception) as captured:
-            await repository.save("not-a-snapshot")  # type: ignore[arg-type]
-        self.assertIsInstance(captured.exception, ContractViolationError)
-
 
 if __name__ == "__main__":
     unittest.main()

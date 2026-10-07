@@ -8,14 +8,8 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
-from app.outcome_resolution.service import (
-    OutcomeResolutionService,
-    _determine_outcome,
-)
-from app.opportunity_intelligence.domain import (
-    OpportunityOutcome,
-    OutcomeRecord,
-)
+from app.outcome_resolution.service import _determine_outcome
+from app.opportunity_intelligence.domain import OpportunityOutcome
 
 
 _UTC = timezone.utc
@@ -35,12 +29,12 @@ _SELL_STOP = Decimal("102000.000000000000000000")
 _SELL_TARGET = Decimal("97000.000000000000000000")
 
 
-def _candle(ts_offset_min: int, o: str, h: str, l: str, c: str) -> dict:
+def _candle(ts_offset_min: int, o: str, h: str, low: str, c: str) -> dict:
     return {
         "timestamp": _SIGNAL + timedelta(minutes=ts_offset_min),
         "open": Decimal(o),
         "high": Decimal(h),
-        "low": Decimal(l),
+        "low": Decimal(low),
         "close": Decimal(c),
         "volume": Decimal("1000"),
     }

@@ -571,7 +571,6 @@ class OpportunityHistoryRouteTests(unittest.TestCase):
         *,
         lifecycle_repository=None,
     ) -> TestClient:
-        from app.opportunity_intelligence.domain import LifecycleState
         dashboard_value = SimpleNamespace(
             items=(),
             to_dict=lambda: {
@@ -598,7 +597,6 @@ class OpportunityHistoryRouteTests(unittest.TestCase):
 
     def test_history_route_is_reachable(self) -> None:
         """history endpoint responds 200 instead of 404 (route not captured by {opportunity_id})."""
-        from app.opportunity_intelligence.domain import LifecycleState
         lifecycle_repo = SimpleNamespace(
             list_terminal_lifecycles=AsyncMock(return_value=()),
         )

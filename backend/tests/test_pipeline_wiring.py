@@ -272,8 +272,6 @@ class PipelineWiringTest(IsolatedAsyncioTestCase):
         self.assertTrue(any(snapshot.snapshot_id in line for line in captured.output))
 
     async def test_pipeline_task_create_failure_logs_snapshot_id(self) -> None:
-        import app.prediction_api as prediction_api
-
         snapshot = self._snapshot()
         with patch(
                 "app.prediction_api.asyncio.create_task",

@@ -19,11 +19,9 @@ from app.market_configuration import get_default_scope
 from app.opportunity_intelligence.persistence import DetectionMemoryRepository
 from app.runtime_detection.service import RuntimeOpportunityDetectionService
 from app.runtime_pipeline import build_runtime_pipeline
-from app.runtime_ranking.service import RuntimeRankingService
 from tests.test_runtime_evidence import _fixture as _evidence_fixture
 from tests.test_runtime_ranking import (
     _as_of,
-    _make_service,
     _ranking_fixture,
 )
 

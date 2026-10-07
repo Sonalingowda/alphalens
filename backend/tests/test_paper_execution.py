@@ -23,7 +23,6 @@ from app.paper_execution import (
     PaperExecutionService,
     PaperExitReason,
     PaperExecutionState,
-    PaperSuccessorPlan,
     InMemoryPaperSuccessorPlanRepository,
     derive_successor_plan,
     eligible_opportunities,
