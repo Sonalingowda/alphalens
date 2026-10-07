@@ -12,7 +12,6 @@ from fastapi.responses import JSONResponse
 
 from app.opportunity_intelligence.domain import (
     DashboardItem,
-    LifecycleState,
     MarketScope,
     OpportunityStance,
     OutcomeRecord,

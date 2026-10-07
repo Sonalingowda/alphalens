@@ -13,8 +13,6 @@ from sqlalchemy import Select, select, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-logger = logging.getLogger("alphalens.persistence.postgresql")
-
 from app.market_data.models import CandleTimeframe
 from app.market_data.validation import timeframe_duration
 from app.opportunity_intelligence.domain import (
@@ -58,6 +56,8 @@ from app.opportunity_intelligence.repositories import (
     VersionConflictError,
 )
 from app.persistence.models import ImmutableAggregateRecord
+
+logger = logging.getLogger("alphalens.persistence.postgresql")
 
 
 T = TypeVar("T", bound=CanonicalModel)

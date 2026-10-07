@@ -587,13 +587,13 @@ class LiveIngestionServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("data-api.binance.vision", called_url)
 
     async def test_warmup_history_falls_back_to_bybit_when_binance_blocked(self) -> None:
-        self._assert_provider_fallback("bybit")
+        await self._assert_provider_fallback("bybit")
 
     async def test_warmup_history_falls_back_to_coinbase_when_binance_blocked(self) -> None:
-        self._assert_provider_fallback("coinbase")
+        await self._assert_provider_fallback("coinbase")
 
     async def test_warmup_history_falls_back_to_okx_when_binance_blocked(self) -> None:
-        self._assert_provider_fallback("okx")
+        await self._assert_provider_fallback("okx")
 
     async def _assert_provider_fallback(self, provider: str) -> None:
         repository = MarketSnapshotMemoryRepository()
@@ -613,7 +613,9 @@ class LiveIngestionServiceTests(unittest.IsolatedAsyncioTestCase):
             )
             count = await service.warmup_history(limit=20)
         self.assertEqual(count, 20)
-        page = await repository.get_by_scope(_scope_query("5m", limit=20))
+        page = await repository.get_by_scope(
+            _scope_query("5m", limit=20, as_of=START + timedelta(hours=2))
+        )
         self.assertEqual(len(page.items), 20)
 
     async def test_gap_repair_backfills_missing_candle_via_rest(self) -> None:
@@ -1027,10 +1029,15 @@ async def _unused_handler(message: str | bytes) -> None:
     raise AssertionError(f"Unexpected message: {message!r}")
 
 
-def _scope_query(timeframe: str, *, limit: int = 20) -> ScopedRepositoryQuery:
+def _scope_query(
+    timeframe: str,
+    *,
+    limit: int = 20,
+    as_of: datetime = START + timedelta(hours=1),
+) -> ScopedRepositoryQuery:
     return ScopedRepositoryQuery(
         scope=MarketScope(instrument="BTCUSDT", timeframe=timeframe),
-        as_of=START + timedelta(hours=1),
+        as_of=as_of,
         limit=limit,
     )
 

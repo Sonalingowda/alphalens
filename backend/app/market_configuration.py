@@ -1,6 +1,6 @@
 """Canonical market configuration — single source of truth for supported instruments."""
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from app.opportunity_intelligence.domain.primitives import MarketScope
 

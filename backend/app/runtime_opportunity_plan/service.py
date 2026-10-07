@@ -7,7 +7,6 @@ from typing import Final
 
 from app.inference.artifact import (
     EXPECTED_MOVE_MAX_RR,
-    EXPECTED_MOVE_MIN_SNR,
     PackagedExpectedMoveInference,
 )
 from app.opportunity_intelligence.domain import (

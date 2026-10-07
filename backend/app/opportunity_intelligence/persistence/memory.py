@@ -12,7 +12,6 @@ from typing import Generic, TypeVar
 
 from app.opportunity_intelligence.domain import (
     CanonicalModel,
-    ContextObservation,
     DashboardPage,
     DeliveryAttempt,
     DetectionAttempt,

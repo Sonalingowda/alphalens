@@ -5,8 +5,7 @@ from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 import logging
-import random
-from typing import Sequence, Callable
+from typing import Callable
 
 from sqlalchemy import text
 
@@ -32,8 +31,6 @@ from app.opportunity_intelligence.repositories import (
     RepositoryError,
     ScopedRepositoryQuery,
 )
-from app.features.registry import INTRADAY_FEATURE_REGISTRY
-from app.features.contracts import FeatureValue, FeatureDependencyInput, FeatureComputationError
 from app.persistence.database import session_factory
 from app.runtime_pipeline import build_runtime_pipeline
 from app.inference.repository import load_expected_move_artifact

@@ -11,8 +11,6 @@ from typing import Any, Protocol
 
 from websockets.exceptions import ConnectionClosed, WebSocketException
 
-logger = logging.getLogger("alphalens.live_market_data.binance")
-
 from app.live_market_data.metrics import LiveIngestionMetrics
 from app.live_market_data.models import (
     CompletedCandle,
@@ -23,6 +21,8 @@ from app.live_market_data.models import (
     SUPPORTED_SYMBOL,
 )
 from app.market_data.models import CandleTimeframe
+
+logger = logging.getLogger("alphalens.live_market_data.binance")
 
 
 BINANCE_MARKET_STREAM_BASE_URL = "wss://data-stream.binance.vision"

@@ -5,7 +5,6 @@ post-signal candles.  The resolution logic is deterministic: the first
 candle that touches either barrier determines the outcome.
 """
 
-from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from datetime import datetime, timezone
 from decimal import Decimal

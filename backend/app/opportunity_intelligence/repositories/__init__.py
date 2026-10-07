@@ -60,6 +60,7 @@ __all__ = (
     "EntityNotFoundError",
     "EvidenceRepository",
     "ExplanationRepository",
+    "OpportunityDetailRepository",
     "FeatureSnapshotRepository",
     "HistoryQuery",
     "ImmutableRepository",
