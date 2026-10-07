@@ -20,6 +20,7 @@ Design constraints enforced here:
 """
 
 from dataclasses import replace
+from decimal import Decimal
 
 from app.opportunity_intelligence.domain import (
     AuditMetadata,
