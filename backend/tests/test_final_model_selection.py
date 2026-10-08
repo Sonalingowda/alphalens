@@ -1,13 +1,17 @@
 """Tests for immutable final model selection aggregation."""
 
 from copy import deepcopy
+from decimal import Decimal
 import unittest
 from uuid import UUID
+from unittest.mock import patch
 
+from app.research import final_model_selection as selection_module
 from app.research.final_model_selection import (
     AutomatedTestEvidence,
     FinalModelSelectionError,
     ImmutableArtifact,
+    OFFICIAL_ARTIFACT_MODEL_FAMILY,
     PredictionEvidenceSummary,
     build_final_model_selection_report,
 )
@@ -97,6 +101,54 @@ class FinalModelSelectionTests(unittest.TestCase):
             built.payload["verification"][
                 "new_experimental_evidence_created"
             ]
+        )
+
+    def test_ridge_eligibility_is_explicit_and_not_a_hidden_score_preference(self) -> None:
+        inputs = _inputs()
+
+        def scores():
+            return {
+                family: {"score": Decimal("1") if family == "xgboost_regression" else Decimal("0")}
+                for family in FAMILIES
+            }
+
+        with (
+            patch.object(
+                selection_module,
+                "_performance_domain",
+                lambda _models: scores(),
+            ),
+            patch.object(
+                selection_module,
+                "_statistical_domain",
+                lambda _payload: scores(),
+            ),
+            patch.object(
+                selection_module,
+                "_residual_domain",
+                lambda _payload: scores(),
+            ),
+            patch.object(
+                selection_module,
+                "_market_domain",
+                lambda _payload: scores(),
+            ),
+        ):
+            built = build_final_model_selection_report(**inputs)
+
+        self.assertEqual(
+            built.payload["ranking_table"][0]["model_family"],
+            "xgboost_regression",
+        )
+        self.assertEqual(
+            built.selected_model_family,
+            OFFICIAL_ARTIFACT_MODEL_FAMILY,
+        )
+        self.assertEqual(
+            built.payload["configuration"]["candidate_eligibility_gates"][
+                "selection_eligible_model_families"
+            ],
+            ("ridge_regression",),
         )
 
     def test_holdout_source_artifact_is_rejected(self) -> None:

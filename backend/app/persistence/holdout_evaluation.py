@@ -8,12 +8,6 @@ from uuid import UUID, uuid4
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.persistence.final_model_selection import (
-    APPROVED_MARKET_REGIME_ANALYSIS_REPORT_ID,
-    APPROVED_MODEL_COMPARISON_REPORT_ID,
-    APPROVED_RESIDUAL_DIAGNOSTICS_REPORT_ID,
-    APPROVED_STATISTICAL_VALIDATION_REPORT_ID,
-)
 from app.persistence.models import (
     CandleRecord,
     EngineeredFeatureRecord,
@@ -31,13 +25,16 @@ from app.persistence.models import (
     StatisticalValidationReportRecord,
     ValidationRunRecord,
 )
-from app.persistence.residual_diagnostics import _experiment_sources
-from app.persistence.statistical_validation import (
-    APPROVED_EXPLAINABILITY_ARTIFACT_IDS,
+from app.persistence.research_cycle_lineage import (
+    current_cycle_explainability,
+    current_cycle_experiments,
+    current_cycle_report,
 )
+from app.persistence.residual_diagnostics import _experiment_sources
 from app.research.dataset import (
     MODEL_FEATURE_NAMES,
     ModelObservation,
+    ModelReadyDataset,
     build_model_ready_dataset,
 )
 from app.research.final_model_selection import sha256_json, sha256_lines
@@ -57,14 +54,6 @@ from app.validation.splits import (
 )
 
 
-APPROVED_FINAL_MODEL_SELECTION_REPORT_ID = UUID(
-    "bf852165-d97a-4872-8ee9-9f4e0df26d68"
-)
-APPROVED_SELECTED_RIDGE_EXPERIMENT_ID = UUID(
-    "c0960ae6-89df-4bf1-b0c4-631b1e1db44b"
-)
-
-
 @dataclass(frozen=True, slots=True)
 class PersistedHoldoutEvaluationReport:
     report_id: UUID
@@ -81,15 +70,14 @@ async def create_official_holdout_evaluation_report(
 ) -> PersistedHoldoutEvaluationReport:
     """Evaluate once, then make all subsequent calls read-only verification."""
     async with session.begin():
-        selection = await _required_record(
+        dataset = await build_model_ready_dataset(session)
+        selection = await current_cycle_report(
             session,
             FinalModelSelectionReportRecord,
-            APPROVED_FINAL_MODEL_SELECTION_REPORT_ID,
+            dataset,
         )
         if (
-            selection.selected_experiment_id
-            != APPROVED_SELECTED_RIDGE_EXPERIMENT_ID
-            or selection.selected_model_family != "ridge_regression"
+            selection.selected_model_family != "ridge_regression"
             or selection.final_holdout_evaluated
             or sha256_json(selection.report_configuration)
             != selection.configuration_hash
@@ -120,14 +108,24 @@ async def create_official_holdout_evaluation_report(
         selected_experiment = await _required_record(
             session,
             RegressionExperimentRecord,
-            APPROVED_SELECTED_RIDGE_EXPERIMENT_ID,
+            selection.selected_experiment_id,
         )
-        source_records = await _source_records(session)
+        cycle_experiments = await current_cycle_experiments(
+            session,
+            dataset,
+        )
+        cycle_ridge = next(
+            item
+            for item in cycle_experiments
+            if item.model_family == "ridge_regression"
+        )
+        if selected_experiment.id != cycle_ridge.id:
+            raise ValueError("Selected Ridge experiment is outside this cycle.")
+        source_records = await _source_records(session, selection, dataset)
         source_artifacts = _verified_source_artifacts(
             selection,
             source_records,
         )
-        dataset = await build_model_ready_dataset(session)
         if (
             dataset.validation_run_id != validation.id
             or validation.purge_gap_size != 50
@@ -351,38 +349,34 @@ async def _load_consumed_report(
 
 async def _source_records(
     session: AsyncSession,
+    selection: FinalModelSelectionReportRecord,
+    dataset: ModelReadyDataset,
 ) -> dict[str, object]:
+    experiments = await current_cycle_experiments(session, dataset)
     return {
         "comparison": await _required_record(
             session,
             ModelComparisonReportRecord,
-            APPROVED_MODEL_COMPARISON_REPORT_ID,
+            selection.model_comparison_report_id,
         ),
         "statistical": await _required_record(
             session,
             StatisticalValidationReportRecord,
-            APPROVED_STATISTICAL_VALIDATION_REPORT_ID,
+            selection.statistical_validation_report_id,
         ),
         "residual": await _required_record(
             session,
             ResidualDiagnosticsReportRecord,
-            APPROVED_RESIDUAL_DIAGNOSTICS_REPORT_ID,
+            selection.residual_diagnostics_report_id,
         ),
         "market": await _required_record(
             session,
             MarketRegimeAnalysisReportRecord,
-            APPROVED_MARKET_REGIME_ANALYSIS_REPORT_ID,
+            selection.market_regime_analysis_report_id,
         ),
-        "explainability": tuple(
-            (
-                await session.scalars(
-                    select(ModelExplainabilityArtifactRecord).where(
-                        ModelExplainabilityArtifactRecord.id.in_(
-                            APPROVED_EXPLAINABILITY_ARTIFACT_IDS
-                        )
-                    )
-                )
-            ).all()
+        "explainability": await current_cycle_explainability(
+            session,
+            experiments,
         ),
     }
 

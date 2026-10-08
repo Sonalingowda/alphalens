@@ -20,6 +20,7 @@ from app.research.model_selection_scoring import (
 )
 
 FINAL_MODEL_SELECTION_REPORT_VERSION = "1.0.0"
+OFFICIAL_ARTIFACT_MODEL_FAMILY = "ridge_regression"
 
 
 @dataclass(frozen=True, slots=True)
@@ -132,6 +133,14 @@ def build_final_model_selection_report(
     rank_lookup = {
         family: rank for rank, family in enumerate(ranking, start=1)
     }
+    selection_eligible_families = (OFFICIAL_ARTIFACT_MODEL_FAMILY,)
+    eligible_ranking = [
+        family for family in ranking if family in selection_eligible_families
+    ]
+    if not eligible_ranking:
+        raise FinalModelSelectionError(
+            "No model satisfies the official artifact compatibility contract."
+        )
 
     configuration: dict[str, Any] = {
         "report_version": FINAL_MODEL_SELECTION_REPORT_VERSION,
@@ -145,6 +154,12 @@ def build_final_model_selection_report(
             "prediction_hash_verification_required": True,
             "source_artifact_hash_verification_required": True,
             "automated_tests_must_pass": True,
+            "official_artifact_model_family": (
+                OFFICIAL_ARTIFACT_MODEL_FAMILY
+            ),
+            "selection_eligible_model_families": (
+                selection_eligible_families
+            ),
         },
         "scoring": {
             "domains": (
@@ -299,7 +314,7 @@ def build_final_model_selection_report(
             for family in MODEL_FAMILY_ORDER
         },
     }
-    selected = ranking[0]
+    selected = eligible_ranking[0]
     payload: dict[str, Any] = {
         "report_version": FINAL_MODEL_SELECTION_REPORT_VERSION,
         "configuration": configuration,
@@ -324,7 +339,8 @@ def build_final_model_selection_report(
             "selection_rank": 1,
             "selection_rationale": (
                 "highest_total_equal_domain_score_under_the_predeclared_"
-                "deterministic_framework"
+                "deterministic_framework_among_official_artifact_"
+                "compatible_candidates"
             ),
             "holdout_status": (
                 "selected_for_future_separately_authorized_holdout_"

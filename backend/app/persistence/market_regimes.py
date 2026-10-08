@@ -7,7 +7,6 @@ from uuid import UUID, uuid4
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.persistence.model_comparisons import APPROVED_EXPERIMENT_IDS
 from app.persistence.models import (
     ExperimentPredictionEvidenceRecord,
     MarketRegimeAnalysisReportRecord,
@@ -21,8 +20,10 @@ from app.persistence.models import (
     ResidualDiagnosticsReportRecord,
     StatisticalValidationReportRecord,
 )
-from app.persistence.statistical_validation import (
-    APPROVED_EXPLAINABILITY_ARTIFACT_IDS,
+from app.persistence.research_cycle_lineage import (
+    EXPLAINABILITY_MODEL_FAMILIES,
+    current_cycle_explainability,
+    current_cycle_experiments,
 )
 from app.research.dataset import ModelReadyDataset, build_model_ready_dataset
 from app.research.market_regimes import (
@@ -49,7 +50,7 @@ async def create_market_regime_report(
     """Build the report from immutable development prediction evidence."""
     async with session.begin():
         dataset = await build_model_ready_dataset(session)
-        experiments = await _approved_experiments(session)
+        experiments = await current_cycle_experiments(session, dataset)
         sources = await _model_sources(session, experiments, dataset)
         statistical = (
             await session.scalars(
@@ -83,16 +84,9 @@ async def create_market_regime_report(
                 )
             )
         ).one()
-        explainability = tuple(
-            (
-                await session.scalars(
-                    select(ModelExplainabilityArtifactRecord).where(
-                        ModelExplainabilityArtifactRecord.id.in_(
-                            APPROVED_EXPLAINABILITY_ARTIFACT_IDS
-                        )
-                    )
-                )
-            ).all()
+        explainability = await current_cycle_explainability(
+            session,
+            experiments,
         )
         explainability_references = _explainability_references(
             explainability,
@@ -248,28 +242,6 @@ async def create_market_regime_report(
     )
 
 
-async def _approved_experiments(
-    session: AsyncSession,
-) -> tuple[RegressionExperimentRecord, ...]:
-    records = tuple(
-        (
-            await session.scalars(
-                select(RegressionExperimentRecord).where(
-                    RegressionExperimentRecord.id.in_(
-                        tuple(APPROVED_EXPERIMENT_IDS.values())
-                    )
-                )
-            )
-        ).all()
-    )
-    by_family = {record.model_family: record for record in records}
-    if set(by_family) != set(APPROVED_EXPERIMENT_IDS):
-        raise ValueError("Approved regime experiment set is incomplete.")
-    return tuple(
-        by_family[family] for family in APPROVED_EXPERIMENT_IDS
-    )
-
-
 async def _model_sources(
     session: AsyncSession,
     experiments: tuple[RegressionExperimentRecord, ...],
@@ -281,11 +253,6 @@ async def _model_sources(
     }
     sources: list[RegimeModelSource] = []
     for experiment in experiments:
-        if (
-            experiment.id
-            != APPROVED_EXPERIMENT_IDS[experiment.model_family]
-        ):
-            raise ValueError("Approved experiment ID differs.")
         rows = tuple(
             (
                 await session.scalars(
@@ -387,12 +354,8 @@ def _explainability_references(
     artifacts: tuple[ModelExplainabilityArtifactRecord, ...],
     sources: tuple[RegimeModelSource, ...],
 ) -> tuple[ResearchArtifactReference, ...]:
-    if (
-        len(artifacts) != len(APPROVED_EXPLAINABILITY_ARTIFACT_IDS)
-        or {item.id for item in artifacts}
-        != set(APPROVED_EXPLAINABILITY_ARTIFACT_IDS)
-    ):
-        raise ValueError("Approved explainability artifacts are incomplete.")
+    if len(artifacts) != len(EXPLAINABILITY_MODEL_FAMILIES):
+        raise ValueError("Current-cycle explainability artifacts are incomplete.")
     experiment_ids = {
         source.model_family: source.experiment_id for source in sources
     }

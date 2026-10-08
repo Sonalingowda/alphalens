@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
+from typing import Any
 
 from app.opportunity_intelligence.domain import (
     CanonicalModel,
@@ -24,6 +25,7 @@ from app.opportunity_intelligence.domain.primitives import (
 
 
 class PaperExecutionState(StrEnum):
+    ACTIVE = "ACTIVE"
     ELIGIBLE = "ELIGIBLE"
     OPEN = "OPEN"
     CLOSED = "CLOSED"
@@ -37,6 +39,18 @@ class PaperExitReason(StrEnum):
     DATA_INSUFFICIENT = "DATA_INSUFFICIENT"
     # Existing OHLCV semantics deliberately retain this non-orderable case.
     AMBIGUOUS_INTRABAR = "AMBIGUOUS_INTRABAR"
+
+
+class PaperTrackingEventType(StrEnum):
+    PAPER_TRACKING_SELECTED = "PAPER_TRACKING_SELECTED"
+    ENTRY_REACHED = "ENTRY_REACHED"
+    DATA_INSUFFICIENT = "DATA_INSUFFICIENT"
+    EXPIRED_BEFORE_ENTRY = "EXPIRED_BEFORE_ENTRY"
+    EXPIRED_AFTER_ENTRY = "EXPIRED_AFTER_ENTRY"
+    AMBIGUOUS_INTRABAR = "AMBIGUOUS_INTRABAR"
+    TARGET_HIT = "TARGET_HIT"
+    STOP_LOSS_HIT = "STOP_LOSS_HIT"
+    POST_OUTCOME_OBSERVATION = "POST_OUTCOME_OBSERVATION"
 
 
 def _id(value: str, name: str) -> None:
@@ -185,6 +199,7 @@ class PaperOutcome(CanonicalModel):
     source_execution_hash: str
     source_position_hash: str
     source_exit_hash: str
+    source_selection_event_hash: str | None = None
 
     def __post_init__(self) -> None:
         validate_contract_version(self.contract_version)
@@ -201,3 +216,66 @@ class PaperOutcome(CanonicalModel):
             (self.source_exit_hash, "Source exit hash"),
         ):
             validate_sha256(value, name)
+        if self.source_selection_event_hash is not None:
+            validate_sha256(self.source_selection_event_hash, "Source selection event hash")
+
+
+@dataclass(frozen=True, slots=True)
+class PaperTrackingEvent(CanonicalModel):
+    """Append-only event in one human-selected paper tracking history."""
+
+    event_id: str
+    execution_id: str
+    position_id: str
+    sequence: int
+    event_type: PaperTrackingEventType
+    idempotency_key: str
+    occurred_at: datetime
+    available_at: datetime | None
+    recorded_at: datetime
+    actor_id: str | None
+    opportunity_id: str
+    opportunity_version_id: str
+    source_execution_hash: str
+    source_position_hash: str
+    source_artifact_id: str | None
+    source_artifact_hash: str | None
+    exit_id: str | None
+    outcome_id: str | None
+    payload: dict[str, Any]
+
+    def __post_init__(self) -> None:
+        for value, name in (
+            (self.event_id, "Paper tracking event identifier"),
+            (self.execution_id, "Paper execution identifier"),
+            (self.position_id, "Paper position identifier"),
+            (self.idempotency_key, "Paper event idempotency key"),
+            (self.opportunity_id, "Paper opportunity identifier"),
+            (self.opportunity_version_id, "Paper opportunity version"),
+        ):
+            _id(value, name)
+        if self.sequence < 1:
+            raise DomainValidationError("Paper event sequence must be positive.")
+        validate_utc(self.occurred_at, "Paper event occurrence time")
+        validate_utc(self.recorded_at, "Paper event recording time")
+        if self.available_at is not None:
+            validate_utc(self.available_at, "Paper event availability time")
+        if self.actor_id is not None:
+            _id(self.actor_id, "Paper tracking actor identity")
+        if self.event_type is PaperTrackingEventType.PAPER_TRACKING_SELECTED and not self.actor_id:
+            raise DomainValidationError("Paper selection event requires an actor identity.")
+        for value, name in (
+            (self.source_execution_hash, "Source execution hash"),
+            (self.source_position_hash, "Source position hash"),
+        ):
+            validate_sha256(value, name)
+        if (self.source_artifact_id is None) != (self.source_artifact_hash is None):
+            raise DomainValidationError("Market source identity and hash must be paired.")
+        if self.source_artifact_id is not None:
+            _id(self.source_artifact_id, "Market source artifact identifier")
+            validate_sha256(self.source_artifact_hash, "Market source artifact hash")
+        for value, name in ((self.exit_id, "Paper exit identifier"), (self.outcome_id, "Paper outcome identifier")):
+            if value is not None:
+                _id(value, name)
+        if not isinstance(self.payload, dict):
+            raise DomainValidationError("Paper tracking event payload must be an object.")

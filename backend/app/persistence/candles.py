@@ -6,7 +6,7 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -237,6 +237,17 @@ async def persist_historical_sample(
             batch.reused_candle_count = reused_count
             batch.conflict_count = conflict_count
 
+            if (
+                sample.validation_report.passed
+                and conflict_count == 0
+                and persisted_count + reused_count == len(sample.candles)
+            ):
+                await _activate_ingestion_batch(
+                    session,
+                    batch,
+                    sample.retrieved_at,
+                )
+
         stored_count = await _count_sample_candles(session, sample)
         batch_count = await session.scalar(
             select(func.count(IngestionBatchRecord.id)).where(
@@ -259,6 +270,60 @@ async def persist_historical_sample(
         conflict_count=conflict_count,
         source_data_hash=source_data_hash,
     )
+
+
+async def _activate_ingestion_batch(
+    session: AsyncSession,
+    batch: IngestionBatchRecord,
+    activated_at: datetime,
+) -> None:
+    """Promote a complete, validated batch as the canonical source batch."""
+
+    await session.execute(
+        update(IngestionBatchRecord)
+        .where(
+            IngestionBatchRecord.asset_identifier == batch.asset_identifier,
+            IngestionBatchRecord.quote_currency == batch.quote_currency,
+            IngestionBatchRecord.timeframe == batch.timeframe,
+            IngestionBatchRecord.is_active.is_(True),
+            IngestionBatchRecord.id != batch.id,
+        )
+        .values(is_active=False, superseded_at=activated_at)
+    )
+    batch.is_active = True
+    batch.superseded_at = None
+
+
+async def finalize_validated_ingestion_batch(
+    session: AsyncSession,
+    batch_id: UUID,
+) -> IngestionBatchRecord:
+    """Finalize an already-persisted complete batch through the canonical lifecycle."""
+
+    async with session.begin():
+        batch = await session.get(
+            IngestionBatchRecord,
+            batch_id,
+            with_for_update=True,
+        )
+        if batch is None:
+            raise ValueError("The requested ingestion batch does not exist.")
+        if not batch.validation_passed:
+            raise ValueError("Only validated ingestion batches may be activated.")
+        if batch.conflict_count != 0:
+            raise ValueError("Conflicted ingestion batches may not be activated.")
+        if (
+            batch.persisted_candle_count + batch.reused_candle_count
+            != batch.candle_count
+        ):
+            raise ValueError("The ingestion batch is not completely persisted.")
+
+        await _activate_ingestion_batch(
+            session,
+            batch,
+            batch.retrieved_at,
+        )
+        return batch
 
 
 async def get_stored_candle_summary(

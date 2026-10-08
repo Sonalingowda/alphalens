@@ -8,8 +8,12 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
-from app.outcome_resolution.service import _determine_outcome
-from app.opportunity_intelligence.domain import OpportunityOutcome
+from app.outcome_resolution.service import (
+    _determine_outcome,
+)
+from app.opportunity_intelligence.domain import (
+    OpportunityOutcome,
+)
 
 
 _UTC = timezone.utc

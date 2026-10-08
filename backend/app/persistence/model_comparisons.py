@@ -13,6 +13,11 @@ from app.persistence.models import (
     ModelComparisonReportRecord,
     RegressionExperimentRecord,
 )
+from app.persistence.research_cycle_lineage import (
+    MODEL_FAMILIES,
+    current_cycle_experiments,
+)
+from app.research.dataset import build_model_ready_dataset
 from app.research.model_comparison import (
     APPROVED_EVALUATION_POLICY_VERSION,
     MODEL_COMPARISON_REPORT_VERSION,
@@ -20,18 +25,6 @@ from app.research.model_comparison import (
     ComparisonSource,
     build_model_comparison,
 )
-
-
-APPROVED_EXPERIMENT_IDS: dict[str, UUID] = {
-    "linear_regression": UUID("38c6b1f1-1684-4a57-bb57-7e1d6cda0e95"),
-    "ridge_regression": UUID("c0960ae6-89df-4bf1-b0c4-631b1e1db44b"),
-    "random_forest_regression": UUID(
-        "50c8db70-b323-49a0-ad51-09e2cef7081a"
-    ),
-    "xgboost_regression": UUID(
-        "ae78c39e-abef-4ec0-81df-e99d3922da6f"
-    ),
-}
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,17 +40,8 @@ async def create_model_comparison_report(
     session: AsyncSession,
 ) -> PersistedModelComparison:
     async with session.begin():
-        experiments = tuple(
-            (
-                await session.scalars(
-                    select(RegressionExperimentRecord).where(
-                        RegressionExperimentRecord.id.in_(
-                            tuple(APPROVED_EXPERIMENT_IDS.values())
-                        )
-                    )
-                )
-            ).all()
-        )
+        dataset = await build_model_ready_dataset(session)
+        experiments = await current_cycle_experiments(session, dataset)
         sources = await _comparison_sources(session, experiments)
         _validate_common_provenance(experiments)
         built = build_model_comparison(sources)
@@ -132,16 +116,12 @@ async def _comparison_sources(
         experiment.model_family: experiment
         for experiment in experiments
     }
-    if set(by_family) != set(APPROVED_EXPERIMENT_IDS):
-        raise ValueError("The approved baseline experiment set is incomplete.")
+    if set(by_family) != set(MODEL_FAMILIES):
+        raise ValueError("The current-cycle baseline experiment set is incomplete.")
 
     sources: list[ComparisonSource] = []
-    for family, approved_id in APPROVED_EXPERIMENT_IDS.items():
+    for family in MODEL_FAMILIES:
         experiment = by_family[family]
-        if experiment.id != approved_id:
-            raise ValueError(
-                f"The approved {family} experiment ID does not match."
-            )
         policy = experiment.evaluation_policy_parameters
         if (
             policy.get("minimum_training_observations") != 100
@@ -207,8 +187,8 @@ async def _comparison_sources(
 def _validate_common_provenance(
     experiments: tuple[RegressionExperimentRecord, ...],
 ) -> None:
-    if len(experiments) != len(APPROVED_EXPERIMENT_IDS):
-        raise ValueError("The approved baseline experiment set is incomplete.")
+    if len(experiments) != len(MODEL_FAMILIES):
+        raise ValueError("The current-cycle baseline experiment set is incomplete.")
     first = experiments[0]
     common_fields = (
         "model_dataset_hash",

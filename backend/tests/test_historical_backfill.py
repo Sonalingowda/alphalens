@@ -17,6 +17,46 @@ from app.market_data.provider import MarketDataProviderError
 
 
 class HistoricalBackfillTests(unittest.IsolatedAsyncioTestCase):
+    async def test_explicit_end_boundary_is_respected_across_pages(self) -> None:
+        start = _completed_end() - timedelta(days=5)
+        requested_end = start + timedelta(days=3)
+        provider = _PagedProvider(
+            {
+                int(start.timestamp()): HistoricalCandlePage(
+                    candles=(_candle(start), _candle(start + timedelta(days=1))),
+                    next_since=int((start + timedelta(days=2)).timestamp()),
+                ),
+                int((start + timedelta(days=2)).timestamp()): (
+                    HistoricalCandlePage(
+                        candles=(
+                            _candle(start + timedelta(days=2)),
+                            _candle(requested_end),
+                            _candle(requested_end + timedelta(days=1)),
+                        ),
+                        next_since=int(
+                            (requested_end + timedelta(days=1)).timestamp()
+                        ),
+                    )
+                ),
+            }
+        )
+
+        sample = await fetch_btc_usd_daily_backfill(
+            provider,
+            requested_start=start,
+            max_pages=5,
+            requested_end_exclusive=requested_end,
+        )
+
+        self.assertTrue(sample.validation_report.passed)
+        self.assertEqual(sample.requested_end_exclusive, requested_end)
+        self.assertEqual(
+            tuple(candle.timestamp for candle in sample.candles),
+            tuple(start + timedelta(days=index) for index in range(3)),
+        )
+        self.assertEqual(sample.excluded_incomplete_candle_count, 2)
+        self.assertEqual(sample.pages_fetched, 2)
+
     async def test_paginates_validates_and_excludes_current_candle(self) -> None:
         end = _completed_end()
         start = end - timedelta(days=4)
@@ -57,6 +97,41 @@ class HistoricalBackfillTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sample.excluded_incomplete_candle_count, 1)
         self.assertEqual(len(progress), 2)
         self.assertEqual(progress[-1].cumulative_completed_count, 4)
+
+    async def test_repeating_bounded_request_is_stable(self) -> None:
+        start = _completed_end() - timedelta(days=3)
+        requested_end = start + timedelta(days=2)
+        pages = {
+            int(start.timestamp()): HistoricalCandlePage(
+                candles=(
+                    _candle(start),
+                    _candle(start + timedelta(days=1)),
+                    _candle(requested_end),
+                ),
+                next_since=int(requested_end.timestamp()),
+            )
+        }
+
+        first = await fetch_btc_usd_daily_backfill(
+            _PagedProvider(pages),
+            requested_start=start,
+            max_pages=5,
+            requested_end_exclusive=requested_end,
+        )
+        second = await fetch_btc_usd_daily_backfill(
+            _PagedProvider(pages),
+            requested_start=start,
+            max_pages=5,
+            requested_end_exclusive=requested_end,
+        )
+
+        self.assertEqual(first.candles, second.candles)
+        self.assertEqual(first.requested_start, second.requested_start)
+        self.assertEqual(
+            first.requested_end_exclusive,
+            second.requested_end_exclusive,
+        )
+        self.assertEqual(first.progress, second.progress)
 
     async def test_exact_page_boundary_overlap_is_audited(self) -> None:
         end = _completed_end()

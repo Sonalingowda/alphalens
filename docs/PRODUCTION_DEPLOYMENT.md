@@ -43,4 +43,41 @@ mutable runtime working tree.
 - `/metrics/prometheus` exports Prometheus metrics when enabled. The frozen API's `/metrics` contract remains unchanged.
 - Application rollback SHALL use the previous immutable image only after confirming its schema compatibility. Schema rollback SHALL be exercised in staging and SHALL be preceded by a database backup.
 
+## Release authorization and artifact replacement
+
+The packaged artifact is not an authorization signal. A controlled external
+release manifest must be explicitly approved by a human and must bind the
+artifact ID/hash, Ridge model/configuration, feature and target versions,
+dataset/validation/split lineage, holdout report and one-time consumption,
+deterministic prediction hash, target-production identity, operator, approval
+timestamp, intended action, backup checksum, and rollback reference. The
+manifest's own SHA-256 is verified before import. Missing approval, tampering,
+target mismatch, or any lineage mismatch fails closed.
+
+The future sequence is:
+
+1. Pre-release: take and checksum a complete PostgreSQL backup; verify the
+   target identity with the read-only `verify-target` command in
+   `DEPLOYMENT.md`; verify the artifact hash and complete lineage; validate the
+   release manifest and its explicit approval.
+2. Transfer: run the approved import-for-release-review; verify the transferred
+   artifact hash and parent closure; confirm that repeating the transfer is
+   idempotent and that conflicting identity is rejected.
+3. Deploy: deploy an immutable application image compatible with the verified
+   schema; validate startup and readiness.
+4. Verify: check health, model/artifact identity, logs, and monitoring, then
+   run a controlled prediction smoke test against the verified artifact.
+5. Activate: obtain explicit human release sign-off, then activate separately.
+   Artifact existence and deployment never activate live inference.
+
+Rollback is triggered by any integrity, readiness, identity/hash, smoke-test,
+or authorized operational failure. The exact normal operation is to stop
+activation, restore the previous immutable artifact reference, and redeploy the
+compatible previous image; then verify the previous artifact ID/hash,
+readiness, and controlled prediction and record the rollback result. Database
+restoration remains the fallback recovery mechanism, not the normal replacement
+path: restore the preserved backup into an isolated recovery target, verify the
+schema and deterministic lineage there, and only then follow the release
+sign-off process for any recovery action.
+
 This Compose topology is a reproducible reference deployment. Production operators SHOULD place PostgreSQL and Redis on managed private services and deploy application replicas behind a TLS load balancer.

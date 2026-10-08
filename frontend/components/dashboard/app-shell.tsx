@@ -22,6 +22,7 @@ import {
   SheetTrigger,
 } from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
+import { SignInButton, UserButton, useAuth } from "@clerk/nextjs";
 
 const navigation = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
@@ -80,6 +81,8 @@ function Navigation({ onNavigate }: { onNavigate?: () => void }) {
 }
 
 export function AppShell({ children }: { children: ReactNode }) {
+  const { isSignedIn } = useAuth();
+
   return (
     <div className="min-h-screen lg:grid lg:grid-cols-[256px_1fr]">
       <aside className="fixed inset-y-0 left-0 z-30 hidden w-64 border-r bg-sidebar lg:flex lg:flex-col">
@@ -128,7 +131,18 @@ export function AppShell({ children }: { children: ReactNode }) {
             <span className="size-1.5 rounded-full bg-emerald-400" />
             Market intelligence console
           </div>
-          <ThemeToggle />
+          <div className="flex items-center gap-3">
+            {!isSignedIn ? (
+              <SignInButton mode="modal">
+                <Button variant="outline" size="sm">
+                  Sign in
+                </Button>
+              </SignInButton>
+            ) : (
+              <UserButton />
+            )}
+            <ThemeToggle />
+          </div>
         </header>
         <main className="dashboard-grid min-h-[calc(100vh-4rem)] p-4 md:p-6 xl:p-8">
           <div className="mx-auto max-w-[1600px]">{children}</div>

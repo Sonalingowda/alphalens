@@ -1,6 +1,16 @@
 import { render, screen } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { describe, expect, it, vi, afterEach } from "vitest";
+import { ClerkProvider } from "@clerk/nextjs";
+
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({
+    push: vi.fn(),
+    replace: vi.fn(),
+    refresh: vi.fn(),
+  }),
+  usePathname: () => "/",
+}));
 
 vi.mock("lightweight-charts", () => ({
   createChart: (_el: Element) => {
@@ -532,7 +542,11 @@ describe("Page integration: Opportunity detail", () => {
       params: Promise.resolve({ id: "opportunity.1" }),
       searchParams: Promise.resolve({ as_of: "2026-08-10T19:05:00.016000Z" }),
     });
-    render(element as unknown as ReactElement);
+    render(
+      <ClerkProvider publishableKey="pk_test_Y2xlcmsudGVzdCQ">
+        {element as unknown as ReactElement}
+      </ClerkProvider>,
+    );
 
     expect(screen.getByText("Opportunity detail")).toBeInTheDocument();
     expect(screen.getAllByText("Trade plan").length).toBeGreaterThan(0);

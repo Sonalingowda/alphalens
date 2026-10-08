@@ -31,8 +31,8 @@ def replay_selected_ridge_for_packaging(
         "solver": "svd",
     }:
         raise ValueError("Selected Ridge parameters differ.")
-    if len(training_observations) != 611:
-        raise ValueError("Final packaging training window must contain 611.")
+    if len(training_observations) != 610:
+        raise ValueError("Final packaging training window must contain 610.")
     matrix = np.asarray(
         [
             [float(value) for value in item.feature_values]
@@ -120,4 +120,3 @@ def build_ridge_artifact_core(
         "software_versions": dict(sorted(software_versions.items())),
         "provenance": provenance,
     }
-

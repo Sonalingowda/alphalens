@@ -102,10 +102,21 @@ async def fetch_btc_usd_daily_backfill(
     requested_start: datetime,
     max_pages: int,
     progress_callback: Callable[[BackfillProgress], None] | None = None,
+    requested_end_exclusive: datetime | None = None,
 ) -> HistoricalSample:
     if requested_start.tzinfo is None or requested_start.utcoffset() is None:
         raise MarketDataProviderError(
             "Historical backfill start must be timezone-aware."
+        )
+    if (
+        requested_end_exclusive is not None
+        and (
+            requested_end_exclusive.tzinfo is None
+            or requested_end_exclusive.utcoffset() is None
+        )
+    ):
+        raise MarketDataProviderError(
+            "Historical backfill end must be timezone-aware."
         )
     if max_pages <= 0:
         raise MarketDataProviderError(
@@ -113,16 +124,20 @@ async def fetch_btc_usd_daily_backfill(
         )
 
     timeframe = CandleTimeframe.DAY_1
-    requested_end = datetime.now(timezone.utc).replace(
-        hour=0,
-        minute=0,
-        second=0,
-        microsecond=0,
-    )
     requested_start = requested_start.astimezone(timezone.utc)
+    requested_end = (
+        requested_end_exclusive.astimezone(timezone.utc)
+        if requested_end_exclusive is not None
+        else datetime.now(timezone.utc).replace(
+            hour=0,
+            minute=0,
+            second=0,
+            microsecond=0,
+        )
+    )
     if requested_start >= requested_end:
         raise MarketDataProviderError(
-            "Historical backfill start must precede today in UTC."
+            "Historical backfill start must precede the end in UTC."
         )
 
     cursor = requested_start

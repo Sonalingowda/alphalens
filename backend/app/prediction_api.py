@@ -20,10 +20,13 @@ from app.opportunity_intelligence.domain import MarketScope, MarketSnapshot
 from app.opportunity_intelligence.persistence import (
     DashboardProjectionPostgreSQLRepository,
     LifecyclePostgreSQLRepository,
+    MarketContextPostgreSQLRepository,
     MarketSnapshotPostgreSQLRepository,
+    OpportunityPostgreSQLRepository,
     OpportunityDetailPostgreSQLRepository,
     OpportunityPlanPostgreSQLRepository,
     OutcomePostgreSQLRepository,
+    RankingPostgreSQLRepository,
     RuntimeGovernancePostgreSQLRepository,
 )
 from app.opportunity_intelligence.repositories import (
@@ -34,6 +37,13 @@ from app.opportunity_intelligence.repositories import (
 from app.persistence.database import session_factory
 from app.runtime_pipeline import build_runtime_pipeline
 from app.inference.repository import load_expected_move_artifact
+from app.paper_execution import (
+    PaperExecutionPersistence,
+    PaperTrackingSelectionService,
+    RepositoryBackedPaperTrackingAuthoritativeLoader,
+)
+from app.paper_execution.api import create_paper_tracking_router
+from app.paper_execution.auth import ClerkPaperTrackingAuthenticator
 from app.settings import load_settings
 
 
@@ -192,7 +202,32 @@ live_market_ingestion = _PipelineAwareLiveMarketIngestionService(
 )
 app = create_prediction_app(
     maximum_request_bytes=settings.prediction_api_max_request_bytes,
-    cors_allowed_origins=settings.cors_allowed_origins,
+    cors_allowed_origins=tuple(
+        dict.fromkeys(
+            settings.cors_allowed_origins + settings.clerk_authorized_parties
+        )
+    ),
+)
+lifecycle_repository = LifecyclePostgreSQLRepository(session_factory)
+paper_tracking_selection_service = PaperTrackingSelectionService(
+    persistence=PaperExecutionPersistence(session_factory),
+    authoritative_loader=RepositoryBackedPaperTrackingAuthoritativeLoader(
+        opportunities=OpportunityPostgreSQLRepository(session_factory),
+        rankings=RankingPostgreSQLRepository(session_factory),
+        lifecycles=lifecycle_repository,
+        market_snapshots=market_snapshot_repository,
+        market_contexts=MarketContextPostgreSQLRepository(session_factory),
+    ),
+)
+app.include_router(
+    create_paper_tracking_router(
+        selection_service=paper_tracking_selection_service,
+        authenticator=ClerkPaperTrackingAuthenticator(
+            secret_key=settings.clerk_secret_key,
+            authorized_parties=settings.clerk_authorized_parties,
+            authorized_user_id=settings.clerk_authorized_user_id,
+        ),
+    )
 )
 opportunity_app = create_opportunity_intelligence_app(
     dashboard_repository=DashboardProjectionPostgreSQLRepository(session_factory),
@@ -200,7 +235,7 @@ opportunity_app = create_opportunity_intelligence_app(
     plans_repository=OpportunityPlanPostgreSQLRepository(session_factory),
     governance_repository=RuntimeGovernancePostgreSQLRepository(session_factory),
     market_repository=market_snapshot_repository,
-    lifecycle_repository=LifecyclePostgreSQLRepository(session_factory),
+    lifecycle_repository=lifecycle_repository,
     outcome_repository=OutcomePostgreSQLRepository(session_factory),
 )
 _mvp_paths = {

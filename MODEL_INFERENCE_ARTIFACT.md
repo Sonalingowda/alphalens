@@ -8,7 +8,7 @@ an engineering packaging operation, not model development, tuning, selection,
 holdout evaluation, or experiment modification.
 
 The packaging workflow may fit the exact approved Ridge and StandardScaler
-pipeline once on the registered 611-observation final training window. After
+pipeline once on the registered 610-observation final training window. After
 packaging, production prediction services must load the immutable artifact and
 must never invoke training.
 

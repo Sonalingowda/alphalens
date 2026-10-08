@@ -71,6 +71,7 @@ __all__ = (
     "NotificationRepository",
     "OpportunityPlanRepository",
     "OpportunityRepository",
+    "OpportunityDetailRepository",
     "OutcomeRepository",
     "QualificationRepository",
     "REPOSITORY_INTERFACE_VERSION",

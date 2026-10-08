@@ -36,6 +36,9 @@ class Settings:
     worker_concurrency: int
     worker_poll_seconds: float
     worker_max_retries: int
+    clerk_secret_key: str | None
+    clerk_authorized_parties: tuple[str, ...]
+    clerk_authorized_user_id: str | None
     build_git_sha: str | None
     build_app_version: str
     build_time: str | None
@@ -100,6 +103,14 @@ def load_settings() -> Settings:
         worker_concurrency=int(os.getenv("ALPHALENS_WORKER_CONCURRENCY", "2")),
         worker_poll_seconds=float(os.getenv("ALPHALENS_WORKER_POLL_SECONDS", "1")),
         worker_max_retries=int(os.getenv("ALPHALENS_WORKER_MAX_RETRIES", "3")),
+        clerk_secret_key=_optional_environment("ALPHALENS_CLERK_SECRET_KEY"),
+        clerk_authorized_parties=_environment_origins(
+            "ALPHALENS_CLERK_AUTHORIZED_PARTIES",
+            "http://127.0.0.1:3000,http://localhost:3000",
+        ),
+        clerk_authorized_user_id=_optional_environment(
+            "ALPHALENS_CLERK_AUTHORIZED_USER_ID"
+        ),
         build_git_sha=build_git_sha,
         build_app_version=build_app_version,
         build_time=build_time,

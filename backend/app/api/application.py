@@ -78,7 +78,7 @@ def create_prediction_app(
             allow_origins=list(cors_allowed_origins),
             allow_credentials=False,
             allow_methods=["GET", "POST"],
-            allow_headers=["Accept", "Content-Type"],
+            allow_headers=["Accept", "Content-Type", "Authorization"],
             max_age=600,
         )
 

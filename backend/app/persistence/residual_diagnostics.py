@@ -7,7 +7,6 @@ from uuid import UUID, uuid4
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.persistence.model_comparisons import APPROVED_EXPERIMENT_IDS
 from app.persistence.models import (
     ExperimentPredictionEvidenceRecord,
     ModelExplainabilityArtifactRecord,
@@ -19,8 +18,10 @@ from app.persistence.models import (
     ResidualDiagnosticsReportRecord,
     StatisticalValidationReportRecord,
 )
-from app.persistence.statistical_validation import (
-    APPROVED_EXPLAINABILITY_ARTIFACT_IDS,
+from app.persistence.research_cycle_lineage import (
+    EXPLAINABILITY_MODEL_FAMILIES,
+    current_cycle_explainability,
+    current_cycle_experiments,
 )
 from app.research.dataset import build_model_ready_dataset
 from app.research.residual_diagnostics import (
@@ -51,7 +52,7 @@ async def create_residual_diagnostics_report(
     """Replay approved experiments, verify hashes, and persist diagnostics."""
     async with session.begin():
         dataset = await build_model_ready_dataset(session)
-        experiments = await _approved_experiments(session)
+        experiments = await current_cycle_experiments(session, dataset)
         sources = await _experiment_sources(session, experiments)
 
         # No persistence occurs until every experiment and split hash matches.
@@ -76,16 +77,9 @@ async def create_residual_diagnostics_report(
                 )
             )
         ).one()
-        explainability_records = tuple(
-            (
-                await session.scalars(
-                    select(ModelExplainabilityArtifactRecord).where(
-                        ModelExplainabilityArtifactRecord.id.in_(
-                            APPROVED_EXPLAINABILITY_ARTIFACT_IDS
-                        )
-                    )
-                )
-            ).all()
+        explainability_records = await current_cycle_explainability(
+            session,
+            experiments,
         )
         explainability_references = _explainability_references(
             explainability_records,
@@ -223,32 +217,6 @@ async def create_residual_diagnostics_report(
     )
 
 
-async def _approved_experiments(
-    session: AsyncSession,
-) -> tuple[RegressionExperimentRecord, ...]:
-    records = tuple(
-        (
-            await session.scalars(
-                select(RegressionExperimentRecord).where(
-                    RegressionExperimentRecord.id.in_(
-                        tuple(APPROVED_EXPERIMENT_IDS.values())
-                    )
-                )
-            )
-        ).all()
-    )
-    by_family = {record.model_family: record for record in records}
-    if set(by_family) != set(APPROVED_EXPERIMENT_IDS):
-        raise ValueError("Approved residual experiment set is incomplete.")
-    ordered: list[RegressionExperimentRecord] = []
-    for family, expected_id in APPROVED_EXPERIMENT_IDS.items():
-        record = by_family[family]
-        if record.id != expected_id:
-            raise ValueError(f"Approved {family} experiment ID differs.")
-        ordered.append(record)
-    return tuple(ordered)
-
-
 async def _experiment_sources(
     session: AsyncSession,
     experiments: tuple[RegressionExperimentRecord, ...],
@@ -338,12 +306,8 @@ def _explainability_references(
     records: tuple[ModelExplainabilityArtifactRecord, ...],
     replays: tuple[ReplayedModelPredictions, ...],
 ) -> tuple[ArtifactReference, ...]:
-    if (
-        len(records) != len(APPROVED_EXPLAINABILITY_ARTIFACT_IDS)
-        or {record.id for record in records}
-        != set(APPROVED_EXPLAINABILITY_ARTIFACT_IDS)
-    ):
-        raise ValueError("Approved explainability artifacts are incomplete.")
+    if len(records) != len(EXPLAINABILITY_MODEL_FAMILIES):
+        raise ValueError("Current-cycle explainability artifacts are incomplete.")
     experiment_by_family = {
         replay.source.model_family: replay.source.experiment_id
         for replay in replays

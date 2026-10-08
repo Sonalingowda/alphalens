@@ -7,8 +7,22 @@ from app.paper_execution.domain import (
     PaperExitReason,
     PaperOutcome,
     PaperPosition,
+    PaperTrackingEvent,
+    PaperTrackingEventType,
 )
 from app.paper_execution.service import PaperExecutionService
+from app.paper_execution.selection import (
+    PaperTrackingAuthoritativeLoader,
+    PaperTrackingSelection,
+    PaperTrackingSelectionError,
+    PaperTrackingSelectionService,
+    RepositoryBackedPaperTrackingAuthoritativeLoader,
+    confirmed_scenario_hash,
+)
+from app.paper_execution.observation import (
+    PaperObservationResult,
+    PaperTrackingObservationService,
+)
 from app.paper_execution.persistence import InMemoryPaperExecutionRepository, PaperExecutionPersistence
 from app.paper_execution.persistence import InMemoryPaperSuccessorPlanRepository, PaperSuccessorPlanPersistence
 from app.paper_execution.successor import (
@@ -26,6 +40,16 @@ from app.paper_execution.successor import (
 __all__ = (
     "PaperExecution",
     "PaperExecutionService",
+    "PaperTrackingSelection",
+    "PaperTrackingSelectionError",
+    "PaperTrackingAuthoritativeLoader",
+    "PaperTrackingSelectionService",
+    "RepositoryBackedPaperTrackingAuthoritativeLoader",
+    "confirmed_scenario_hash",
+    "PaperTrackingEvent",
+    "PaperTrackingEventType",
+    "PaperObservationResult",
+    "PaperTrackingObservationService",
     "PaperExecutionPersistence",
     "InMemoryPaperExecutionRepository",
     "PaperExecutionState",

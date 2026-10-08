@@ -18,6 +18,72 @@ function queryString(values: Record<string, string | undefined>): string {
   return parameters.toString();
 }
 
+type PaperTrackingConfirmation = {
+  opportunity_id: string;
+  opportunity_version_id: string;
+  confirmed_scenario_hash: string;
+};
+
+type PaperTrackingSelection = {
+  execution_id: string;
+  position_id: string;
+  opportunity_id: string;
+  opportunity_version_id: string;
+  status: string;
+  selected_at: string;
+  actor_id: string;
+};
+
+async function authenticatedRequest<T>(
+  path: string,
+  token: string,
+  init?: RequestInit,
+): Promise<T> {
+  const response = await fetch(`${apiBaseUrl()}${path}`, {
+    ...init,
+    cache: "no-store",
+    headers: {
+      Accept: "application/json",
+      ...(init?.headers ?? {}),
+      Authorization: `Bearer ${token}`,
+    },
+  });
+  if (!response.ok) {
+    throw new Error("The paper-tracking request was rejected.");
+  }
+  return (await response.json()) as T;
+}
+
+export function confirmPaperTracking(
+  token: string,
+  opportunityId: string,
+  opportunityVersionId: string,
+): Promise<PaperTrackingConfirmation> {
+  const query = queryString({
+    opportunity_id: opportunityId,
+    opportunity_version_id: opportunityVersionId,
+  });
+  return authenticatedRequest<PaperTrackingConfirmation>(
+    `/api/v1/paper-tracking/confirmation?${query}`,
+    token,
+  );
+}
+
+export function selectPaperTracking(
+  token: string,
+  confirmation: PaperTrackingConfirmation,
+): Promise<PaperTrackingSelection> {
+  return authenticatedRequest<PaperTrackingSelection>(
+    "/api/v1/paper-tracking/selections",
+    token,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(confirmation),
+    },
+  );
+}
+
 function isApiEnvelope<T>(value: unknown): value is ApiEnvelope<T> {
   return (
     typeof value === "object" &&

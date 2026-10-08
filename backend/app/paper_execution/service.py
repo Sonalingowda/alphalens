@@ -20,6 +20,35 @@ class PaperExecutionResult:
 class PaperExecutionService:
     """Resolve one ranked opportunity without economic accounting."""
 
+    def create_active_selection(
+        self,
+        *,
+        opportunity: Opportunity,
+        ranking_membership: RankingMembership,
+    ) -> tuple[PaperExecution, PaperPosition]:
+        """Capture immutable scenario snapshots without evaluating market candles."""
+        if opportunity.plan is None or opportunity.valid_until is None:
+            raise ValueError("A persisted, valid source plan is required.")
+        if ranking_membership.opportunity_version_id != opportunity.opportunity_version_id:
+            raise ValueError("Ranking membership does not admit this opportunity version.")
+        execution = self._build_execution(
+            opportunity,
+            opportunity.plan,
+            ranking_membership,
+            state=PaperExecutionState.ACTIVE,
+        )
+        position = PaperPosition(
+            contract_version="1.0.0",
+            position_id=f"paper_position:{opportunity.opportunity_version_id}",
+            execution_id=execution.execution_id,
+            opportunity_version_id=opportunity.opportunity_version_id,
+            state=PaperExecutionState.ACTIVE,
+            entry_price=None,
+            entry_timestamp=None,
+            entry_candle_index=None,
+        )
+        return execution, position
+
     def evaluate(self, *, opportunity: Opportunity, ranking_membership: RankingMembership, candles: Sequence[dict]) -> PaperExecutionResult:
         if opportunity.plan is None:
             raise ValueError("A persisted source plan is required.")
@@ -46,38 +75,8 @@ class PaperExecutionService:
             raise ValueError("Ranking membership does not admit this opportunity version.")
         if opportunity.stance is OpportunityStance.WAIT:
             raise ValueError("Only ranked actionable OpportunityVersions are eligible.")
-        opportunity_hash = opportunity.canonical_sha256()
-        plan_hash = plan.canonical_sha256()
-        source_references_by_id = {
-            reference.artifact_id: reference
-            for reference in (
-                IntegrityReference(opportunity.opportunity_version_id, "opportunity_version", opportunity.contract_version, opportunity_hash, plan.audit.available_at),
-                IntegrityReference(plan.plan_id, "opportunity_plan", plan.contract_version, plan_hash, plan.audit.available_at),
-                *opportunity.audit.provenance.source_references,
-                *plan.audit.provenance.source_references,
-            )
-        }
-        if successor is not None:
-            source_references_by_id[successor.source_plan_id] = IntegrityReference(successor.source_plan_id, "opportunity_plan_source", opportunity.plan.contract_version, successor.source_plan_canonical_hash, opportunity.plan.audit.available_at)
+        execution = self._build_execution(opportunity, plan, ranking_membership, successor)
         signal_timestamp = plan.audit.available_at
-        execution = PaperExecution(
-            contract_version="1.0.0",
-            execution_id=f"paper_execution:{opportunity.opportunity_version_id}",
-            opportunity_id=opportunity.opportunity_id,
-            opportunity_version_id=opportunity.opportunity_version_id,
-            opportunity_hash=opportunity_hash,
-            plan_hash=plan_hash,
-            source_references=tuple(source_references_by_id[key] for key in sorted(source_references_by_id)),
-            scope=plan.scope,
-            direction=opportunity.stance,
-            signal_timestamp=signal_timestamp,
-            valid_until=plan.valid_until,  # type narrowing is enforced by successor/domain validation
-            state=PaperExecutionState.ELIGIBLE,
-            source_plan_id=successor.source_plan_id if successor else None,
-            source_plan_hash=successor.source_plan_canonical_hash if successor else None,
-            successor_plan_id=successor.successor_plan_id if successor else None,
-            successor_plan_hash=successor.successor_plan_canonical_hash if successor else None,
-        )
         candle_tuple = tuple(candle for candle in candles if signal_timestamp < candle["timestamp"] <= plan.valid_until)
         entry_reached, entry_timestamp, entry_index = _determine_entry(opportunity.stance.value, plan.entry_zone.lower, plan.entry_zone.upper, signal_timestamp, candle_tuple)
         outcome, evaluated, touch_price, touch_timestamp, touch_index, _ = _determine_outcome(
@@ -97,3 +96,69 @@ class PaperExecutionService:
         closed_execution = PaperExecution("1.0.0", execution.execution_id, execution.opportunity_id, execution.opportunity_version_id, execution.opportunity_hash, execution.plan_hash, execution.source_references, execution.scope, execution.direction, execution.signal_timestamp, execution.valid_until, PaperExecutionState.CLOSED, source_plan_id=execution.source_plan_id, source_plan_hash=execution.source_plan_hash, successor_plan_id=execution.successor_plan_id, successor_plan_hash=execution.successor_plan_hash)
         outcome_record = PaperOutcome("1.0.0", f"paper_outcome:{opportunity.opportunity_version_id}", execution.execution_id, closed_position.position_id, exit_record.exit_id, opportunity.opportunity_version_id, exit_record.reason, closed_execution.canonical_sha256(), closed_position.canonical_sha256(), exit_record.canonical_sha256())
         return PaperExecutionResult(closed_execution, closed_position, exit_record, outcome_record)
+
+    @staticmethod
+    def _build_execution(
+        opportunity: Opportunity,
+        plan: OpportunityPlan,
+        ranking_membership: RankingMembership,
+        successor: PaperSuccessorPlan | None = None,
+        state: PaperExecutionState = PaperExecutionState.ELIGIBLE,
+    ) -> PaperExecution:
+        opportunity_hash = opportunity.canonical_sha256()
+        plan_hash = plan.canonical_sha256()
+        source_references_by_id = {
+            reference.artifact_id: reference
+            for reference in (
+                IntegrityReference(
+                    opportunity.opportunity_version_id,
+                    "opportunity_version",
+                    opportunity.contract_version,
+                    opportunity_hash,
+                    plan.audit.available_at,
+                ),
+                IntegrityReference(
+                    plan.plan_id,
+                    "opportunity_plan",
+                    plan.contract_version,
+                    plan_hash,
+                    plan.audit.available_at,
+                ),
+                *opportunity.audit.provenance.source_references,
+                *plan.audit.provenance.source_references,
+            )
+        }
+        source_references_by_id[ranking_membership.score_reference.artifact_id] = (
+            ranking_membership.score_reference
+        )
+        source_references_by_id[ranking_membership.qualification_reference.artifact_id] = (
+            ranking_membership.qualification_reference
+        )
+        if successor is not None:
+            source_references_by_id[successor.source_plan_id] = IntegrityReference(
+                successor.source_plan_id,
+                "opportunity_plan_source",
+                opportunity.plan.contract_version,
+                successor.source_plan_canonical_hash,
+                opportunity.plan.audit.available_at,
+            )
+        return PaperExecution(
+            contract_version="1.0.0",
+            execution_id=f"paper_execution:{opportunity.opportunity_version_id}",
+            opportunity_id=opportunity.opportunity_id,
+            opportunity_version_id=opportunity.opportunity_version_id,
+            opportunity_hash=opportunity_hash,
+            plan_hash=plan_hash,
+            source_references=tuple(
+                source_references_by_id[key] for key in sorted(source_references_by_id)
+            ),
+            scope=plan.scope,
+            direction=opportunity.stance,
+            signal_timestamp=plan.audit.available_at,
+            valid_until=plan.valid_until,
+            state=state,
+            source_plan_id=successor.source_plan_id if successor else None,
+            source_plan_hash=successor.source_plan_canonical_hash if successor else None,
+            successor_plan_id=successor.successor_plan_id if successor else None,
+            successor_plan_hash=successor.successor_plan_canonical_hash if successor else None,
+        )

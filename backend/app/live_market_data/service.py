@@ -515,9 +515,21 @@ class LiveMarketIngestionService:
                     EntityId(snapshot.snapshot_id)
                 )
             except EntityNotFoundError:
+                logger.warning(
+                    "live_snapshot_conflict_winner_not_found snapshot_id=%s",
+                    snapshot.snapshot_id,
+                )
                 return None
             if _same_market_content(winner, snapshot):
+                logger.info(
+                    "live_snapshot_conflict_recovered snapshot_id=%s",
+                    snapshot.snapshot_id,
+                )
                 return winner
+            logger.warning(
+                "live_snapshot_conflict_content_mismatch snapshot_id=%s",
+                snapshot.snapshot_id,
+            )
             return None
         except Exception:
             self._metrics.increment("persistence_failures")

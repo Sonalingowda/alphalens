@@ -105,6 +105,8 @@ services:
     build:
       context: .
       dockerfile: frontend/Dockerfile
+      args:
+        NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY:-}
     environment:
       ALPHALENS_API_BASE_URL: http://backend:8000
       NODE_ENV: production

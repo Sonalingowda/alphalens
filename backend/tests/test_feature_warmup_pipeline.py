@@ -17,7 +17,9 @@ from app.opportunity_intelligence.persistence import (
     FeatureSnapshotMemoryRepository,
     MarketSnapshotMemoryRepository,
 )
-from app.opportunity_intelligence.repositories import ScopedRepositoryQuery
+from app.opportunity_intelligence.repositories import (
+    ScopedRepositoryQuery,
+)
 from app.runtime_features import (
     FeatureWarmupIncompleteError,
     RuntimeFeatureEngine,

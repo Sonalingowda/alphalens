@@ -7,7 +7,6 @@ from uuid import UUID, uuid4
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.persistence.model_comparisons import APPROVED_EXPERIMENT_IDS
 from app.persistence.models import (
     ModelExplainabilityArtifactRecord,
     RegressionExperimentRecord,
@@ -16,6 +15,13 @@ from app.persistence.models import (
     StatisticalValidationReportExplainabilityRecord,
     StatisticalValidationReportRecord,
 )
+from app.persistence.research_cycle_lineage import (
+    EXPLAINABILITY_MODEL_FAMILIES,
+    MODEL_FAMILIES,
+    current_cycle_explainability,
+    current_cycle_experiments,
+)
+from app.research.dataset import build_model_ready_dataset
 from app.research.statistical_validation import (
     BOOTSTRAP_RANDOM_SEED,
     BOOTSTRAP_RESAMPLES,
@@ -27,12 +33,6 @@ from app.research.statistical_validation import (
     FoldMetricEvidence,
     StatisticalModelSource,
     build_statistical_validation_report,
-)
-
-
-APPROVED_EXPLAINABILITY_ARTIFACT_IDS: tuple[UUID, ...] = (
-    UUID("d019cd2a-4eca-4720-8821-7651e12c0249"),
-    UUID("79ec968c-bc62-476e-b35d-427dc6acc78b"),
 )
 
 
@@ -48,28 +48,12 @@ async def create_statistical_validation_report(
     session: AsyncSession,
 ) -> PersistedStatisticalValidationReport:
     async with session.begin():
-        experiments = tuple(
-            (
-                await session.scalars(
-                    select(RegressionExperimentRecord).where(
-                        RegressionExperimentRecord.id.in_(
-                            tuple(APPROVED_EXPERIMENT_IDS.values())
-                        )
-                    )
-                )
-            ).all()
-        )
+        dataset = await build_model_ready_dataset(session)
+        experiments = await current_cycle_experiments(session, dataset)
         sources = await _model_sources(session, experiments)
-        explainability = tuple(
-            (
-                await session.scalars(
-                    select(ModelExplainabilityArtifactRecord).where(
-                        ModelExplainabilityArtifactRecord.id.in_(
-                            APPROVED_EXPLAINABILITY_ARTIFACT_IDS
-                        )
-                    )
-                )
-            ).all()
+        explainability = await current_cycle_explainability(
+            session,
+            experiments,
         )
         references = _explainability_references(explainability, sources)
         built = build_statistical_validation_report(sources, references)
@@ -159,14 +143,12 @@ async def _model_sources(
         experiment.model_family: experiment
         for experiment in experiments
     }
-    if set(by_family) != set(APPROVED_EXPERIMENT_IDS):
-        raise ValueError("Approved statistical experiment set is incomplete.")
+    if set(by_family) != set(MODEL_FAMILIES):
+        raise ValueError("Current-cycle statistical experiment set is incomplete.")
 
     sources: list[StatisticalModelSource] = []
-    for family, approved_id in APPROVED_EXPERIMENT_IDS.items():
+    for family in MODEL_FAMILIES:
         experiment = by_family[family]
-        if experiment.id != approved_id:
-            raise ValueError(f"Approved {family} experiment ID differs.")
         rows = tuple(
             (
                 await session.scalars(
@@ -235,12 +217,8 @@ def _explainability_references(
     artifacts: tuple[ModelExplainabilityArtifactRecord, ...],
     sources: tuple[StatisticalModelSource, ...],
 ) -> tuple[ExplainabilityArtifactReference, ...]:
-    if (
-        len(artifacts) != len(APPROVED_EXPLAINABILITY_ARTIFACT_IDS)
-        or {artifact.id for artifact in artifacts}
-        != set(APPROVED_EXPLAINABILITY_ARTIFACT_IDS)
-    ):
-        raise ValueError("Approved explainability artifacts are incomplete.")
+    if len(artifacts) != len(EXPLAINABILITY_MODEL_FAMILIES):
+        raise ValueError("Current-cycle explainability artifacts are incomplete.")
     first = sources[0]
     references: list[ExplainabilityArtifactReference] = []
     for artifact in artifacts:

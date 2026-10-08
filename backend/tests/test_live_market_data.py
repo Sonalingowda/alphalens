@@ -748,6 +748,11 @@ class LiveIngestionServiceTests(unittest.IsolatedAsyncioTestCase):
 
         started = asyncio.Event()
         stopped = asyncio.Event()
+        isolated_service = LiveMarketIngestionService(
+            repository=MarketSnapshotMemoryRepository(),
+            code_version="test.live_market_data.lifespan",
+        )
+        isolated_warmup = AsyncMock(return_value=0)
 
         async def run(stop_event: asyncio.Event) -> None:
             started.set()
@@ -756,12 +761,21 @@ class LiveIngestionServiceTests(unittest.IsolatedAsyncioTestCase):
             finally:
                 stopped.set()
 
-        with patch.object(prediction_api.live_market_ingestion, "run", run):
+        with (
+            patch.object(prediction_api, "live_market_ingestion", isolated_service),
+            patch.object(isolated_service, "run", run),
+            patch.object(
+                isolated_service,
+                "warmup_history_with_retry",
+                isolated_warmup,
+            ),
+        ):
             async with prediction_api._infrastructure_lifespan(prediction_api.app):
                 await asyncio.wait_for(started.wait(), timeout=1)
+                isolated_warmup.assert_awaited()
                 self.assertIs(
                     prediction_api.app.state.live_market_ingestion,
-                    prediction_api.live_market_ingestion,
+                    isolated_service,
                 )
 
         self.assertTrue(stopped.is_set())

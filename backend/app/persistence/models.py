@@ -22,6 +22,7 @@ from sqlalchemy import (
     UniqueConstraint,
     Uuid,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -73,6 +74,78 @@ class PaperOutcomeRecord(_PaperRecord):
         ForeignKeyConstraint(["position_id"], ["paper_positions.identity"], ondelete="RESTRICT"),
         ForeignKeyConstraint(["exit_id"], ["paper_exits.identity"], ondelete="RESTRICT"),
     )
+
+
+class PaperTrackingEventRecord(Base):
+    """Database-protected append-only human paper-tracking history."""
+
+    __tablename__ = "paper_tracking_events"
+    __table_args__ = (
+        UniqueConstraint("execution_id", "sequence", name="uq_paper_tracking_event_sequence"),
+        UniqueConstraint("idempotency_key", name="uq_paper_tracking_event_idempotency"),
+        CheckConstraint("sequence > 0", name="ck_paper_tracking_event_sequence_positive"),
+        CheckConstraint("char_length(canonical_hash) = 64", name="ck_paper_tracking_event_hash"),
+        CheckConstraint(
+            "event_type IN ('PAPER_TRACKING_SELECTED', 'ENTRY_REACHED', 'DATA_INSUFFICIENT', "
+            "'EXPIRED_BEFORE_ENTRY', 'EXPIRED_AFTER_ENTRY', 'AMBIGUOUS_INTRABAR', "
+            "'TARGET_HIT', 'STOP_LOSS_HIT', 'POST_OUTCOME_OBSERVATION')",
+            name="ck_paper_tracking_event_type",
+        ),
+        CheckConstraint(
+            "event_type <> 'PAPER_TRACKING_SELECTED' OR actor_id IS NOT NULL",
+            name="ck_paper_tracking_selection_actor",
+        ),
+        CheckConstraint(
+            "event_type NOT IN ('ENTRY_REACHED', 'EXPIRED_BEFORE_ENTRY', 'EXPIRED_AFTER_ENTRY', "
+            "'AMBIGUOUS_INTRABAR', 'TARGET_HIT', "
+            "'STOP_LOSS_HIT', 'POST_OUTCOME_OBSERVATION') OR "
+            "(source_artifact_id IS NOT NULL AND source_artifact_hash IS NOT NULL "
+            "AND available_at IS NOT NULL)",
+            name="ck_paper_tracking_market_source",
+        ),
+        CheckConstraint(
+            "(event_type IN ('TARGET_HIT', 'STOP_LOSS_HIT', 'POST_OUTCOME_OBSERVATION') "
+            "AND exit_id IS NOT NULL AND outcome_id IS NOT NULL) OR "
+            "(event_type NOT IN ('TARGET_HIT', 'STOP_LOSS_HIT', 'POST_OUTCOME_OBSERVATION') "
+            "AND exit_id IS NULL AND outcome_id IS NULL)",
+            name="ck_paper_tracking_terminal_refs",
+        ),
+        Index(
+            "uq_paper_tracking_one_selection",
+            "execution_id",
+            unique=True,
+            postgresql_where=text("event_type = 'PAPER_TRACKING_SELECTED'"),
+        ),
+    )
+
+    event_id: Mapped[str] = mapped_column(String(256), primary_key=True)
+    execution_id: Mapped[str] = mapped_column(
+        String(256), ForeignKey("paper_executions.identity", ondelete="RESTRICT"), nullable=False
+    )
+    position_id: Mapped[str] = mapped_column(
+        String(256), ForeignKey("paper_positions.identity", ondelete="RESTRICT"), nullable=False
+    )
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    event_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(256), nullable=False)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    available_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    actor_id: Mapped[str | None] = mapped_column(String(256))
+    opportunity_id: Mapped[str] = mapped_column(String(256), nullable=False)
+    opportunity_version_id: Mapped[str] = mapped_column(String(256), nullable=False)
+    source_execution_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_position_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_artifact_id: Mapped[str | None] = mapped_column(String(256))
+    source_artifact_hash: Mapped[str | None] = mapped_column(String(64))
+    exit_id: Mapped[str | None] = mapped_column(
+        String(256), ForeignKey("paper_exits.identity", ondelete="RESTRICT")
+    )
+    outcome_id: Mapped[str | None] = mapped_column(
+        String(256), ForeignKey("paper_outcomes.identity", ondelete="RESTRICT")
+    )
+    canonical_payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    canonical_hash: Mapped[str] = mapped_column(String(64), nullable=False)
 
 
 class PaperSuccessorPlanRecord(Base):
@@ -4102,11 +4175,13 @@ class ModelInferenceArtifactRecord(Base):
     __table_args__ = (
         CheckConstraint(
             (
-                "artifact_version = '1.0.0' "
+                "release_status IN ('ACTIVE', 'RETIRED') "
+                "AND (release_status = 'RETIRED' "
+                "OR final_training_observation_count = 610) "
+                "AND artifact_version = '1.0.0' "
                 "AND model_family = 'ridge_regression' "
                 "AND feature_pipeline_version = '1.1.0' "
                 "AND target_version = '1.0.0' "
-                "AND final_training_observation_count = 611 "
                 "AND purged_observation_count = 50 "
                 "AND feature_count = 12 "
                 "AND coefficient_count = feature_count "

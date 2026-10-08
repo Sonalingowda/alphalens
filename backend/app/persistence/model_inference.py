@@ -23,15 +23,17 @@ from app.model_packaging.ridge import (
     build_ridge_artifact_core,
     replay_selected_ridge_for_packaging,
 )
-from app.persistence.holdout_evaluation import (
-    APPROVED_SELECTED_RIDGE_EXPERIMENT_ID,
-)
 from app.persistence.models import (
+    FinalModelSelectionReportRecord,
     EngineeredFeatureRecord,
     HoldoutEvaluationReportRecord,
     HoldoutPredictionEvidenceRecord,
     ModelInferenceArtifactRecord,
     RegressionExperimentRecord,
+)
+from app.persistence.research_cycle_lineage import (
+    current_cycle_experiments,
+    current_cycle_report,
 )
 from app.research.dataset import (
     MODEL_FEATURE_NAMES,
@@ -56,11 +58,27 @@ async def package_selected_ridge_inference_once(
 ) -> PersistedInferenceArtifact:
     """Perform the one authorized fit, or verify an existing artifact."""
     async with session.begin():
+        dataset = await build_model_ready_dataset(session)
+        selection = await current_cycle_report(
+            session,
+            FinalModelSelectionReportRecord,
+            dataset,
+        )
+        if selection.selected_model_family != "ridge_regression":
+            raise ValueError("Current-cycle selection is not Ridge.")
+        experiments = await current_cycle_experiments(session, dataset)
+        experiment = next(
+            item
+            for item in experiments
+            if item.model_family == "ridge_regression"
+        )
+        if selection.selected_experiment_id != experiment.id:
+            raise ValueError("Selected Ridge experiment is outside this cycle.")
         existing = (
             await session.scalars(
                 select(ModelInferenceArtifactRecord).where(
                     ModelInferenceArtifactRecord.selected_experiment_id
-                    == APPROVED_SELECTED_RIDGE_EXPERIMENT_ID
+                    == experiment.id
                 )
             )
         ).one_or_none()
@@ -68,31 +86,29 @@ async def package_selected_ridge_inference_once(
             _verified_record(existing)
             return _persisted(existing, created=False)
 
-        experiment = await session.get(
-            RegressionExperimentRecord,
-            APPROVED_SELECTED_RIDGE_EXPERIMENT_ID,
-        )
         holdout = (
             await session.scalars(
                 select(HoldoutEvaluationReportRecord).where(
                     HoldoutEvaluationReportRecord.selected_experiment_id
-                    == APPROVED_SELECTED_RIDGE_EXPERIMENT_ID,
+                    == experiment.id,
+                    HoldoutEvaluationReportRecord
+                    .final_model_selection_report_id
+                    == selection.id,
+                    HoldoutEvaluationReportRecord.validation_run_id
+                    == dataset.validation_run_id,
                     HoldoutEvaluationReportRecord
                     .official_holdout_evaluation
                     .is_(True),
                 )
             )
         ).one()
-        if experiment is None:
-            raise ValueError("Selected Ridge experiment is unavailable.")
         _verify_sources(experiment, holdout)
-        dataset = await build_model_ready_dataset(session)
         training = dataset.development_observations[
             : holdout.final_training_observation_count
         ]
         training_hash = _observation_hash(training)
         if (
-            len(training) != 611
+            len(training) != holdout.final_training_observation_count
             or len(dataset.development_observations) - len(training) != 50
             or dataset.model_dataset_hash != holdout.model_dataset_hash
             or training_hash != holdout.training_dataset_hash
@@ -311,17 +327,41 @@ async def package_selected_ridge_inference_once(
 
 async def load_production_ridge_inference(
     session: AsyncSession,
+    *,
+    approved_artifact_id: UUID,
 ) -> PackagedRidgeInference:
-    """Load the selected model exclusively from its immutable artifact."""
-    record = (
-        await session.scalars(
-            select(ModelInferenceArtifactRecord).where(
-                ModelInferenceArtifactRecord.selected_experiment_id
-                == APPROVED_SELECTED_RIDGE_EXPERIMENT_ID
-            )
-        )
-    ).one()
+    """Load only the artifact explicitly approved by the release caller."""
+    record = await session.get(
+        ModelInferenceArtifactRecord,
+        approved_artifact_id,
+    )
+    if record is None:
+        raise ValueError("Explicitly approved inference artifact is unavailable.")
     _verified_record(record)
+    experiment = await session.get(
+        RegressionExperimentRecord,
+        record.selected_experiment_id,
+    )
+    holdout = await session.get(
+        HoldoutEvaluationReportRecord,
+        record.holdout_evaluation_report_id,
+    )
+    if experiment is None or holdout is None:
+        raise ValueError("Inference artifact lineage is incomplete.")
+    _verify_sources(experiment, holdout)
+    selection = await session.get(
+        FinalModelSelectionReportRecord,
+        holdout.final_model_selection_report_id,
+    )
+    if (
+        selection is None
+        or selection.selected_model_family != "ridge_regression"
+        or selection.selected_experiment_id != experiment.id
+        or hash_json(selection.report_configuration)
+        != selection.configuration_hash
+        or hash_json(selection.report_payload) != selection.result_hash
+    ):
+        raise ValueError("Approved artifact selection lineage failed verification.")
     return load_ridge_inference_artifact(
         record.artifact_payload,
         expected_artifact_sha256=record.artifact_sha256,
@@ -478,4 +518,3 @@ def _sha256_lines(values: tuple[str, ...]) -> str:
     for value in values:
         digest.update((value + "\n").encode())
     return digest.hexdigest()
-

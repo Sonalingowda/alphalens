@@ -4,6 +4,7 @@ import Link from "next/link";
 import { ApiUnavailable, EmptyState } from "@/components/dashboard/data-states";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { MarketCandlestickChart } from "@/components/markets/market-candlestick-chart";
+import { PaperTrackControl } from "@/components/opportunities/paper-track-control";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -79,6 +80,17 @@ export default async function OpportunityDetailPage({
           </Button>
         }
       />
+
+      <div className="mb-6 rounded-xl border border-primary/20 bg-primary/5 p-4">
+        <p className="mb-3 text-sm text-muted-foreground">
+          Create an immutable ACTIVE paper track from this persisted opportunity.
+          No outcome is evaluated at selection time.
+        </p>
+        <PaperTrackControl
+          opportunityId={opportunity.opportunity_id}
+          opportunityVersionId={opportunity.opportunity_version_id}
+        />
+      </div>
 
       <div className="space-y-6">
         <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">

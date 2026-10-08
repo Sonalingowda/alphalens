@@ -8,7 +8,6 @@ from uuid import UUID, uuid4
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.persistence.model_comparisons import APPROVED_EXPERIMENT_IDS
 from app.persistence.models import (
     ExperimentPredictionEvidenceRecord,
     FinalModelSelectionReportExplainabilityRecord,
@@ -25,32 +24,23 @@ from app.persistence.models import (
     StatisticalValidationReportRecord,
     ValidationRunRecord,
 )
-from app.persistence.statistical_validation import (
-    APPROVED_EXPLAINABILITY_ARTIFACT_IDS,
+from app.persistence.research_cycle_lineage import (
+    EXPLAINABILITY_MODEL_FAMILIES,
+    current_cycle_explainability,
+    current_cycle_experiments,
+    current_cycle_report,
 )
+from app.research.dataset import build_model_ready_dataset
 from app.research.final_model_selection import (
     FINAL_MODEL_SELECTION_REPORT_VERSION,
     AutomatedTestEvidence,
     BuiltFinalModelSelectionReport,
     ImmutableArtifact,
+    OFFICIAL_ARTIFACT_MODEL_FAMILY,
     PredictionEvidenceSummary,
     build_final_model_selection_report,
     sha256_json,
     sha256_lines,
-)
-
-
-APPROVED_MODEL_COMPARISON_REPORT_ID = UUID(
-    "214f9dcb-0539-41f2-bb72-fb59e9327d0f"
-)
-APPROVED_STATISTICAL_VALIDATION_REPORT_ID = UUID(
-    "4020cdea-5193-425e-8b38-b10b60a2a470"
-)
-APPROVED_RESIDUAL_DIAGNOSTICS_REPORT_ID = UUID(
-    "c272678b-d63b-4764-9d73-1653a03ae1b4"
-)
-APPROVED_MARKET_REGIME_ANALYSIS_REPORT_ID = UUID(
-    "c4daf88b-4b71-4f0e-9a64-2f8cc95b318e"
 )
 
 
@@ -69,38 +59,32 @@ async def create_final_model_selection_report(
 ) -> PersistedFinalModelSelectionReport:
     """Aggregate verified immutable evidence without fitting any model."""
     async with session.begin():
-        comparison_record = await _required_record(
+        dataset = await build_model_ready_dataset(session)
+        comparison_record = await current_cycle_report(
             session,
             ModelComparisonReportRecord,
-            APPROVED_MODEL_COMPARISON_REPORT_ID,
+            dataset,
         )
-        statistical_record = await _required_record(
+        statistical_record = await current_cycle_report(
             session,
             StatisticalValidationReportRecord,
-            APPROVED_STATISTICAL_VALIDATION_REPORT_ID,
+            dataset,
         )
-        residual_record = await _required_record(
+        residual_record = await current_cycle_report(
             session,
             ResidualDiagnosticsReportRecord,
-            APPROVED_RESIDUAL_DIAGNOSTICS_REPORT_ID,
+            dataset,
         )
-        market_record = await _required_record(
+        market_record = await current_cycle_report(
             session,
             MarketRegimeAnalysisReportRecord,
-            APPROVED_MARKET_REGIME_ANALYSIS_REPORT_ID,
+            dataset,
         )
-        explainability_records = tuple(
-            (
-                await session.scalars(
-                    select(ModelExplainabilityArtifactRecord).where(
-                        ModelExplainabilityArtifactRecord.id.in_(
-                            APPROVED_EXPLAINABILITY_ARTIFACT_IDS
-                        )
-                    )
-                )
-            ).all()
+        experiments = await current_cycle_experiments(session, dataset)
+        explainability_records = await current_cycle_explainability(
+            session,
+            experiments,
         )
-        experiments = await _approved_experiments(session)
 
         comparison = _comparison_artifact(comparison_record)
         statistical = _report_artifact(
@@ -150,6 +134,10 @@ async def create_final_model_selection_report(
             prediction_evidence=prediction_evidence,
             test_evidence=test_evidence,
         )
+        if built.selected_model_family != OFFICIAL_ARTIFACT_MODEL_FAMILY:
+            raise ValueError(
+                "Final selection is incompatible with the official artifact."
+            )
 
         existing = (
             await session.scalars(
@@ -336,36 +324,6 @@ def _explainability_artifact(
     )
 
 
-async def _approved_experiments(
-    session: AsyncSession,
-) -> tuple[RegressionExperimentRecord, ...]:
-    records = tuple(
-        (
-            await session.scalars(
-                select(RegressionExperimentRecord).where(
-                    RegressionExperimentRecord.id.in_(
-                        tuple(APPROVED_EXPERIMENT_IDS.values())
-                    )
-                )
-            )
-        ).all()
-    )
-    by_family = {record.model_family: record for record in records}
-    if set(by_family) != set(APPROVED_EXPERIMENT_IDS):
-        raise ValueError("Approved experiment registry is incomplete.")
-    ordered: list[RegressionExperimentRecord] = []
-    for family, experiment_id in APPROVED_EXPERIMENT_IDS.items():
-        record = by_family[family]
-        if (
-            record.id != experiment_id
-            or not record.point_in_time_validated
-            or record.final_holdout_evaluated
-        ):
-            raise ValueError(f"Approved {family} experiment differs.")
-        ordered.append(record)
-    return tuple(ordered)
-
-
 async def _prediction_evidence_summaries(
     session: AsyncSession,
     experiments: tuple[RegressionExperimentRecord, ...],
@@ -539,10 +497,9 @@ def _validate_cross_artifact_references(
         residual.statistical_validation_report_id != statistical.id
         or market.statistical_validation_report_id != statistical.id
         or market.residual_diagnostics_report_id != residual.id
-        or {
-            record.id for record in explainability
-        }
-        != set(APPROVED_EXPLAINABILITY_ARTIFACT_IDS)
+        or len(explainability) != len(EXPLAINABILITY_MODEL_FAMILIES)
+        or {record.model_family for record in explainability}
+        != set(EXPLAINABILITY_MODEL_FAMILIES)
     ):
         raise ValueError("Immutable source artifact links differ.")
     for record in explainability:

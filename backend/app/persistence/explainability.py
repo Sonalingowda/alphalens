@@ -9,9 +9,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.persistence.models import (
     ModelExplainabilityArtifactRecord,
-    RegressionExperimentRecord,
     RegressionExperimentSplitRecord,
 )
+from app.persistence.research_cycle_lineage import current_cycle_experiments
 from app.research.dataset import build_model_ready_dataset
 from app.research.explainability import (
     EXPLAINABILITY_REPORT_VERSION,
@@ -22,16 +22,6 @@ from app.research.explainability import (
     SourceSplitEvidence,
     build_explainability_artifact,
 )
-
-
-APPROVED_EXPLAINABILITY_EXPERIMENTS: dict[str, UUID] = {
-    "random_forest_regression": UUID(
-        "50c8db70-b323-49a0-ad51-09e2cef7081a"
-    ),
-    "xgboost_regression": UUID(
-        "ae78c39e-abef-4ec0-81df-e99d3922da6f"
-    ),
-}
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,21 +36,21 @@ async def create_explainability_artifact(
     session: AsyncSession,
     model_family: str,
 ) -> PersistedExplainabilityArtifact:
-    approved_id = APPROVED_EXPLAINABILITY_EXPERIMENTS.get(model_family)
-    if approved_id is None:
+    if model_family not in ("random_forest_regression", "xgboost_regression"):
         raise ValueError(
             f"Explainability is not approved for {model_family}."
         )
 
     async with session.begin():
         dataset = await build_model_ready_dataset(session)
-        experiment = await session.get(
-            RegressionExperimentRecord,
-            approved_id,
+        experiments = await current_cycle_experiments(session, dataset)
+        experiment = next(
+            (item for item in experiments if item.model_family == model_family),
+            None,
         )
-        if experiment is None or experiment.model_family != model_family:
+        if experiment is None:
             raise ValueError(
-                f"The approved {model_family} experiment is unavailable."
+                f"The current-cycle {model_family} experiment is unavailable."
             )
         split_records = tuple(
             (
