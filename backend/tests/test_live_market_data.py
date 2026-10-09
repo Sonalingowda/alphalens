@@ -780,6 +780,41 @@ class LiveIngestionServiceTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(stopped.is_set())
 
+    async def test_production_lifespan_serves_before_initial_warmup_finishes(self) -> None:
+        from app import prediction_api
+
+        warmup_started = asyncio.Event()
+        release_warmup = asyncio.Event()
+        ingestion_started = asyncio.Event()
+        isolated_service = LiveMarketIngestionService(
+            repository=MarketSnapshotMemoryRepository(),
+            code_version="test.live_market_data.readiness",
+        )
+
+        async def delayed_warmup() -> int:
+            warmup_started.set()
+            await release_warmup.wait()
+            return 0
+
+        async def run(stop_event: asyncio.Event) -> None:
+            ingestion_started.set()
+            await stop_event.wait()
+
+        with (
+            patch.object(prediction_api, "live_market_ingestion", isolated_service),
+            patch.object(isolated_service, "run", run),
+            patch.object(
+                isolated_service,
+                "warmup_history_with_retry",
+                delayed_warmup,
+            ),
+        ):
+            async with prediction_api._infrastructure_lifespan(prediction_api.app):
+                await asyncio.wait_for(warmup_started.wait(), timeout=1)
+                self.assertFalse(ingestion_started.is_set())
+                release_warmup.set()
+                await asyncio.wait_for(ingestion_started.wait(), timeout=1)
+
 
 class BinanceWebSocketClientTests(unittest.IsolatedAsyncioTestCase):
     async def test_disconnect_reconnects_with_exponential_backoff(self) -> None:

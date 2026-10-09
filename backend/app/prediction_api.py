@@ -745,15 +745,52 @@ async def _supervise_ingestion(
     logger.info("ingestion_supervisor_stopped")
 
 
+async def _run_market_data_supervisors(
+    stop_event: asyncio.Event,
+    service: LiveMarketIngestionService,
+) -> None:
+    """Warm market history before opening the live ingestion stream.
+
+    The initial warmup is deliberately kept before live ingestion so the
+    existing gap/deduplication ordering remains deterministic.  This whole
+    coordinator runs after the ASGI lifespan yields, which lets the server
+    answer truthful infrastructure readiness checks while warmup is in
+    progress.
+    """
+    try:
+        await service.warmup_history_with_retry()
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.exception("warmup_history_failed")
+
+    if stop_event.is_set():
+        return
+
+    ingestion_task = asyncio.create_task(
+        _supervise_ingestion(stop_event, service),
+        name="alphalens-live-market-ingestion",
+    )
+    warmup_task = asyncio.create_task(
+        _supervise_warmup(stop_event, service),
+        name="alphalens-warmup-supervisor",
+    )
+    try:
+        await asyncio.gather(ingestion_task, warmup_task)
+    finally:
+        ingestion_task.cancel()
+        warmup_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await ingestion_task
+        with suppress(asyncio.CancelledError):
+            await warmup_task
+
+
 @asynccontextmanager
 async def _infrastructure_lifespan(application):
     global _runtime_pipeline
     try:
         async with _application_lifespan(application):
-            try:
-                await live_market_ingestion.warmup_history_with_retry()
-            except Exception:
-                logger.exception("warmup_history_failed")
             em_inference = await _try_load_expected_move_inference()
             if em_inference is not None:
                 _runtime_pipeline = build_runtime_pipeline(
@@ -762,41 +799,34 @@ async def _infrastructure_lifespan(application):
                 )
                 logger.info("runtime_pipeline_upgraded_to_v2")
             stop_event = asyncio.Event()
-            ingestion_task = asyncio.create_task(
-                _supervise_ingestion(stop_event, live_market_ingestion),
-                name="alphalens-live-market-ingestion",
+            market_data_task = asyncio.create_task(
+                _run_market_data_supervisors(stop_event, live_market_ingestion),
+                name="alphalens-market-data-supervisors",
             )
             application.state.live_market_ingestion = live_market_ingestion
-            application.state.live_market_ingestion_task = ingestion_task
+            application.state.live_market_ingestion_task = market_data_task
             lifecycle_sweep_task = asyncio.create_task(
                 _run_lifecycle_sweep(stop_event),
                 name="alphalens-lifecycle-sweep",
             )
             application.state.lifecycle_sweep_task = lifecycle_sweep_task
-            warmup_task = asyncio.create_task(
-                _supervise_warmup(stop_event, live_market_ingestion),
-                name="alphalens-warmup-supervisor",
-            )
             event_loop_lag_task = asyncio.create_task(
                 _supervise_event_loop_lag(stop_event),
                 name="alphalens-event-loop-lag-supervisor",
             )
-            application.state.warmup_task = warmup_task
+            application.state.warmup_task = market_data_task
             application.state.event_loop_lag_task = event_loop_lag_task
             try:
                 yield
             finally:
                 stop_event.set()
-                ingestion_task.cancel()
+                market_data_task.cancel()
                 lifecycle_sweep_task.cancel()
-                warmup_task.cancel()
                 event_loop_lag_task.cancel()
                 with suppress(asyncio.CancelledError):
-                    await ingestion_task
+                    await market_data_task
                 with suppress(asyncio.CancelledError):
                     await lifecycle_sweep_task
-                with suppress(asyncio.CancelledError):
-                    await warmup_task
                 with suppress(asyncio.CancelledError):
                     await event_loop_lag_task
     finally:
