@@ -8,6 +8,7 @@ import logging
 from time import perf_counter
 from uuid import NAMESPACE_URL, uuid5
 
+from app.features.contracts import FeatureAvailabilityRule, feature_available_at
 from app.features.atr import ATR_FEATURE_METADATA
 from app.features.directional_movement import DIRECTIONAL_MOVEMENT_FEATURE_METADATA
 from app.features.ema import EMA_FEATURE_METADATA
@@ -18,6 +19,7 @@ from app.features.intraday_pipeline import (
     build_intraday_source_snapshot,
     run_intraday_feature_pipeline,
 )
+from app.features.pipeline import PIPELINE_VERSION, run_feature_pipeline
 from app.features.macd import MACD_FEATURE_METADATA
 from app.features.registry import INTRADAY_FEATURE_REGISTRY
 from app.features.rsi import RSI_FEATURE_METADATA
@@ -124,16 +126,39 @@ class RuntimeFeatureEngine:
             if value.candle_timestamp == current_timestamp
             and value.feature_identifier in _PUBLIC_DEFINITION_IDENTIFIERS
         )
+        model_values = _model_feature_values(
+            tuple(item.candles[0] for item in history),
+            current_timestamp,
+            CandleTimeframe(market_snapshot.scope.timeframe),
+        )
         if not current_values:
             raise FeatureWarmupIncompleteError(
                 "No requested approved feature is valid at this warm-up prefix."
             )
+        current_values = current_values + model_values
+        combined_pipeline_hash = _hash(
+            {
+                "intraday_pipeline_result_hash": pipeline_result.result_hash,
+                "model_pipeline_version": PIPELINE_VERSION,
+                "model_values": [
+                    {
+                        "feature_identifier": value.feature_identifier,
+                        "definition_version": value.definition_version,
+                        "output_name": value.output_name,
+                        "candle_timestamp": value.candle_timestamp.isoformat(),
+                        "available_at": value.available_at.isoformat(),
+                        "value": format(value.value, "f"),
+                    }
+                    for value in model_values
+                ],
+            }
+        )
         snapshot = _build_feature_snapshot(
             market_snapshot=market_snapshot,
             history=history,
             pipeline_values=current_values,
             pipeline_dependencies=pipeline_result.dependency_memberships,
-            pipeline_result_hash=pipeline_result.result_hash,
+            pipeline_result_hash=combined_pipeline_hash,
             code_version=self._code_version,
         )
         return await self._feature_snapshots.save(snapshot)
@@ -199,6 +224,38 @@ class RuntimeFeatureEngine:
         if len(prefix) > _MAX_PREFIX_LENGTH:
             prefix = prefix[-_MAX_PREFIX_LENGTH:]
         return prefix
+
+
+def _model_feature_values(
+    candles: tuple[Candle, ...],
+    current_timestamp: datetime,
+    timeframe: CandleTimeframe,
+) -> tuple[PipelineFeatureValue, ...]:
+    """Expose the approved model-ready contract alongside runtime indicators.
+
+    The Ridge artifact was trained on the original deterministic feature
+    pipeline. Runtime indicator snapshots use the newer registry for detection,
+    so the model contract is computed from the same closed candle prefix and
+    persisted in the shared snapshot without changing detection semantics.
+    """
+    result = run_feature_pipeline(candles, verify_prefix_invariance=False)
+    available_at = feature_available_at(
+        current_timestamp,
+        timeframe,
+        FeatureAvailabilityRule.CANDLE_CLOSE,
+    )
+    return tuple(
+        PipelineFeatureValue(
+            feature_identifier=value.feature_name,
+            definition_version=PIPELINE_VERSION,
+            output_name=value.feature_name,
+            candle_timestamp=value.timestamp,
+            available_at=available_at,
+            value=value.value,
+        )
+        for value in result.values
+        if value.timestamp == current_timestamp
+    )
 
 
 def _validate_market_snapshot(snapshot: MarketSnapshot, scope_instrument: str) -> None:

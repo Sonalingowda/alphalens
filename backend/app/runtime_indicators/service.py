@@ -62,6 +62,23 @@ _OUTPUT_UNIT_BY_NAME = {
     **{name: "dimensionless" for name in _DIMENSIONLESS_UNITS},
 }
 
+_MODEL_ONLY_OUTPUT_NAMES = frozenset(
+    {
+        "bollinger_20_2_lower",
+        "bollinger_20_2_middle",
+        "bollinger_20_2_upper",
+        "ema_20",
+        "ema_50",
+        "macd_12_26_9_histogram",
+        "macd_12_26_9_line",
+        "macd_12_26_9_signal",
+        "rsi_14",
+        "sma_20",
+        "sma_50",
+        "volume_sma_20",
+    }
+)
+
 
 class RuntimeIndicatorService(IndicatorProjectionService):
     """Project persisted feature snapshot values into immutable indicators."""
@@ -81,6 +98,7 @@ class RuntimeIndicatorService(IndicatorProjectionService):
         return tuple(
             _project_value(value)
             for value in feature_snapshot.values
+            if value.output_name not in _MODEL_ONLY_OUTPUT_NAMES
         )
 
 

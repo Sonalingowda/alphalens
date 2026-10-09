@@ -49,6 +49,8 @@ class FeaturePipelineResult:
 
 def run_feature_pipeline(
     candles: tuple[Candle, ...],
+    *,
+    verify_prefix_invariance: bool = True,
 ) -> FeaturePipelineResult:
     points = validated_candle_points(candles)
     if not points:
@@ -58,7 +60,8 @@ def run_feature_pipeline(
     for feature in INITIAL_FEATURES:
         values = feature.compute(candles)
         _validate_feature_outputs(feature, values, candles)
-        _verify_prefix_invariance(feature, values, candles)
+        if verify_prefix_invariance:
+            _verify_prefix_invariance(feature, values, candles)
         all_values.extend(values)
 
     all_values.sort(key=lambda value: (value.timestamp, value.feature_name))

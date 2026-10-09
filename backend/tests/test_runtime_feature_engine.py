@@ -43,6 +43,18 @@ EXPECTED_DEFINITIONS = {
     "directional_index",
     "average_directional_index",
     "average_directional_movement_rating",
+    "bollinger_20_2_lower",
+    "bollinger_20_2_middle",
+    "bollinger_20_2_upper",
+    "ema_20",
+    "ema_50",
+    "macd_12_26_9_histogram",
+    "macd_12_26_9_line",
+    "macd_12_26_9_signal",
+    "rsi_14",
+    "sma_20",
+    "sma_50",
+    "volume_sma_20",
 }
 
 
@@ -69,7 +81,7 @@ class RuntimeFeatureEngineTests(unittest.IsolatedAsyncioTestCase):
             {value.feature_identifier for value in result.values},
             EXPECTED_DEFINITIONS,
         )
-        self.assertEqual(len(result.values), 23)
+        self.assertEqual(len(result.values), 35)
         self.assertEqual(
             result.registry_hash,
             INTRADAY_FEATURE_REGISTRY.configuration_hash,
