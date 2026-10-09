@@ -627,6 +627,7 @@ async def _supervise_warmup(
     interval_seconds: int = 7200,
     limit: int = 1000,
     sleep_fn: Callable[[float], None] = asyncio.sleep,
+    run_immediately: bool = True,
 ) -> None:
     """Periodic warmup history supervisor.
 
@@ -648,6 +649,8 @@ async def _supervise_warmup(
     """
     backoff = 15.0
     max_backoff = 60.0
+    if not run_immediately:
+        await sleep_fn(interval_seconds)
     while not stop_event.is_set():
         try:
             await service.warmup_history_with_retry(
@@ -772,7 +775,11 @@ async def _run_market_data_supervisors(
         name="alphalens-live-market-ingestion",
     )
     warmup_task = asyncio.create_task(
-        _supervise_warmup(stop_event, service),
+        _supervise_warmup(
+            stop_event,
+            service,
+            run_immediately=False,
+        ),
         name="alphalens-warmup-supervisor",
     )
     try:
