@@ -9,15 +9,15 @@ Validation timestamp: 2026-10-23T20:13:30Z
 ## Candidate identity
 
 - Branch: `release/local-candidate-20261024`
-- Commit: `32cb4e1b0d14ad1ed5f0dacd90bb96eaf5d7f642`
+- Commit: `71796b815e9a8c0dfddd1d7ac1a28a673f87a8a1`
 - Worktree: `/private/tmp/alphalens-local-release-candidate-20261024`
 - Worktree status after commit: clean
 - ORM metadata: `backend/app/persistence/models.py`
   - SHA-256 `caa85ea61fd4970b1f2b4548d189193c07a73f6c948f13aeaa1a22813e794d45`
 - Python dependency declaration: `backend/pyproject.toml`
-  - SHA-256 `c3127e75d5f7c628cb968f59d520a2b8ca9fe6e241b74c3d662f1dc20ec705cd`
+  - SHA-256 `549958cda8a13fdc019e3fe4e7b2ce44aae2b57158819719f9879dc1eb7e3610`
 - Python lockfile: `backend/uv.lock`
-  - SHA-256 `3cc58e4de336767daa4962da20f88cf33c17a43dc2e2337a172d54f5a7e889ae`
+  - SHA-256 `a5e324fb08966c96f8c72afc00917b2e333a3cecb61262a6a9899c633c052959`
 - `pip-audit>=2.9.0` is included in the candidate dev dependency group.
 
 ## Migration graph and transaction behavior
