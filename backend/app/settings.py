@@ -28,6 +28,7 @@ class Settings:
     history_backfill_max_pages: int
     market_data_startup_enabled: bool
     database_url: str
+    migration_database_url: str | None
     database_pool_size: int
     database_max_overflow: int
     database_pool_timeout_seconds: float
@@ -88,6 +89,9 @@ def load_settings() -> Settings:
         database_url=_secret_environment(
             "ALPHALENS_DATABASE_URL",
             "postgresql+asyncpg://alphalens:alphalens_dev@127.0.0.1:5432/alphalens",
+        ),
+        migration_database_url=_optional_secret_environment(
+            "ALPHALENS_MIGRATION_DATABASE_URL"
         ),
         database_pool_size=int(os.getenv("ALPHALENS_DATABASE_POOL_SIZE", "5")),
         database_max_overflow=int(
@@ -188,6 +192,18 @@ def validate_settings(settings: Settings) -> None:
         raise ConfigurationError(
             "ALPHALENS_DATABASE_URL must be a postgresql+asyncpg URL."
         )
+    migration_database = (
+        urlsplit(settings.migration_database_url)
+        if settings.migration_database_url
+        else None
+    )
+    if migration_database is not None and (
+        migration_database.scheme != "postgresql+asyncpg"
+        or not migration_database.hostname
+    ):
+        raise ConfigurationError(
+            "ALPHALENS_MIGRATION_DATABASE_URL must be a postgresql+asyncpg URL."
+        )
     if not 1 <= settings.database_pool_size <= 100:
         raise ConfigurationError("ALPHALENS_DATABASE_POOL_SIZE must be in [1, 100].")
     if not 0 <= settings.database_max_overflow <= 200:
@@ -224,6 +240,14 @@ def validate_settings(settings: Settings) -> None:
                 "Every CORS origin must be an HTTP(S) origin without a path."
             )
     if settings.environment == "production":
+        if migration_database is None:
+            raise ConfigurationError(
+                "Production requires ALPHALENS_MIGRATION_DATABASE_URL."
+            )
+        if migration_database.username == database.username:
+            raise ConfigurationError(
+                "Production migration and runtime database roles must differ."
+            )
         if settings.host in {"127.0.0.1", "localhost", "::1"}:
             raise ConfigurationError(
                 "Production ALPHALENS_API_HOST cannot be loopback-only."
@@ -317,6 +341,23 @@ def _secret_environment(name: str, default: str) -> str:
         raise ConfigurationError(f"Set only one of {name} and {name}_FILE.")
     if file_path is None:
         return direct if direct is not None else default
+    try:
+        with open(file_path, encoding="utf-8") as secret_file:
+            value = secret_file.read().strip()
+    except OSError as error:
+        raise ConfigurationError(f"Cannot read secret file for {name}.") from error
+    if not value:
+        raise ConfigurationError(f"Secret file for {name} is empty.")
+    return value
+
+
+def _optional_secret_environment(name: str) -> str | None:
+    direct = os.getenv(name)
+    file_path = os.getenv(f"{name}_FILE")
+    if direct is not None and file_path is not None:
+        raise ConfigurationError(f"Set only one of {name} and {name}_FILE.")
+    if file_path is None:
+        return direct.strip() if direct and direct.strip() else None
     try:
         with open(file_path, encoding="utf-8") as secret_file:
             value = secret_file.read().strip()

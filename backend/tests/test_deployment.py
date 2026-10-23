@@ -25,6 +25,9 @@ class ProductionConfigurationTests(TestCase):
                 "ALPHALENS_DATABASE_URL": (
                     "postgresql+asyncpg://app:strong-test-value@db/alphalens"
                 ),
+                "ALPHALENS_MIGRATION_DATABASE_URL": (
+                    "postgresql+asyncpg://migrator:strong-migration-value@db/alphalens"
+                ),
                 "ALPHALENS_REDIS_URL": (
                     "redis://:strong-redis-value@redis:6379/0"
                 ),
@@ -51,6 +54,9 @@ class ProductionConfigurationTests(TestCase):
                 ),
                 "ALPHALENS_DATABASE_URL": (
                     "postgresql+asyncpg://app:replace-me@db/alphalens"
+                ),
+                "ALPHALENS_MIGRATION_DATABASE_URL": (
+                    "postgresql+asyncpg://migrator:strong-migration-value@db/alphalens"
                 ),
             },
             clear=True,

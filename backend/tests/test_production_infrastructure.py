@@ -56,6 +56,44 @@ class ConfigurationSecretTests(TestCase):
             with self.assertRaisesRegex(ConfigurationError, "only one"):
                 load_settings()
 
+    def test_migration_database_url_is_loaded_separately(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "ALPHALENS_DATABASE_URL": (
+                    "postgresql+asyncpg://app:runtime@db/alphalens"
+                ),
+                "ALPHALENS_MIGRATION_DATABASE_URL": (
+                    "postgresql+asyncpg://migrator:migration@db/alphalens"
+                ),
+            },
+            clear=True,
+        ):
+            settings = load_settings()
+
+        self.assertNotEqual(settings.database_url, settings.migration_database_url)
+        self.assertIn("migrator:", settings.migration_database_url or "")
+
+    def test_production_requires_distinct_migration_role(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "ALPHALENS_ENVIRONMENT": "production",
+                "ALPHALENS_API_HOST": "0.0.0.0",
+                "ALPHALENS_CORS_ALLOWED_ORIGINS": "https://dashboard.example.com",
+                "ALPHALENS_DATABASE_URL": (
+                    "postgresql+asyncpg://app:runtime@db/alphalens"
+                ),
+                "ALPHALENS_REDIS_URL": "redis://:redis@redis:6379/0",
+                "ALPHALENS_MIGRATION_DATABASE_URL": (
+                    "postgresql+asyncpg://app:runtime@db/alphalens"
+                ),
+            },
+            clear=True,
+        ):
+            with self.assertRaisesRegex(ConfigurationError, "roles must differ"):
+                load_settings()
+
     def test_build_provenance_loads_from_build_environment(self) -> None:
         with patch.dict(
             os.environ,
