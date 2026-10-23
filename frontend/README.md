@@ -16,10 +16,38 @@ Copy `.env.example` to `.env.local` and set:
 
 ```shell
 ALPHALENS_API_BASE_URL=http://127.0.0.1:8000
+NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_test_<development-publishable-key>
 ```
 
-This server-side variable identifies the API consumed by Next.js. It is the
-only frontend environment variable.
+`NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` must belong to the same Clerk development
+instance configured for the backend. It is intentionally browser-visible; do
+not place a Clerk secret key (`sk_...`) in frontend files, browser-exposed
+variables, or the frontend image.
+
+The backend must be configured separately with `ALPHALENS_CLERK_SECRET_KEY`,
+`ALPHALENS_CLERK_AUTHORIZED_PARTIES`, and
+`ALPHALENS_CLERK_AUTHORIZED_USER_ID`. The authorized parties must contain the
+exact browser origin used for the frontend, such as
+`http://127.0.0.1:13000` and `http://localhost:13000`, and backend CORS must
+allow that same origin. Never mix `pk_test_...` with `sk_live_...` or
+`pk_live_...` with `sk_test_...`.
+
+For the standalone production build, use the repository's supported launcher:
+
+```shell
+npm run build
+HOSTNAME=localhost PORT=3000 npm start
+```
+
+This invokes `.next/standalone/server.js`; the Docker image uses the equivalent
+`node server.js` entrypoint. Using `localhost` is intentional for local Clerk
+development: the Clerk development-browser middleware may issue same-origin
+requests through `localhost`, so binding only to the IPv4 literal
+`127.0.0.1` can produce a self-request timeout. `localhost` still serves the
+local loopback interface and must not be exposed through a public bind in
+development. A raw `curl` request is not a Clerk browser-login test: Clerk
+development middleware may require its browser session state before an
+authenticated page can render.
 
 ## Local development
 
