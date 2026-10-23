@@ -44,10 +44,22 @@ class _PaperRecord(Base):
 
 class PaperExecutionRecord(_PaperRecord):
     __tablename__ = "paper_executions"
+    __table_args__ = (
+        UniqueConstraint(
+            "opportunity_version_id",
+            name="uq_paper_executions_opportunity_version",
+        ),
+    )
 
 
 class PaperPositionRecord(_PaperRecord):
     __tablename__ = "paper_positions"
+    __table_args__ = (
+        UniqueConstraint(
+            "opportunity_version_id",
+            name="uq_paper_positions_opportunity_version",
+        ),
+    )
     execution_id: Mapped[str] = mapped_column(
         String(256),
         ForeignKey("paper_executions.identity", ondelete="RESTRICT"),
@@ -57,6 +69,12 @@ class PaperPositionRecord(_PaperRecord):
 
 class PaperExitRecord(_PaperRecord):
     __tablename__ = "paper_exits"
+    __table_args__ = (
+        UniqueConstraint(
+            "opportunity_version_id",
+            name="uq_paper_exits_opportunity_version",
+        ),
+    )
     position_id: Mapped[str] = mapped_column(
         String(256),
         ForeignKey("paper_positions.identity", ondelete="RESTRICT"),
@@ -66,14 +84,30 @@ class PaperExitRecord(_PaperRecord):
 
 class PaperOutcomeRecord(_PaperRecord):
     __tablename__ = "paper_outcomes"
+    __table_args__ = (
+        UniqueConstraint(
+            "opportunity_version_id",
+            name="uq_paper_outcomes_opportunity_version",
+        ),
+        ForeignKeyConstraint(
+            ["execution_id"],
+            ["paper_executions.identity"],
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["position_id"],
+            ["paper_positions.identity"],
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["exit_id"],
+            ["paper_exits.identity"],
+            ondelete="RESTRICT",
+        ),
+    )
     execution_id: Mapped[str] = mapped_column(String(256), nullable=False)
     position_id: Mapped[str] = mapped_column(String(256), nullable=False)
     exit_id: Mapped[str] = mapped_column(String(256), nullable=False)
-    __table_args__ = (
-        ForeignKeyConstraint(["execution_id"], ["paper_executions.identity"], ondelete="RESTRICT"),
-        ForeignKeyConstraint(["position_id"], ["paper_positions.identity"], ondelete="RESTRICT"),
-        ForeignKeyConstraint(["exit_id"], ["paper_exits.identity"], ondelete="RESTRICT"),
-    )
 
 
 class PaperTrackingEventRecord(Base):
@@ -285,6 +319,14 @@ class IngestionBatchRecord(Base):
         Index(
             "ix_ingestion_batches_acquisition_attempt_id",
             "acquisition_attempt_id",
+        ),
+        Index(
+            "uq_active_ingestion_batch_market",
+            "asset_identifier",
+            "quote_currency",
+            "timeframe",
+            unique=True,
+            postgresql_where=text("is_active"),
         ),
     )
 
@@ -1400,6 +1442,14 @@ class FeaturePipelineRunRecord(Base):
             "ix_feature_pipeline_runs_source_ingestion_batch_id",
             "source_ingestion_batch_id",
         ),
+        Index(
+            "uq_active_feature_run_market",
+            "asset_identifier",
+            "quote_currency",
+            "timeframe",
+            unique=True,
+            postgresql_where=text("is_active"),
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
@@ -1715,6 +1765,14 @@ class ValidationRunRecord(Base):
             "ix_validation_runs_source_ingestion_batch_id",
             "source_ingestion_batch_id",
         ),
+        Index(
+            "uq_active_validation_run_market",
+            "asset_identifier",
+            "quote_currency",
+            "timeframe",
+            unique=True,
+            postgresql_where=text("is_active"),
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
@@ -1842,6 +1900,15 @@ class ForwardLogReturnTargetRunRecord(Base):
         Index(
             "ix_forward_log_return_runs_source_feature_run_id",
             "source_feature_run_id",
+        ),
+        Index(
+            "uq_active_forward_log_return_target_market",
+            "asset_identifier",
+            "quote_currency",
+            "timeframe",
+            "target_name",
+            unique=True,
+            postgresql_where=text("is_active"),
         ),
     )
 
@@ -4216,6 +4283,12 @@ class ModelInferenceArtifactRecord(Base):
         UniqueConstraint(
             "artifact_sha256",
             name="uq_model_inference_artifacts_sha256",
+        ),
+        Index(
+            "uq_model_inference_artifacts_one_active",
+            "release_status",
+            unique=True,
+            postgresql_where=text("release_status = 'ACTIVE'"),
         ),
     )
 
