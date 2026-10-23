@@ -39,8 +39,10 @@ npm run build
 HOSTNAME=localhost PORT=3000 npm start
 ```
 
-This invokes `.next/standalone/server.js`; the Docker image uses the equivalent
-`node server.js` entrypoint. Using `localhost` is intentional for local Clerk
+This prepares the standalone static assets and invokes
+`.next/standalone/server.js`; the Docker image performs the equivalent static
+asset copy in its build stages and uses `node server.js` as the entrypoint.
+Using `localhost` is intentional for local Clerk
 development: the Clerk development-browser middleware may issue same-origin
 requests through `localhost`, so binding only to the IPv4 literal
 `127.0.0.1` can produce a self-request timeout. `localhost` still serves the

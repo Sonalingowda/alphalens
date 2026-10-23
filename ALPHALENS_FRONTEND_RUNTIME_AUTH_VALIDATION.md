@@ -17,10 +17,12 @@ session is available in this environment.
 
 `frontend/next.config.ts:7-12` enables `output: "standalone"`, while the
 previous `frontend/package.json:11` used `next start`, which Next.js rejects for
-standalone output. The candidate now uses:
+standalone output. The candidate now uses `scripts/start-standalone.mjs`.
+That launcher copies `.next/static` into the standalone runtime tree before
+starting the server, matching the Dockerfile's runtime layout.
 
 ```text
-node .next/standalone/server.js
+node scripts/start-standalone.mjs
 ```
 
 The Dockerfile already used the equivalent `node server.js` entrypoint
@@ -49,6 +51,24 @@ Executed under Node `v22.23.3` and npm `10.9.9`:
   `proxy-addr` advisories. No forced upgrade or blanket suppression was made.
 - Bundle scan found no `sk_test_` or `sk_live_` secret-key literals. Public
   Clerk publishable-key references are expected in the browser bundle.
+
+## Real browser smoke evidence
+
+Using disposable Chromium 134 outside the repository against the isolated
+localhost services:
+
+- Root page title: `AlphaLens`.
+- Root heading: `Market surveillance`.
+- Truthful `Unavailable` state present.
+- Signed-out `Sign in` button present.
+- Mobile `Open menu` opened the navigation successfully.
+- `/markets/live` rendered `Live Market Status · AlphaLens` and its unavailable
+  state.
+- Sign-in button opened the Clerk development modal and displayed the email
+  authentication UI.
+- Browser console errors: none.
+- Static JS, CSS, font, and image requests: no failed resource requests after
+  the standalone launcher copied static assets.
 
 ## Local HTTP evidence
 
@@ -106,9 +126,7 @@ The following remain UNVERIFIED, not passed:
 
 Raw `curl` requests without Clerk development-browser state returned Clerk
 signed-out/dev-browser-missing headers. This is not evidence of a successful
-login and was not treated as one. No browser executable or Playwright/Cypress
-runner is installed in the candidate environment, and no credentials were
-printed or invented.
+login and was not treated as one. No credentials were printed or invented.
 
 ## Checklist classification
 
