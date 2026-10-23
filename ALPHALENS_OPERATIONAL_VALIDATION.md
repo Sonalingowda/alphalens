@@ -4,7 +4,7 @@ Status: isolated non-production validation only. No existing demo or localhost
 database, Redis instance, collector, research artifact, or protected-test data
 was used or changed.
 
-Validation timestamp: 2026-10-23T20:11:34Z
+Validation timestamp: 2026-10-23T20:13:30Z
 
 ## Candidate identity
 
@@ -18,6 +18,7 @@ Validation timestamp: 2026-10-23T20:11:34Z
   - SHA-256 `c3127e75d5f7c628cb968f59d520a2b8ca9fe6e241b74c3d662f1dc20ec705cd`
 - Python lockfile: `backend/uv.lock`
   - SHA-256 `3cc58e4de336767daa4962da20f88cf33c17a43dc2e2337a172d54f5a7e889ae`
+- `pip-audit>=2.9.0` is included in the candidate dev dependency group.
 
 ## Migration graph and transaction behavior
 
@@ -131,18 +132,25 @@ PYTHONPATH=. uv run --offline --group dev pytest \
 
 The warnings were a Starlette/httpx deprecation warning and an asyncpg
 coroutine resource warning in an existing market-data test; neither caused a
-test failure. A standalone `pip-audit` executable was unavailable, and its
-package was not present in the offline package cache. No dependency-security
-PASS is claimed from that limitation.
+test failure. The final security audit was:
+
+```text
+uv run --group dev pip-audit --progress-spinner off
+No known vulnerabilities found
+```
+
+The audit found `certifi 2026.7.22` / `PYSEC-2026-4320` before repair; the
+lockfile now contains `certifi 2026.10.23`.
 
 ## Remaining blockers
 
-1. Production least-privilege roles and default privileges are not yet approved
-   or verified against the real deployment database.
-2. External security audit tooling (`pip-audit`) was unavailable offline.
-3. No approved production inference artifact exists; health correctly remains
+1. The production startup currently uses one database URL for both migrations
+   and runtime. Separate migration/runtime roles and default privileges require
+   a deployment-specific design and owner approval before production least
+   privilege can be claimed.
+2. No approved production inference artifact exists; health correctly remains
    unavailable and Section 6 remains not validated.
-4. No production deployment, protected-test evaluation, or real trading-risk
+3. No production deployment, protected-test evaluation, or real trading-risk
    validation was performed.
 
 This document is operational evidence for an isolated candidate only. It is
