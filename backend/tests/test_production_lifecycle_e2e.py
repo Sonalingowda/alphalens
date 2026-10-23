@@ -6,6 +6,7 @@ dashboard projection, and outcome resolver with isolated in-memory repositories.
 It does not change any policy or production implementation.
 """
 
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import asyncio
@@ -35,6 +36,10 @@ from app.opportunity_intelligence.persistence import (
     QualificationMemoryRepository,
     RankingMemoryRepository,
     ScoringMemoryRepository,
+)
+from app.opportunity_intelligence.repositories import (
+    ScopedRepositoryQuery,
+    VersionConflictError,
 )
 from app.outcome_resolution.service import OutcomeResolutionService
 from app.runtime_assessment import RuntimeAssessmentService
@@ -283,15 +288,18 @@ def _runtime_bundle() -> tuple[object, dict[str, object]]:
             self.results.append(result)
             return result
 
-    return RuntimeWrapper(), {
+    wrapper = RuntimeWrapper()
+    return wrapper, {
         "markets": markets,
         "features": features,
         "contexts": contexts,
         "detections": detections,
         "opportunities": opportunities,
         "plans": plans,
-        "lifecycles": lifecycles,
         "outcomes": outcomes,
+        "lifecycles": lifecycles,
+        "notifications": notifications,
+        "pipeline": wrapper,
         "lifecycle_service": lifecycle_service,
         "dashboard": dashboard,
         "wrapper": RuntimeWrapper,
@@ -403,3 +411,51 @@ class ProductionLifecycleE2ETests(IsolatedAsyncioTestCase):
         self.assertEqual(resolved_lifecycle.current_state.value, "RESOLVED")
         self.assertEqual(query.calls[0]["after"], signal)
         self.assertEqual(query.calls[0]["up_to_and_including"], plan.valid_until)
+
+    async def test_replaying_ranked_opportunity_is_idempotent_and_conflict_safe(self) -> None:
+        first, repos, live_start = await self._run_case(flat=False)
+        self.assertEqual(first.outcome.value, "COMPLETED")
+        assert first.opportunity is not None
+        assert first.lifecycle is not None
+
+        before = {
+            "opportunities": len(repos["opportunities"]._records),
+            "lifecycle_aggregates": len(repos["lifecycles"]._records),
+            "lifecycle_events": len(repos["lifecycles"]._events._records),
+            "notifications": len(repos["notifications"]._records),
+        }
+
+        replay = await repos["pipeline"].run_for_snapshot(
+            await repos["markets"].get_latest(
+                ScopedRepositoryQuery(
+                    scope=SCOPE,
+                    as_of=live_start + timedelta(minutes=5),
+                    limit=1,
+                )
+            ),
+            live_start + timedelta(minutes=5),
+        )
+
+        self.assertIsNotNone(replay)
+        assert replay is not None
+        self.assertEqual(replay.outcome.value, "COMPLETED")
+        self.assertEqual(
+            replay.opportunity.opportunity_version_id,
+            first.opportunity.opportunity_version_id,
+        )
+        self.assertEqual(
+            replay.lifecycle.canonical_sha256(),
+            first.lifecycle.canonical_sha256(),
+        )
+        self.assertEqual(before, {
+            "opportunities": len(repos["opportunities"]._records),
+            "lifecycle_aggregates": len(repos["lifecycles"]._records),
+            "lifecycle_events": len(repos["lifecycles"]._events._records),
+            "notifications": len(repos["notifications"]._records),
+        })
+
+        events = tuple(repos["lifecycles"]._events._records.values())
+        self.assertEqual(await repos["lifecycles"].save_event_batch(events), events)
+        conflicting = replace(events[0], reason_code="replay.conflict")
+        with self.assertRaises(VersionConflictError):
+            await repos["lifecycles"].save_event_batch((conflicting,))

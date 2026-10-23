@@ -26,15 +26,20 @@ export function OpportunityFeed({
   filters,
   initialItems,
   initialEnrichments,
+  initialPartialFailures,
   currentPrice,
 }: {
   filters: OpportunityFilters;
   initialItems: OpportunityDashboardItem[];
   initialEnrichments: Map<string, Enrichment>;
+  initialPartialFailures?: string[];
   currentPrice: string | null;
 }) {
   const [items, setItems] = useState<OpportunityDashboardItem[]>(initialItems);
   const [enrichments, setEnrichments] = useState<Map<string, Enrichment>>(initialEnrichments);
+  const [partialFailureCount, setPartialFailureCount] = useState(
+    initialPartialFailures?.length ?? 0,
+  );
   const [error, setError] = useState<string | null>(null);
   const [failureCount, setFailureCount] = useState(0);
   const enrichmentsRef = useRef(enrichments);
@@ -53,6 +58,7 @@ export function OpportunityFeed({
     setFailureCount(0);
     setError(null);
     setItems(result.data.items);
+    setPartialFailureCount(result.data.partial_failures?.length ?? 0);
 
     const existing = enrichmentsRef.current;
     const newEnrichments = new Map<string, Enrichment>();
@@ -84,7 +90,6 @@ export function OpportunityFeed({
             item={item}
             plan={enrich?.plan ?? null}
             currentPrice={currentPrice}
-            confidence={enrich?.confidence ?? null}
             snr={enrich?.snr ?? null}
             quality={enrich?.quality ?? null}
           />
@@ -109,6 +114,22 @@ export function OpportunityFeed({
     );
   }
 
+  const partialFailureNotice = partialFailureCount > 0 ? (
+    <div className="flex items-center gap-2 rounded-lg border border-amber-500/25 bg-amber-500/5 px-4 py-3 text-sm text-amber-300">
+      <TriangleAlert className="size-4 shrink-0" aria-hidden="true" />
+      <span>
+        {partialFailureCount} opportunity {partialFailureCount === 1 ? "detail is" : "details are"} unavailable. Persisted summaries remain visible; retry to load the missing detail.
+      </span>
+      <button
+        type="button"
+        className="ml-auto shrink-0 rounded border border-amber-400/40 px-2 py-1 text-xs hover:bg-amber-400/10"
+        onClick={() => window.location.reload()}
+      >
+        Retry details
+      </button>
+    </div>
+  ) : null;
+
   if (items.length === 0) {
     return (
       <EmptyState
@@ -118,5 +139,10 @@ export function OpportunityFeed({
     );
   }
 
-  return cardsGrid;
+  return partialFailureNotice ? (
+    <div className="space-y-4">
+      {partialFailureNotice}
+      {cardsGrid}
+    </div>
+  ) : cardsGrid;
 }

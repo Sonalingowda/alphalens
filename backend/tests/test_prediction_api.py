@@ -1,14 +1,18 @@
 """Endpoint, security, and repeatability tests for prediction API v1."""
 
+import asyncio
 import inspect
 from pathlib import Path
 import unittest
+from unittest.mock import AsyncMock
 from uuid import UUID
 
 import numpy as np
 from fastapi.testclient import TestClient
+from redis.exceptions import RedisError
 
 from app.api.application import create_prediction_app
+from app.api.rate_limit import RateLimitUnavailable, RedisRateLimiter
 from app.inference.artifact import PackagedRidgeInference
 from app.inference.repository import LoadedProductionArtifact
 from app.inference.service import ProductionPredictionService
@@ -60,6 +64,50 @@ class PredictionAPITests(unittest.TestCase):
             health.headers["X-AlphaLens-API-Version"],
             "1.0.0",
         )
+
+    def test_rate_limit_returns_retryable_structured_429(self) -> None:
+        client = TestClient(
+            create_prediction_app(
+                artifact_provider=self.app.state.artifact_provider,
+                audit_writer=self.app.state.audit_writer,
+                dashboard_provider=self.app.state.dashboard_provider,
+                rate_limit_requests=1,
+                rate_limit_window_seconds=60,
+            )
+        )
+
+        first = client.get("/api/v1/version")
+        limited = client.get("/api/v1/version")
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(limited.status_code, 429)
+        self.assertEqual(limited.json()["error"]["code"], "RATE_LIMITED")
+        self.assertEqual(limited.headers["Retry-After"], "60")
+
+    def test_shared_rate_limiter_uses_atomic_redis_decisions(self) -> None:
+        redis = AsyncMock()
+        redis.eval.side_effect = ([1, 60], [2, 59])
+        limiter = RedisRateLimiter(
+            redis,
+            requests=1,
+            window_seconds=60,
+        )
+
+        first = asyncio.run(limiter.async_check("client"))
+        second = asyncio.run(limiter.async_check("client"))
+
+        self.assertTrue(first.allowed)
+        self.assertFalse(second.allowed)
+        self.assertEqual(second.retry_after_seconds, 59)
+        self.assertEqual(redis.eval.await_count, 2)
+
+    def test_shared_rate_limiter_fails_closed_when_redis_is_unavailable(self) -> None:
+        redis = AsyncMock()
+        redis.eval.side_effect = RedisError("offline")
+        limiter = RedisRateLimiter(redis, requests=1, window_seconds=60)
+
+        with self.assertRaises(RateLimitUnavailable):
+            asyncio.run(limiter.async_check("client"))
 
     def test_model_endpoint_returns_exact_ordered_schema(self) -> None:
         response = self.client.get("/api/v1/model")

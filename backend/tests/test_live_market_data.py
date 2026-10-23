@@ -1,6 +1,7 @@
 """Sprint 1 live Binance market ingestion tests."""
 
 import asyncio
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from hashlib import sha256
@@ -743,6 +744,33 @@ class LiveIngestionServiceTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertNotEqual(attempt_after.state.value, "UNAVAILABLE")
 
+    async def test_market_data_startup_disabled_makes_no_external_request(self) -> None:
+        from app import prediction_api
+
+        isolated_service = LiveMarketIngestionService(
+            repository=MarketSnapshotMemoryRepository(),
+            code_version="test.live_market_data.disabled",
+        )
+        isolated_warmup = AsyncMock(return_value=0)
+        disabled_settings = replace(
+            prediction_api.settings,
+            market_data_startup_enabled=False,
+        )
+
+        with (
+            patch.object(prediction_api, "settings", disabled_settings),
+            patch.object(
+                isolated_service,
+                "warmup_history_with_retry",
+                isolated_warmup,
+            ),
+        ):
+            await prediction_api._run_market_data_supervisors(
+                asyncio.Event(), isolated_service
+            )
+
+        isolated_warmup.assert_not_awaited()
+
     async def test_production_lifespan_starts_and_stops_live_ingestion(self) -> None:
         from app import prediction_api
 
@@ -763,6 +791,14 @@ class LiveIngestionServiceTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch.object(prediction_api, "live_market_ingestion", isolated_service),
+            patch.object(
+                prediction_api,
+                "settings",
+                replace(
+                    prediction_api.settings,
+                    market_data_startup_enabled=True,
+                ),
+            ),
             patch.object(isolated_service, "run", run),
             patch.object(
                 isolated_service,
@@ -802,6 +838,14 @@ class LiveIngestionServiceTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch.object(prediction_api, "live_market_ingestion", isolated_service),
+            patch.object(
+                prediction_api,
+                "settings",
+                replace(
+                    prediction_api.settings,
+                    market_data_startup_enabled=True,
+                ),
+            ),
             patch.object(isolated_service, "run", run),
             patch.object(
                 isolated_service,

@@ -1,10 +1,9 @@
 import { Activity, Radar, ShieldCheck, TriangleAlert } from "lucide-react";
 
 import { MarketStatus } from "@/components/markets/market-status";
-import { OpportunityCard } from "@/components/opportunities/opportunity-card";
 import { OpportunityFeed } from "@/components/opportunities/opportunity-feed";
 import { OpportunityFilters } from "@/components/opportunities/opportunity-filters";
-import { ApiUnavailable, EmptyState } from "@/components/dashboard/data-states";
+import { ApiUnavailable } from "@/components/dashboard/data-states";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { MetricCard } from "@/components/dashboard/metric-card";
 import { Badge } from "@/components/ui/badge";
@@ -51,7 +50,7 @@ export default async function DashboardPage({
     getLiveMarket(filters.instrument, filters.timeframe),
     getOpportunities(filters),
   ]);
-  const enrichments = await loadOpportunityEnrichments(
+  const { enrichments, partialFailures } = await loadOpportunityEnrichments(
     opportunities.ok ? opportunities.data.items : [],
   );
   const currentPrice = market.ok && market.data.candles.length
@@ -126,6 +125,12 @@ export default async function DashboardPage({
               filters={filters}
               initialItems={opportunities.data.items}
               initialEnrichments={enrichments}
+              initialPartialFailures={Array.from(
+                new Set([
+                  ...(opportunities.data.partial_failures ?? []),
+                  ...partialFailures,
+                ]),
+              )}
               currentPrice={currentPrice}
             />
           )}
@@ -137,7 +142,11 @@ export default async function DashboardPage({
 
 async function loadOpportunityEnrichments(
   items: OpportunityDashboardItem[],
-): Promise<Map<string, OpportunityEnrichment>> {
+): Promise<{
+  enrichments: Map<string, OpportunityEnrichment>;
+  partialFailures: string[];
+}> {
+  const partialFailures: string[] = [];
   const entries = await Promise.all(
     items.map(async (item) => {
       const quality = item.quality_score ?? null;
@@ -152,6 +161,7 @@ async function loadOpportunityEnrichments(
       );
 
       if (!detailResult.ok) {
+        partialFailures.push(item.opportunity_id);
         return [item.opportunity_id, { plan: null, confidence: null, snr: null, quality }] as const;
       }
 
@@ -168,5 +178,5 @@ async function loadOpportunityEnrichments(
     }),
   );
 
-  return new Map(entries);
+  return { enrichments: new Map(entries), partialFailures };
 }

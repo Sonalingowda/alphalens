@@ -282,6 +282,35 @@ class RedisInfrastructureTests(IsolatedAsyncioTestCase):
 
 
 class WorkerLifecycleTests(IsolatedAsyncioTestCase):
+    async def test_worker_retries_after_coordination_outage(self) -> None:
+        coordination = AsyncMock()
+        coordination.heartbeat.side_effect = [
+            CoordinationUnavailableError("temporary outage"),
+            None,
+        ]
+        stop_event = asyncio.Event()
+
+        async def empty_queue(*args, **kwargs):
+            stop_event.set()
+            return None
+
+        coordination.dequeue.side_effect = empty_queue
+        worker = BackgroundWorker(
+            coordination=coordination,
+            configuration=WorkerConfiguration(
+                queue="infra",
+                worker_id="worker-1",
+                poll_seconds=0.001,
+                max_retries=1,
+            ),
+            handler=AsyncMock(),
+        )
+
+        await worker.run(stop_event)
+
+        self.assertEqual(coordination.heartbeat.await_count, 2)
+        coordination.dequeue.assert_awaited_once()
+
     async def test_worker_retries_without_interpreting_task_reference(self) -> None:
         coordination = AsyncMock()
         handler = AsyncMock(side_effect=[RuntimeError("transient"), None])

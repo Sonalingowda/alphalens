@@ -642,6 +642,33 @@ class LifecyclePostgreSQLRepository(
                     text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
                     {"key": f"lifecycle:{opportunity_id}"},
                 )
+                event_ids = tuple(event.event_id for event in ordered)
+                existing_rows = (
+                    await session.scalars(
+                        self._events._base_select().where(
+                            ImmutableAggregateRecord.entity_id.in_(event_ids)
+                        )
+                    )
+                ).all()
+                existing_by_id = {
+                    row.entity_id: row for row in existing_rows
+                }
+                existing_batch = tuple(
+                    existing_by_id.get(event.event_id) for event in ordered
+                )
+                if all(row is not None for row in existing_batch):
+                    if all(
+                        row.canonical_hash == event.canonical_sha256()
+                        for row, event in zip(existing_batch, ordered)
+                    ):
+                        return ordered
+                    raise VersionConflictError(
+                        "Lifecycle replay conflicts with persisted event content."
+                    )
+                if any(row is not None for row in existing_batch):
+                    raise VersionConflictError(
+                        "Lifecycle append partially overlaps the persisted history."
+                    )
                 latest = await session.scalar(
                     self._events._ordered(
                         self._events._base_select().where(

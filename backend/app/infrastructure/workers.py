@@ -6,7 +6,10 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 import logging
 
-from app.infrastructure.redis import RedisInfrastructure
+from app.infrastructure.redis import (
+    CoordinationUnavailableError,
+    RedisInfrastructure,
+)
 
 
 TaskHandler = Callable[[str], Awaitable[None]]
@@ -44,14 +47,26 @@ class BackgroundWorker:
 
     async def run(self, stop_event: asyncio.Event) -> None:
         while not stop_event.is_set():
-            await self._coordination.heartbeat(
-                self._configuration.worker_id,
-                ttl_seconds=self._configuration.heartbeat_ttl_seconds,
-            )
-            task_reference = await self._coordination.dequeue(
-                self._configuration.queue,
-                timeout_seconds=max(int(self._configuration.poll_seconds), 1),
-            )
+            try:
+                await self._coordination.heartbeat(
+                    self._configuration.worker_id,
+                    ttl_seconds=self._configuration.heartbeat_ttl_seconds,
+                )
+                task_reference = await self._coordination.dequeue(
+                    self._configuration.queue,
+                    timeout_seconds=max(int(self._configuration.poll_seconds), 1),
+                )
+            except CoordinationUnavailableError:
+                logger.warning(
+                    "background_coordination_unavailable; retrying",
+                    extra={"worker_id": self._configuration.worker_id},
+                    exc_info=True,
+                )
+                await _wait_or_stop(
+                    stop_event,
+                    self._configuration.poll_seconds,
+                )
+                continue
             if task_reference is None:
                 continue
             await self._execute_with_retry(task_reference, stop_event)

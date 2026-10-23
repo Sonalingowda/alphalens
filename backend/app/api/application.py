@@ -17,6 +17,11 @@ from starlette.middleware.cors import CORSMiddleware
 
 from app.api.errors import PredictionAPIError
 from app.api.metrics import PredictionAPIMetrics
+from app.api.rate_limit import (
+    LocalRateLimiter,
+    RateLimitUnavailable,
+    RedisRateLimiter,
+)
 from app.api.schemas import PredictionRequest, PredictionResponse
 from app.inference.artifact import hash_json
 from app.inference.repository import (
@@ -49,6 +54,9 @@ DashboardProvider = Callable[[], Awaitable[dict[str, Any]]]
 def create_prediction_app(
     *,
     maximum_request_bytes: int = 32_768,
+    rate_limit_requests: int = 120,
+    rate_limit_window_seconds: float = 60.0,
+    distributed_rate_limiter: RedisRateLimiter | None = None,
     cors_allowed_origins: tuple[str, ...] = (),
     artifact_provider: ArtifactProvider | None = None,
     audit_writer: AuditWriter | None = None,
@@ -64,6 +72,10 @@ def create_prediction_app(
         openapi_url=None,
     )
     app.state.maximum_request_bytes = maximum_request_bytes
+    app.state.rate_limiter = distributed_rate_limiter or LocalRateLimiter(
+        requests=rate_limit_requests,
+        window_seconds=rate_limit_window_seconds,
+    )
     app.state.artifact_provider = (
         artifact_provider or _database_artifact_provider
     )
@@ -215,33 +227,57 @@ def create_prediction_app(
             request.state.response_hash = hash_json(payload)
             response = JSONResponse(status_code=413, content=payload)
         else:
-            logger.info(
-                "Prediction API request received.",
-                extra={
-                    "request_path": request.url.path,
-                    "http_method": request.method,
-                },
-            )
+            client_host = request.client.host if request.client else "unknown"
             try:
-                response = await call_next(request)
-            except Exception:
-                logger.exception(
-                    "Prediction API unhandled error.",
-                    extra={
-                        "request_path": request.url.path,
-                        "http_method": request.method,
-                        "error_code": "INTERNAL_ERROR",
-                        "status_code": 500,
-                    },
-                )
-                request.state.error_code = "INTERNAL_ERROR"
+                decision = await app.state.rate_limiter.async_check(client_host)
+            except RateLimitUnavailable:
+                request.state.error_code = "RATE_LIMITER_UNAVAILABLE"
                 payload = _error_payload(
-                    code="INTERNAL_ERROR",
-                    message="The prediction service encountered an error.",
+                    code="RATE_LIMITER_UNAVAILABLE",
+                    message="Request protection is unavailable.",
                     details=[],
                 )
                 request.state.response_hash = hash_json(payload)
-                response = JSONResponse(status_code=500, content=payload)
+                response = JSONResponse(status_code=503, content=payload)
+            else:
+                if not decision.allowed:
+                    request.state.error_code = "RATE_LIMITED"
+                    payload = _error_payload(
+                        code="RATE_LIMITED",
+                        message="Request rate exceeded. Retry after the indicated delay.",
+                        details=[],
+                    )
+                    request.state.response_hash = hash_json(payload)
+                    response = JSONResponse(status_code=429, content=payload)
+                    response.headers["Retry-After"] = str(decision.retry_after_seconds)
+                else:
+                    logger.info(
+                        "Prediction API request received.",
+                        extra={
+                            "request_path": request.url.path,
+                            "http_method": request.method,
+                        },
+                    )
+                    try:
+                        response = await call_next(request)
+                    except Exception:
+                        logger.exception(
+                            "Prediction API unhandled error.",
+                            extra={
+                                "request_path": request.url.path,
+                                "http_method": request.method,
+                                "error_code": "INTERNAL_ERROR",
+                                "status_code": 500,
+                            },
+                        )
+                        request.state.error_code = "INTERNAL_ERROR"
+                        payload = _error_payload(
+                            code="INTERNAL_ERROR",
+                            message="The prediction service encountered an error.",
+                            details=[],
+                        )
+                        request.state.response_hash = hash_json(payload)
+                        response = JSONResponse(status_code=500, content=payload)
         completed_at = datetime.now(timezone.utc)
         latency_microseconds = max(
             (perf_counter_ns() - started_ns) // 1_000,

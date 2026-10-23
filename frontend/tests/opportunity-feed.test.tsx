@@ -183,4 +183,21 @@ describe("OpportunityFeed transient failure handling", () => {
     expect(screen.getByText("Live Prediction API unavailable")).toBeInTheDocument();
     expect(screen.queryByText(/Backend reconnecting/)).not.toBeInTheDocument();
   });
+
+  it("distinguishes unavailable detail fields from a failed opportunity feed", () => {
+    render(
+      <OpportunityFeed
+        filters={{ instrument: "BTCUSDT", timeframe: "5m" }}
+        initialItems={[makeItem()]}
+        initialEnrichments={new Map()}
+        initialPartialFailures={["opportunity.test.a"]}
+        currentPrice={null}
+      />,
+    );
+
+    expect(screen.getByText(/1 opportunity detail is unavailable/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Retry details" })).toBeInTheDocument();
+    expect(screen.getByText("ENTRY")).toBeInTheDocument();
+    expect(screen.getAllByText("Unavailable").length).toBeGreaterThan(0);
+  });
 });

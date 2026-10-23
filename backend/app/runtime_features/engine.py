@@ -300,12 +300,12 @@ def _contiguous_suffix(
     if len(prefix) <= 1:
         return prefix
     step = timeframe_duration(timeframe)
-    end = len(prefix)
+    start = len(prefix) - 1
     for i in range(len(prefix) - 1, 0, -1):
         if prefix[i].candles[0].timestamp - prefix[i - 1].candles[0].timestamp != step:
             break
-        end = i
-    return prefix[end - 1:]
+        start = i - 1
+    return prefix[start:]
 
 
 def _build_source(

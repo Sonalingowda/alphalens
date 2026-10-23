@@ -23,6 +23,7 @@ from app.runtime_features import (
     FeatureWarmupIncompleteError,
     RuntimeFeatureEngine,
 )
+from app.runtime_features.engine import _contiguous_suffix
 
 
 START = datetime(2026, 1, 1, tzinfo=timezone.utc)
@@ -204,6 +205,16 @@ class RuntimeFeatureEngineTests(unittest.IsolatedAsyncioTestCase):
             await engine.resolve(third)
 
         self.assertEqual(len(features._records), 0)
+
+    def test_contiguous_suffix_excludes_candle_before_gap(self) -> None:
+        prefix = tuple(_market_snapshot(index) for index in (0, 1, 3, 4))
+
+        suffix = _contiguous_suffix(prefix, CandleTimeframe.MINUTE_5)
+
+        self.assertEqual(
+            tuple(item.candles[0].timestamp for item in suffix),
+            tuple(prefix[index].candles[0].timestamp for index in (2, 3)),
+        )
 
 
 async def _engine_with_history(count: int):

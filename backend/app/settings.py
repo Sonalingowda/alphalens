@@ -26,12 +26,15 @@ class Settings:
     market_data_timeout_seconds: float
     history_backfill_start: datetime
     history_backfill_max_pages: int
+    market_data_startup_enabled: bool
     database_url: str
     database_pool_size: int
     database_max_overflow: int
     database_pool_timeout_seconds: float
     redis_url: str
     prediction_api_max_request_bytes: int
+    api_rate_limit_requests: int
+    api_rate_limit_window_seconds: float
     metrics_enabled: bool
     worker_concurrency: int
     worker_poll_seconds: float
@@ -78,6 +81,10 @@ def load_settings() -> Settings:
         history_backfill_max_pages=int(
             os.getenv("ALPHALENS_HISTORY_BACKFILL_MAX_PAGES", "100")
         ),
+        market_data_startup_enabled=_environment_bool(
+            "ALPHALENS_MARKET_DATA_STARTUP_ENABLED",
+            False,
+        ),
         database_url=_secret_environment(
             "ALPHALENS_DATABASE_URL",
             "postgresql+asyncpg://alphalens:alphalens_dev@127.0.0.1:5432/alphalens",
@@ -98,6 +105,12 @@ def load_settings() -> Settings:
                 "ALPHALENS_PREDICTION_API_MAX_REQUEST_BYTES",
                 "32768",
             )
+        ),
+        api_rate_limit_requests=int(
+            os.getenv("ALPHALENS_API_RATE_LIMIT_REQUESTS", "120")
+        ),
+        api_rate_limit_window_seconds=float(
+            os.getenv("ALPHALENS_API_RATE_LIMIT_WINDOW_SECONDS", "60")
         ),
         metrics_enabled=_environment_bool("ALPHALENS_METRICS_ENABLED", True),
         worker_concurrency=int(os.getenv("ALPHALENS_WORKER_CONCURRENCY", "2")),
@@ -161,6 +174,14 @@ def validate_settings(settings: Settings) -> None:
         raise ConfigurationError(
             "ALPHALENS_PREDICTION_API_MAX_REQUEST_BYTES must be between "
             "1024 and 1048576."
+        )
+    if not 1 <= settings.api_rate_limit_requests <= 100_000:
+        raise ConfigurationError(
+            "ALPHALENS_API_RATE_LIMIT_REQUESTS must be between 1 and 100000."
+        )
+    if not 1 <= settings.api_rate_limit_window_seconds <= 3_600:
+        raise ConfigurationError(
+            "ALPHALENS_API_RATE_LIMIT_WINDOW_SECONDS must be between 1 and 3600."
         )
     database = urlsplit(settings.database_url)
     if database.scheme != "postgresql+asyncpg" or not database.hostname:

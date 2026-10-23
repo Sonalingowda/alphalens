@@ -419,6 +419,23 @@ class LifecycleMemoryRepository(InMemoryImmutableRepository[OpportunityLifecycle
                 for event in self._events._records.values()
                 if event.opportunity_id == ordered[0].opportunity_id
             )
+            existing_by_id = {event.event_id: event for event in existing}
+            existing_batch = tuple(
+                existing_by_id.get(event.event_id) for event in ordered
+            )
+            if all(event is not None for event in existing_batch):
+                if all(
+                    stored.canonical_sha256() == event.canonical_sha256()
+                    for stored, event in zip(existing_batch, ordered)
+                ):
+                    return tuple(existing_batch)  # type: ignore[arg-type]
+                raise VersionConflictError(
+                    "Lifecycle replay conflicts with persisted event content."
+                )
+            if any(event is not None for event in existing_batch):
+                raise VersionConflictError(
+                    "Lifecycle append partially overlaps the persisted history."
+                )
             if existing:
                 latest = max(existing, key=lambda item: item.sequence)
                 first = ordered[0]

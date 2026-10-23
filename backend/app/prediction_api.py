@@ -10,6 +10,7 @@ from typing import Callable
 from sqlalchemy import text
 
 from app.api.application import create_prediction_app
+from app.api.rate_limit import RedisRateLimiter
 from app.infrastructure.observability import install_observability
 from app.infrastructure.redis import RedisInfrastructure
 from app.infrastructure.schema import schema_is_current
@@ -200,8 +201,16 @@ live_market_ingestion = _PipelineAwareLiveMarketIngestionService(
     code_version="alphalens.prediction_api.1.0.0",
     rest_base_url=settings.market_data_rest_base_url,
 )
+rate_limiter = RedisRateLimiter.from_url(
+    settings.redis_url,
+    requests=settings.api_rate_limit_requests,
+    window_seconds=settings.api_rate_limit_window_seconds,
+)
 app = create_prediction_app(
     maximum_request_bytes=settings.prediction_api_max_request_bytes,
+    rate_limit_requests=settings.api_rate_limit_requests,
+    rate_limit_window_seconds=settings.api_rate_limit_window_seconds,
+    distributed_rate_limiter=rate_limiter,
     cors_allowed_origins=tuple(
         dict.fromkeys(
             settings.cors_allowed_origins + settings.clerk_authorized_parties
@@ -760,6 +769,10 @@ async def _run_market_data_supervisors(
     answer truthful infrastructure readiness checks while warmup is in
     progress.
     """
+    if not settings.market_data_startup_enabled:
+        logger.info("market_data_startup_disabled")
+        return
+
     try:
         await service.warmup_history_with_retry()
     except asyncio.CancelledError:
@@ -838,6 +851,7 @@ async def _infrastructure_lifespan(application):
                     await event_loop_lag_task
     finally:
         await redis_infrastructure.close()
+        await rate_limiter.close()
 
 
 app.router.lifespan_context = _infrastructure_lifespan

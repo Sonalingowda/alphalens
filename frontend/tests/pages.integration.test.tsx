@@ -229,7 +229,7 @@ describe("Page integration: Dashboard", () => {
     expect(screen.getByText("Opportunities")).toBeInTheDocument();
     expect(screen.getAllByText("BTCUSDT").length).toBeGreaterThan(0);
     expect(screen.getAllByText("SELL").length).toBeGreaterThan(0);
-    expect(screen.getByText("ENTRY")).toBeInTheDocument();
+    expect(screen.getAllByText("ENTRY").length).toBeGreaterThan(0);
     expect(screen.getByText("TARGET 1")).toBeInTheDocument();
   });
 
@@ -240,6 +240,46 @@ describe("Page integration: Dashboard", () => {
     render(element as unknown as ReactElement);
 
     expect(screen.getAllByText("Live Prediction API unavailable").length).toBeGreaterThan(0);
+  });
+
+  it("preserves opportunity cards and reports failed detail enrichment separately", async () => {
+    const item = {
+      opportunity_id: "opportunity.partial",
+      opportunity_version_id: "opportunity.partial.v1",
+      scope: { instrument: "BTCUSDT", timeframe: "5m" },
+      stance: "BUY",
+      lifecycle_state: "PUBLISHED",
+      evidence_cutoff: "2026-08-01T00:00:00Z",
+      available_at: "2026-08-01T00:00:00Z",
+      freshness_state: "CURRENT",
+      rank: 1,
+      reason_codes: ["ema.alignment"],
+      has_plan: true,
+      limitations: [],
+      detail_reference: "detail.partial",
+    };
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const path = new URL(String(input)).pathname;
+      if (path === "/health") {
+        return new Response(JSON.stringify({ contract_version: "1.0.0", data: { status: "ready", data: {} }, response_hash: "a".repeat(64) }), { status: 200 });
+      }
+      if (path === "/markets/live") {
+        return new Response(JSON.stringify({ contract_version: "1.0.0", data: { snapshot_id: "market.partial", scope: { instrument: "BTCUSDT", timeframe: "5m" }, candles: [], complete: true, audit: { created_at: "2026-08-01T00:00:00Z", evidence_cutoff: "2026-08-01T00:00:00Z", available_at: "2026-08-01T00:00:00Z", result_hash: "b".repeat(64) } }, response_hash: "b".repeat(64) }), { status: 200 });
+      }
+      if (path === "/api/v1/opportunities/opportunity.partial") {
+        return new Response("detail unavailable", { status: 503 });
+      }
+      return new Response(JSON.stringify({ contract_version: "1.0.0", data: { contract_version: "1.0.0", items: [item], applied_filters: [], sort: "canonical.rank" }, response_hash: "c".repeat(64) }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const element = await DashboardPage({ searchParams: Promise.resolve({}) });
+    render(element as unknown as ReactElement);
+
+    expect(screen.getByText(/1 opportunity detail is unavailable/)).toBeInTheDocument();
+    expect(screen.getByText("BUY")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Retry details" })).toBeInTheDocument();
+    expect(screen.getAllByText("ENTRY").length).toBeGreaterThan(0);
   });
 });
 

@@ -61,14 +61,12 @@ export function OpportunityCard({
   item,
   plan,
   currentPrice,
-  confidence,
   snr,
   quality,
 }: {
   item: OpportunityDashboardItem;
   plan?: OpportunityPlan | null;
   currentPrice?: string | null;
-  confidence?: string | null;
   snr?: string | null;
   quality?: string | null;
 }) {
