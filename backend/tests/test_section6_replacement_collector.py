@@ -17,6 +17,7 @@ from scripts.section6_replacement_collector import (
     checkpoint_document,
     decode_checkpoint,
     parse_engineering_fixture,
+    sha256_hex,
 )
 
 
@@ -129,6 +130,26 @@ class Section6ReplacementCollectorTests(unittest.TestCase):
                 store.raw_path("../outside")
             with self.assertRaisesRegex(CollectorValidationError, "Unsafe"):
                 store.raw_path("a" * 63)
+
+    def test_recovery_rejects_tampered_raw_bytes_and_uses_prior_checkpoint(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            store = FilesystemCollectorStore(Path(directory))
+            first = store.commit(CollectorState(), engineering_candle(1_760_328_000_000))
+            second = store.commit(first, engineering_candle(1_760_328_000_000 + CANDLE_MS))
+            store.raw_path(second.raw_response_hashes[-1]).write_bytes(b"tampered")
+            recovered = store.recover()
+            self.assertEqual(recovered.checkpoint_sequence, 1)
+
+    def test_recovery_rejects_symlinked_raw_path(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, tempfile.TemporaryDirectory() as outside:
+            store = FilesystemCollectorStore(Path(directory))
+            document = engineering_candle(1_760_328_000_000)
+            raw_hash = sha256_hex(json.dumps(document, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8"))
+            outside_path = Path(outside) / "outside.json"
+            outside_path.write_text("{}", encoding="utf-8")
+            store.raw_path(raw_hash).symlink_to(outside_path)
+            with self.assertRaisesRegex(CollectorValidationError, "Symlinked"):
+                store.commit(CollectorState(), document)
 
 
 if __name__ == "__main__":

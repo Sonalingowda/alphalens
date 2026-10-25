@@ -242,7 +242,10 @@ class FilesystemCollectorStore:
     def _safe_hash_path(self, root: Path, value: str) -> Path:
         if not _HASH_RE.fullmatch(value):
             raise CollectorValidationError("Unsafe storage identifier")
-        candidate = (root / f"{value}.json").resolve()
+        original = root / f"{value}.json"
+        if original.is_symlink():
+            raise CollectorValidationError("Symlinked storage path is not allowed")
+        candidate = original.resolve()
         if root.resolve() not in candidate.parents:
             raise CollectorValidationError("Storage path escapes root")
         return candidate
@@ -295,10 +298,24 @@ class FilesystemCollectorStore:
         self._atomic_write(self.latest_path, checkpoint_bytes)
         return next_state
 
+    @staticmethod
+    def _read_regular_file(path: Path) -> bytes:
+        if path.is_symlink() or not path.is_file():
+            raise CollectorValidationError("Storage file is not a regular file")
+        return path.read_bytes()
+
+    def _raw_response_is_intact(self, response_hash: str) -> bool:
+        try:
+            raw_path = self.raw_path(response_hash)
+            raw_bytes = self._read_regular_file(raw_path)
+        except (OSError, CollectorValidationError):
+            return False
+        return sha256_hex(raw_bytes) == response_hash
+
     def _valid_checkpoint(self, path: Path) -> CollectorState | None:
         try:
-            state = decode_checkpoint(json.loads(path.read_bytes()))
-            if any(not self.raw_path(item).exists() for item in state.raw_response_hashes):
+            state = decode_checkpoint(json.loads(self._read_regular_file(path)))
+            if any(not self._raw_response_is_intact(item) for item in state.raw_response_hashes):
                 return None
             return state
         except (OSError, ValueError, json.JSONDecodeError, CollectorValidationError):
