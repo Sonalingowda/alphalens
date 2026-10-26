@@ -4,7 +4,10 @@ import asyncio
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
+import json
 import logging
+import os
+from pathlib import Path
 from typing import Callable
 
 from sqlalchemy import text
@@ -37,6 +40,7 @@ from app.opportunity_intelligence.repositories import (
 )
 from app.persistence.database import session_factory
 from app.runtime_pipeline import build_runtime_pipeline
+from app.thesis_intelligence import ThesisIntelligenceService
 from app.inference.repository import load_expected_move_artifact
 from app.paper_execution import (
     PaperExecutionPersistence,
@@ -218,6 +222,7 @@ app = create_prediction_app(
     ),
 )
 lifecycle_repository = LifecyclePostgreSQLRepository(session_factory)
+thesis_service = ThesisIntelligenceService(session_factory)
 paper_tracking_selection_service = PaperTrackingSelectionService(
     persistence=PaperExecutionPersistence(session_factory),
     authoritative_loader=RepositoryBackedPaperTrackingAuthoritativeLoader(
@@ -246,13 +251,20 @@ opportunity_app = create_opportunity_intelligence_app(
     market_repository=market_snapshot_repository,
     lifecycle_repository=lifecycle_repository,
     outcome_repository=OutcomePostgreSQLRepository(session_factory),
+    opportunity_repository=OpportunityPostgreSQLRepository(session_factory),
+    thesis_service=thesis_service,
 )
 _mvp_paths = {
     "/api/v1/opportunities",
     "/api/v1/opportunities/{opportunity_id}",
+    "/api/v1/opportunities/{opportunity_id}/economics",
     "/api/v1/opportunities/history",
+    "/api/v1/opportunities/assessments",
+    "/api/v1/opportunities/assessments/{opportunity_id}",
     "/api/v1/opportunity-intelligence/health",
     "/api/v1/outcomes/{opportunity_id}",
+    "/api/v1/theses",
+    "/api/v1/theses/{thesis_id}",
     "/health",
     "/markets/live",
     "/opportunities",
@@ -282,6 +294,25 @@ async def pipeline_health() -> dict:
         "pending_tasks": len(_pipeline_tasks),
         "warmup_rest_base_url": settings.market_data_rest_base_url,
     }
+
+
+@app.get("/api/v1/local-runtime/status", include_in_schema=False)
+async def local_runtime_status() -> dict[str, object]:
+    """Read the private local worker status file when configured.
+
+    The endpoint is intentionally development-only and read-only. Production
+    deployments do not expose a local filesystem status contract.
+    """
+    if settings.environment != "development":
+        return {"status": "unavailable", "reason": "local_runtime_disabled"}
+    status_path = os.getenv("ALPHALENS_LOCAL_RUNTIME_STATUS_PATH")
+    if not status_path:
+        return {"status": "unconfigured", "reason": "worker_status_path_missing"}
+    try:
+        payload = json.loads(Path(status_path).read_text())
+    except (OSError, ValueError):
+        return {"status": "unavailable", "reason": "worker_status_unavailable"}
+    return {"status": "configured", "worker": payload}
 
 
 @app.post("/api/v1/pipeline/run-latest", include_in_schema=False)

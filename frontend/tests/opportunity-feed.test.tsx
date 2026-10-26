@@ -166,7 +166,7 @@ describe("OpportunityFeed transient failure handling", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("fails closed immediately when there are no last-good items", async () => {
+  it("preserves a legitimate empty state after one transient failure", async () => {
     script = [timeoutFailure];
 
     render(
@@ -180,8 +180,28 @@ describe("OpportunityFeed transient failure handling", () => {
 
     await advanceOnePoll();
 
+    expect(screen.getByText(/Backend reconnecting/)).toBeInTheDocument();
+    expect(screen.getByText("No qualified opportunities")).toBeInTheDocument();
+    expect(screen.queryByText("Live Prediction API unavailable")).not.toBeInTheDocument();
+  });
+
+  it("shows an outage only after repeated failures with an empty last-good state", async () => {
+    script = [timeoutFailure, timeoutFailure, timeoutFailure];
+
+    render(
+      <OpportunityFeed
+        filters={{ instrument: "BTCUSDT", timeframe: "5m" }}
+        initialItems={[]}
+        initialEnrichments={new Map()}
+        currentPrice={null}
+      />,
+    );
+
+    for (let index = 0; index < FAILURE_THRESHOLD; index += 1) {
+      await advanceOnePoll();
+    }
+
     expect(screen.getByText("Live Prediction API unavailable")).toBeInTheDocument();
-    expect(screen.queryByText(/Backend reconnecting/)).not.toBeInTheDocument();
   });
 
   it("distinguishes unavailable detail fields from a failed opportunity feed", () => {

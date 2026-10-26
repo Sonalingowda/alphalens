@@ -13,8 +13,10 @@ import type {
   LiveMarketSnapshot,
   MvpHealth,
   OpportunityDetail,
+  AssessmentDetailResponse,
   OpportunityFilters,
   OpportunityPage,
+  LocalRuntimeStatus,
 } from "@/lib/types";
 
 const DEFAULT_API_BASE_URL = "http://127.0.0.1:8000";
@@ -86,6 +88,10 @@ export function getMvpHealth(): Promise<ApiResult<MvpHealth>> {
   return requestEnvelope<MvpHealth>("/health");
 }
 
+export function getLocalRuntimeStatus(): Promise<ApiResult<LocalRuntimeStatus>> {
+  return requestEnvelope<LocalRuntimeStatus>("/api/v1/local-runtime/status");
+}
+
 export function getLiveMarket(
   instrument = "BTCUSDT",
   timeframe = "5m",
@@ -115,6 +121,16 @@ export function getOpportunityDetail(
   const query = `?${queryString({ as_of: asOf })}`;
   return requestEnvelope<OpportunityDetail>(
     `/api/v1/opportunities/${encodeURIComponent(opportunityId)}${query}`,
+  );
+}
+
+export function getAssessmentDetail(
+  opportunityId: string,
+  asOf?: string,
+): Promise<ApiResult<AssessmentDetailResponse>> {
+  const query = queryString({ as_of: asOf });
+  return requestEnvelope<AssessmentDetailResponse>(
+    `/api/v1/opportunities/assessments/${encodeURIComponent(opportunityId)}${query ? `?${query}` : ""}`,
   );
 }
 

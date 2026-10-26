@@ -28,8 +28,6 @@ export function OpportunityFilters({ values }: { values: FilterValues }) {
           className="h-10 w-full rounded-md border bg-background/70 px-3 text-sm outline-none focus:border-primary/60"
         >
           <option value="5m">5 minutes</option>
-          <option value="10m">10 minutes</option>
-          <option value="15m">15 minutes</option>
         </select>
       </label>
       <label>

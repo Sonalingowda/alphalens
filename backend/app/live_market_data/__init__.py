@@ -28,6 +28,17 @@ from app.live_market_data.processing import (
 )
 from app.live_market_data.service import LiveMarketIngestionService
 from app.live_market_data.snapshots import build_market_snapshot
+from app.live_market_data.continuous import (
+    ContinuousClosedCandleProcessor,
+    FilesystemRuntimeCheckpointStore,
+    RuntimeCheckpoint,
+    RuntimeCheckpointError,
+    RuntimeGapError,
+    RuntimeHealthSnapshot,
+    RuntimeOutOfOrderError,
+    RuntimeProcessingError,
+    RuntimeProcessingOutcome,
+)
 
 
 __all__ = (
@@ -51,4 +62,13 @@ __all__ = (
     "LiveMessageValidationError",
     "TenMinuteCandleAggregator",
     "build_market_snapshot",
+    "ContinuousClosedCandleProcessor",
+    "FilesystemRuntimeCheckpointStore",
+    "RuntimeCheckpoint",
+    "RuntimeCheckpointError",
+    "RuntimeGapError",
+    "RuntimeHealthSnapshot",
+    "RuntimeOutOfOrderError",
+    "RuntimeProcessingError",
+    "RuntimeProcessingOutcome",
 )

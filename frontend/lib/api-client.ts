@@ -94,11 +94,11 @@ function isApiEnvelope<T>(value: unknown): value is ApiEnvelope<T> {
   );
 }
 
-async function clientRequest<T>(path: string): Promise<T> {
+async function clientRequest<T>(path: string, signal?: AbortSignal): Promise<T> {
   const response = await fetch(`${apiBaseUrl()}${path}`, {
     cache: "no-store",
     headers: { Accept: "application/json" },
-    signal: AbortSignal.timeout(8_000),
+    signal: signal ?? AbortSignal.timeout(8_000),
   });
   if (!response.ok) {
     throw new Error(`API request failed with status ${response.status}.`);
@@ -106,9 +106,12 @@ async function clientRequest<T>(path: string): Promise<T> {
   return (await response.json()) as T;
 }
 
-async function clientRequestEnvelope<T>(path: string): Promise<ApiResult<T>> {
+async function clientRequestEnvelope<T>(
+  path: string,
+  signal?: AbortSignal,
+): Promise<ApiResult<T>> {
   try {
-    const envelope = await clientRequest<unknown>(path);
+    const envelope = await clientRequest<unknown>(path, signal);
     if (isApiEnvelope<T>(envelope)) {
       return {
         ok: true,
@@ -129,6 +132,7 @@ async function clientRequestEnvelope<T>(path: string): Promise<ApiResult<T>> {
 export function fetchOpportunities(
   filters: OpportunityFilters,
   asOf: string = new Date().toISOString(),
+  signal?: AbortSignal,
 ): Promise<ApiResult<OpportunityPage>> {
   const query = queryString({
     as_of: asOf,
@@ -137,5 +141,5 @@ export function fetchOpportunities(
     stance: filters.stance,
     search: filters.search,
   });
-  return clientRequestEnvelope<OpportunityPage>(`/api/v1/opportunities?${query}`);
+  return clientRequestEnvelope<OpportunityPage>(`/api/v1/opportunities?${query}`, signal);
 }

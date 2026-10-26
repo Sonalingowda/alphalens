@@ -21,6 +21,7 @@ def _client(
     detail: object | None = None,
     plans: object | None = None,
     include_market: bool = False,
+    opportunities: object | None = None,
 ) -> tuple[TestClient, SimpleNamespace, SimpleNamespace, SimpleNamespace]:
     dashboard_value = dashboard or SimpleNamespace(
         items=(),
@@ -60,12 +61,58 @@ def _client(
         market_repository=(
             market_repository if include_market else None  # type: ignore[arg-type]
         ),
+        opportunity_repository=opportunities,  # type: ignore[arg-type]
         clock=lambda: datetime(2025, 1, 1, 0, 5, 1, tzinfo=timezone.utc),
     )
     return TestClient(app), dashboard_repository, detail_repository, market_repository
 
 
 class OpportunityAPITests(unittest.TestCase):
+    def test_assessment_projection_is_explicitly_unranked(self) -> None:
+        assessment = SimpleNamespace(
+            to_dict=lambda: {
+                "opportunity_id": "opportunity.1",
+                "opportunity_version_id": "opportunity.1.v1",
+                "scope": {"instrument": "BTCUSDT", "timeframe": "5m"},
+                "stance": "BUY",
+                "plan": {
+                    "direction": "BUY",
+                    "entry_zone": {"lower": "100", "upper": "100"},
+                },
+                "audit": {
+                    "available_at": AS_OF,
+                    "evidence_cutoff": AS_OF,
+                },
+            }
+        )
+        repository = SimpleNamespace(
+            get_by_scope=AsyncMock(
+                return_value=SimpleNamespace(items=(assessment,), next_cursor=None)
+            ),
+            get_current=AsyncMock(return_value=assessment),
+        )
+        client, _, _, _ = _client(opportunities=repository)
+
+        response = client.get(
+            "/api/v1/opportunities/assessments",
+            params={"as_of": AS_OF},
+        )
+        detail = client.get(
+            "/api/v1/opportunities/assessments/opportunity.1",
+            params={"as_of": AS_OF},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(detail.status_code, 200)
+        self.assertEqual(
+            response.json()["data"]["projection_status"], "assessment_only"
+        )
+        self.assertEqual(
+            response.json()["data"]["model_score_status"],
+            "unavailable_without_approved_artifact",
+        )
+        self.assertIsNone(response.json()["data"]["items"][0].get("score_reference"))
+        self.assertEqual(detail.json()["data"]["opportunity"]["stance"], "BUY")
     def test_dashboard_response_is_versioned_and_deterministically_hashed(self) -> None:
         client, repository, _, _ = _client()
 
@@ -293,6 +340,23 @@ class OpportunityAPITests(unittest.TestCase):
         self.assertEqual(
             first.json()["data"]["components"]["market_snapshots"],
             "unavailable",
+        )
+        self.assertEqual(
+            first.json()["data"]["market_scope"],
+            {
+                "exchange": "binance",
+                "instrument": "BTCUSDT",
+                "timeframe": "5m",
+                "candle_state": "closed",
+            },
+        )
+        self.assertEqual(
+            first.json()["data"]["model_score_status"],
+            "unavailable_without_approved_artifact",
+        )
+        self.assertEqual(
+            first.json()["data"]["notification_status"],
+            "intent_persistence_only",
         )
 
     def test_live_market_fails_closed_when_repository_is_not_configured(self) -> None:

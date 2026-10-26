@@ -72,6 +72,27 @@ const health = {
   read_only: true,
 };
 
+const opportunityHealth = {
+  status: "ready",
+  service: "alphalens-mvp-api",
+  api_version: "1.0.0",
+  read_only: true,
+  authentication_required: false,
+  market_scope: {
+    exchange: "binance",
+    instrument: "BTCUSDT",
+    timeframe: "5m",
+    candle_state: "closed",
+  },
+  model_score_status: "unavailable_without_approved_artifact",
+  notification_status: "intent_persistence_only",
+  components: {
+    market_snapshots: "configured",
+    opportunity_dashboard: "configured",
+    opportunity_detail: "configured",
+  },
+};
+
 const model = {
   api_version: "1.0.0",
   artifact_identifier: "artifact",
@@ -110,6 +131,37 @@ const resources = {
 describe("Live Prediction API integration", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+  });
+
+  it("preserves the truthful opportunity capability boundary", async () => {
+    const payload = {
+      contract_version: "1.0.0",
+      data: opportunityHealth,
+      response_hash: "d".repeat(64),
+    };
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify(payload), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await getMvpHealth();
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.market_scope).toEqual({
+        exchange: "binance",
+        instrument: "BTCUSDT",
+        timeframe: "5m",
+        candle_state: "closed",
+      });
+      expect(result.data.model_score_status).toBe(
+        "unavailable_without_approved_artifact",
+      );
+      expect(result.data.notification_status).toBe("intent_persistence_only");
+    }
   });
 
   it("loads the complete read-only dashboard bundle", async () => {

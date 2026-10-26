@@ -68,6 +68,23 @@ class ClerkAuthenticatorTests(unittest.TestCase):
             )
         self.assertEqual(actor, ClerkActor(user_id="user_authorized"))
 
+    def test_authentication_is_bound_to_configured_party_and_session_token(self) -> None:
+        authenticator = ClerkPaperTrackingAuthenticator(
+            secret_key="test-secret",
+            authorized_parties=("https://app.example",),
+            authorized_user_id="user_authorized",
+        )
+        state = SimpleNamespace(is_authenticated=True, payload={"sub": "user_authorized"})
+        with patch("app.paper_execution.auth.Clerk") as clerk:
+            clerk.return_value.authenticate_request.return_value = state
+            authenticator.authenticate(
+                _request([(b"authorization", b"Bearer test-token")])
+            )
+            options = clerk.return_value.authenticate_request.call_args.args[1]
+
+        self.assertEqual(options.authorized_parties, ["https://app.example"])
+        self.assertEqual(options.accepts_token, ["session_token"])
+
 
 class ProtectedPaperTrackingRouteTests(unittest.IsolatedAsyncioTestCase):
     async def test_client_actor_field_is_rejected_and_authorized_actor_is_used(self) -> None:

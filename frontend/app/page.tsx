@@ -7,7 +7,7 @@ import { ApiUnavailable } from "@/components/dashboard/data-states";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { MetricCard } from "@/components/dashboard/metric-card";
 import { Badge } from "@/components/ui/badge";
-import { getLiveMarket, getMvpHealth, getOpportunities, getOpportunityDetail } from "@/lib/api";
+import { getLiveMarket, getLocalRuntimeStatus, getMvpHealth, getOpportunities, getOpportunityDetail } from "@/lib/api";
 import type {
   OpportunityDashboardItem,
   OpportunityFilters as Filters,
@@ -45,10 +45,11 @@ export default async function DashboardPage({
         : undefined,
     search: requested.search?.trim() || undefined,
   };
-  const [health, market, opportunities] = await Promise.all([
+  const [health, market, opportunities, runtime] = await Promise.all([
     getMvpHealth(),
     getLiveMarket(filters.instrument, filters.timeframe),
     getOpportunities(filters),
+    getLocalRuntimeStatus(),
   ]);
   const { enrichments, partialFailures } = await loadOpportunityEnrichments(
     opportunities.ok ? opportunities.data.items : [],
@@ -105,6 +106,35 @@ export default async function DashboardPage({
           />
         </section>
 
+        <section className="rounded-xl border border-primary/20 bg-primary/5 px-4 py-4" aria-label="Local runtime status">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="text-xs font-medium uppercase tracking-[0.16em] text-primary">Local runtime</p>
+              <p className="mt-1 text-sm text-foreground">Binance BTCUSDT · finalized 5m candles</p>
+            </div>
+            <Badge variant="outline">{runtime.ok ? runtime.data.worker?.worker_status ?? runtime.data.status : "Unavailable"}</Badge>
+          </div>
+          <div className="mt-3 grid gap-2 text-xs text-muted-foreground sm:grid-cols-3">
+            <span>Last processed: {runtime.ok ? runtime.data.worker?.checkpoint.last_finalized_candle ?? "Not yet" : "Unavailable"}</span>
+            <span>Feed: {runtime.ok ? runtime.data.worker?.connection.state ?? "Unknown" : "Unavailable"}</span>
+            <span>Model: unavailable without approved artifact</span>
+          </div>
+        </section>
+
+        {health.ok ? (
+          <section
+            className="rounded-xl border border-amber-400/25 bg-amber-400/5 px-4 py-3 text-sm text-amber-200"
+            aria-label="Product capability status"
+          >
+            <p className="font-medium">BTCUSDT/5m product boundary</p>
+            <p className="mt-1 text-xs text-amber-200/80">
+              Closed-candle opportunity records may be displayed when persisted;
+              model scoring is unavailable without an approved artifact, and
+              notifications are currently persisted intents only.
+            </p>
+          </section>
+        ) : null}
+
         <section id="opportunities" className="scroll-mt-24 space-y-4">
           <div className="flex flex-col justify-between gap-3 md:flex-row md:items-end">
             <div>
@@ -150,6 +180,15 @@ async function loadOpportunityEnrichments(
   const entries = await Promise.all(
     items.map(async (item) => {
       const quality = item.quality_score ?? null;
+
+      if (item.projection_status === "assessment_only") {
+        return [item.opportunity_id, {
+          plan: item.plan ?? null,
+          confidence: null,
+          snr: null,
+          quality,
+        }] as const;
+      }
 
       if (!item.has_plan) {
         return [item.opportunity_id, { plan: null, confidence: null, snr: null, quality }] as const;

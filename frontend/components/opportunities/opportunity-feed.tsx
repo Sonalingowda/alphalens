@@ -43,40 +43,65 @@ export function OpportunityFeed({
   const [error, setError] = useState<string | null>(null);
   const [failureCount, setFailureCount] = useState(0);
   const enrichmentsRef = useRef(enrichments);
+  const pollInFlightRef = useRef(false);
+  const mountedRef = useRef(true);
+  const pollAbortRef = useRef<AbortController | null>(null);
+  const pollEpochRef = useRef(0);
 
   useEffect(() => {
     enrichmentsRef.current = enrichments;
   }, [enrichments]);
 
   const poll = useCallback(async () => {
-    const result = await fetchOpportunities(filters);
-    if (!result.ok) {
-      setFailureCount((count) => count + 1);
-      setError(result.error);
-      return;
-    }
-    setFailureCount(0);
-    setError(null);
-    setItems(result.data.items);
-    setPartialFailureCount(result.data.partial_failures?.length ?? 0);
+    if (pollInFlightRef.current) return;
+    pollInFlightRef.current = true;
+    const epoch = pollEpochRef.current;
+    const controller = new AbortController();
+    pollAbortRef.current = controller;
+    try {
+      const result = await fetchOpportunities(filters, undefined, controller.signal);
+      if (!mountedRef.current || epoch !== pollEpochRef.current) return;
+      if (!result.ok) {
+        setFailureCount((count) => count + 1);
+        setError(result.error);
+        return;
+      }
+      setFailureCount(0);
+      setError(null);
+      setItems(result.data.items);
+      setPartialFailureCount(result.data.partial_failures?.length ?? 0);
 
-    const existing = enrichmentsRef.current;
-    const newEnrichments = new Map<string, Enrichment>();
-    for (const item of result.data.items) {
-      const cached = existing.get(item.opportunity_id);
-      if (cached) {
-        newEnrichments.set(item.opportunity_id, cached);
+      const existing = enrichmentsRef.current;
+      const newEnrichments = new Map<string, Enrichment>();
+      for (const item of result.data.items) {
+        const cached = existing.get(item.opportunity_id);
+        if (cached) {
+          newEnrichments.set(item.opportunity_id, cached);
+        }
+      }
+      setEnrichments(newEnrichments);
+    } finally {
+      pollInFlightRef.current = false;
+      if (pollAbortRef.current === controller) {
+        pollAbortRef.current = null;
       }
     }
-    setEnrichments(newEnrichments);
   }, [filters]);
 
   useEffect(() => {
+    mountedRef.current = true;
+    pollEpochRef.current += 1;
     const id = setInterval(poll, POLL_INTERVAL_MS);
-    return () => clearInterval(id);
+    return () => {
+      mountedRef.current = false;
+      pollEpochRef.current += 1;
+      pollAbortRef.current?.abort();
+      pollAbortRef.current = null;
+      clearInterval(id);
+    };
   }, [poll]);
 
-  if (error !== null && (failureCount >= FAILURE_THRESHOLD || items.length === 0)) {
+  if (error !== null && failureCount >= FAILURE_THRESHOLD) {
     return <ApiUnavailable message={error} />;
   }
 
@@ -109,7 +134,12 @@ export function OpportunityFeed({
           </span>
           <span className="ml-auto font-mono text-[10px]">{error}</span>
         </div>
-        {cardsGrid}
+        {items.length > 0 ? cardsGrid : (
+          <EmptyState
+            title="No qualified opportunities"
+            description="No immutable ranked opportunities match this scope. AlphaLens does not create placeholder signals."
+          />
+        )}
       </div>
     );
   }

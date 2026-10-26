@@ -92,7 +92,7 @@ export function OpportunityCard({
 
   return (
     <Link
-      href={`/opportunities/${encodeURIComponent(item.opportunity_id)}?as_of=${encodeURIComponent(item.available_at)}`}
+      href={`${item.projection_status === "assessment_only" ? "/opportunities/assessments/" : "/opportunities/"}${encodeURIComponent(item.opportunity_id)}?as_of=${encodeURIComponent(item.available_at)}`}
       className="group block focus-visible:outline-none"
     >
       <Card className="overflow-hidden border-border/80 bg-card/95 transition group-hover:-translate-y-0.5 group-hover:border-primary/40 group-hover:shadow-lg group-hover:shadow-primary/5 group-focus-visible:ring-2 group-focus-visible:ring-primary">
@@ -108,7 +108,7 @@ export function OpportunityCard({
             </div>
             <div className="flex items-center gap-2">
               <span className="text-[10px] text-muted-foreground">
-                Rank {item.rank}
+                {item.rank === null ? "Assessment only" : `Rank ${item.rank}`}
               </span>
               <span
                 className={`flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-semibold ${
@@ -148,6 +148,13 @@ export function OpportunityCard({
               <span>Quality: {quality ?? "Unavailable"}</span>
             </div>
           </div>
+
+          {item.related_assessment_count && item.related_assessment_count > 1 ? (
+            <div className="border-t border-amber-400/20 bg-amber-400/5 px-4 py-2 text-[11px] text-amber-200/90">
+              {item.related_assessment_count} related assessments in one diagnostic review cluster;
+              original plans remain immutable and the relationship is not predictive validation.
+            </div>
+          ) : null}
 
           {(isEntryMissed || isInvalidated) && (
             <div className="flex items-center gap-1.5 border-t border-amber-400/20 bg-amber-400/5 px-4 py-2 text-[11px] text-amber-300/90">

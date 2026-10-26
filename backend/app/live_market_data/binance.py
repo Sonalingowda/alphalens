@@ -123,6 +123,7 @@ class BinanceWebSocketClient:
         *,
         base_url: str = BINANCE_MARKET_STREAM_BASE_URL,
         fallback_base_urls: tuple[str, ...] = DEFAULT_WS_FALLBACK_BASE_URLS,
+        stream_timeframes: tuple[CandleTimeframe, ...] = NATIVE_TIMEFRAMES,
         heartbeat_timeout_seconds: float = 60.0,
         backoff_initial_seconds: float = 1.0,
         backoff_max_seconds: float = 30.0,
@@ -140,11 +141,20 @@ class BinanceWebSocketClient:
             raise ValueError("Heartbeat timeout must be positive.")
         if not 0 < backoff_initial_seconds <= backoff_max_seconds:
             raise ValueError("Reconnect backoff bounds are invalid.")
+        if not stream_timeframes or any(
+            timeframe not in NATIVE_TIMEFRAMES for timeframe in stream_timeframes
+        ):
+            raise ValueError("WebSocket stream timeframes are unsupported.")
+        if len(set(stream_timeframes)) != len(stream_timeframes):
+            raise ValueError("WebSocket stream timeframes must be unique.")
         self._base_url = base_url.rstrip("/")
         self._fallback_base_urls = tuple(u.rstrip("/") for u in fallback_base_urls)
-        self._url = f"{self._base_url}{BINANCE_STREAM_PATH}"
+        stream_path = "/stream?streams=" + "/".join(
+            f"btcusdt@kline_{timeframe.value}" for timeframe in stream_timeframes
+        )
+        self._url = f"{self._base_url}{stream_path}"
         self._fallback_urls = tuple(
-            f"{u}{BINANCE_STREAM_PATH}" for u in self._fallback_base_urls
+            f"{u}{stream_path}" for u in self._fallback_base_urls
         )
         self._heartbeat_timeout_seconds = heartbeat_timeout_seconds
         self._backoff_initial_seconds = backoff_initial_seconds

@@ -5,6 +5,7 @@ import { ApiUnavailable, EmptyState } from "@/components/dashboard/data-states";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { MarketCandlestickChart } from "@/components/markets/market-candlestick-chart";
 import { PaperTrackControl } from "@/components/opportunities/paper-track-control";
+import { EconomicAnalysis } from "@/components/opportunities/economic-analysis";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -332,6 +333,14 @@ export default async function OpportunityDetailPage({
             </CardContent>
           </Card>
         </section>
+
+        {hasPlan ? (
+          <EconomicAnalysis
+            opportunityId={opportunity.opportunity_id}
+            asOf={asOf ?? opportunity.available_at}
+            direction={plan.direction}
+          />
+        ) : null}
 
         <section className="grid gap-4 xl:grid-cols-[.95fr_1.05fr]">
           <Card className="bg-card/95">

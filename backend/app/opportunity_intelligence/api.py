@@ -6,7 +6,10 @@ from hashlib import sha256
 import json
 from typing import Annotated
 
+from decimal import Decimal
+
 from fastapi import FastAPI, Query, Request
+from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
@@ -26,6 +29,7 @@ from app.opportunity_intelligence.repositories import (
     OpportunityDetailRepository,
     OpportunityPlanRepository,
     MarketSnapshotRepository,
+    OpportunityRepository,
     RepositoryError,
     RuntimeGovernanceRepository,
     ScopedRepositoryQuery,
@@ -34,6 +38,8 @@ from app.opportunity_intelligence.repositories import (
     VersionConflictError,
 )
 from app.opportunity_intelligence.persistence import OutcomePostgreSQLRepository
+from app.economic_analysis import EconomicAssumptions, calculate_economics
+from app.thesis_intelligence import ThesisIntelligenceService
 
 
 OPPORTUNITY_API_VERSION = "1.0.0"
@@ -51,6 +57,8 @@ def create_opportunity_intelligence_app(
     market_repository: MarketSnapshotRepository | None = None,
     lifecycle_repository: LifecycleRepository | None = None,
     outcome_repository: OutcomePostgreSQLRepository | None = None,
+    opportunity_repository: OpportunityRepository | None = None,
+    thesis_service: ThesisIntelligenceService | None = None,
     clock: Clock | None = None,
 ) -> FastAPI:
     """Create the read-only API with repository ports supplied by the caller."""
@@ -93,9 +101,32 @@ def create_opportunity_intelligence_app(
         if sort != "canonical.rank":
             raise ValidationError("Unsupported sort; use canonical.rank.")
         scope = MarketScope(instrument=instrument, timeframe=timeframe)
-        page = await dashboard_repository.get_latest(
-            ScopedRepositoryQuery(scope=scope, as_of=as_of, limit=1)
-        )
+        if thesis_service is not None:
+            return await _thesis_page(
+                thesis_service=thesis_service,
+                scope=scope,
+                as_of=as_of,
+                limit=limit,
+                cursor=cursor,
+                stance=stance,
+                search=search,
+            )
+        try:
+            page = await dashboard_repository.get_latest(
+                ScopedRepositoryQuery(scope=scope, as_of=as_of, limit=1)
+            )
+        except EntityNotFoundError:
+            if opportunity_repository is None:
+                raise
+            return await _assessment_page(
+                opportunity_repository=opportunity_repository,
+                scope=scope,
+                as_of=as_of,
+                limit=limit,
+                cursor=cursor,
+                stance=stance,
+                search=search,
+            )
         filtered = _filter_items(page.items, stance=stance, search=search)
         filtered = _filter_active_items(filtered, as_of=as_of)
         offset = _cursor_offset(cursor)
@@ -161,6 +192,73 @@ def create_opportunity_intelligence_app(
             )
 
     @app.get(
+        "/api/v1/opportunities/assessments",
+        response_model=dict[str, object],
+    )
+    async def list_assessed_opportunities(
+        instrument: Annotated[str, Query(min_length=1)] = DEFAULT_MVP_INSTRUMENT,
+        timeframe: Annotated[str, Query(min_length=1)] = DEFAULT_MVP_TIMEFRAME,
+        as_of: datetime | None = None,
+        limit: Annotated[int, Query(ge=1, le=500)] = 50,
+        cursor: str | None = None,
+    ) -> dict[str, object]:
+        """Expose persisted assessments before model-dependent ranking."""
+        if opportunity_repository is None:
+            raise StorageUnavailableError(
+                "Opportunity assessment repository is not configured."
+            )
+        resolved_as_of = _resolve_as_of(as_of, current_time)
+        scope = MarketScope(instrument=instrument, timeframe=timeframe)
+        page = await opportunity_repository.get_by_scope(
+            ScopedRepositoryQuery(
+                scope=scope,
+                as_of=resolved_as_of,
+                limit=limit,
+                cursor=cursor,
+            )
+        )
+        return _success(
+            {
+                "contract_version": OPPORTUNITY_API_VERSION,
+                "scope": {
+                    "instrument": instrument,
+                    "timeframe": timeframe,
+                },
+                "as_of": resolved_as_of.isoformat(),
+                "items": tuple(_serialize_assessment(item) for item in page.items),
+                "next_cursor": page.next_cursor,
+                "projection_status": "assessment_only",
+                "model_score_status": "unavailable_without_approved_artifact",
+                "notification_status": "intent_persistence_only",
+            }
+        )
+
+    @app.get(
+        "/api/v1/opportunities/assessments/{opportunity_id}",
+        response_model=dict[str, object],
+    )
+    async def get_assessed_opportunity(
+        opportunity_id: str,
+        as_of: datetime | None = None,
+    ) -> dict[str, object]:
+        if opportunity_repository is None:
+            raise StorageUnavailableError(
+                "Opportunity assessment repository is not configured."
+            )
+        resolved_as_of = _resolve_as_of(as_of, current_time)
+        opportunity = await opportunity_repository.get_current(
+            EntityAsOfQuery(EntityId(opportunity_id), resolved_as_of)
+        )
+        return _success(
+            {
+                "projection_status": "assessment_only",
+                "model_score_status": "unavailable_without_approved_artifact",
+                "notification_status": "intent_persistence_only",
+                "opportunity": opportunity.to_dict(),
+            }
+        )
+
+    @app.get(
         "/api/v1/opportunities/history",
         response_model=dict[str, object],
     )
@@ -200,6 +298,53 @@ def create_opportunity_intelligence_app(
         return _success(payload)
 
     @app.get(
+        "/api/v1/opportunities/{opportunity_id}/economics",
+        response_model=dict[str, object],
+    )
+    async def get_opportunity_economics(
+        opportunity_id: str,
+        as_of: datetime | None = None,
+        position_notional: Decimal = Decimal("500"),
+        currency: str = "INR",
+        fx_to_usd: Decimal | None = None,
+        entry_fee_bps: Decimal = Decimal("0"),
+        exit_fee_bps: Decimal = Decimal("0"),
+        entry_slippage_bps: Decimal = Decimal("0"),
+        exit_slippage_bps: Decimal = Decimal("0"),
+        instrument_semantics: str = "spot",
+    ) -> dict[str, object]:
+        """Calculate an explicit scenario without persisting or inventing a trade."""
+        if plans_repository is None:
+            raise StorageUnavailableError("Opportunity plan repository is not configured.")
+        resolved_as_of = _resolve_as_of(as_of, current_time)
+        plan = await plans_repository.get_latest_for_opportunity(
+            EntityAsOfQuery(EntityId(opportunity_id), resolved_as_of)
+        )
+        result = calculate_economics(
+            direction=plan.direction.value,
+            entry_lower=plan.entry_zone.lower,
+            entry_upper=plan.entry_zone.upper,
+            target_price=plan.targets[0].price,
+            invalidation_price=plan.invalidation_price,
+            assumptions=EconomicAssumptions(
+                position_notional=position_notional,
+                currency=currency,
+                fx_to_usd=fx_to_usd,
+                entry_fee_bps=entry_fee_bps,
+                exit_fee_bps=exit_fee_bps,
+                entry_slippage_bps=entry_slippage_bps,
+                exit_slippage_bps=exit_slippage_bps,
+                instrument_semantics=instrument_semantics,
+            ),
+        )
+        return _success({
+            "opportunity_id": opportunity_id,
+            "analysis": result.to_dict(),
+            "predictive_status": "unavailable_without_approved_artifact",
+            "actual_execution_status": "not_executed",
+        })
+
+    @app.get(
         "/api/v1/opportunities/{opportunity_id}",
         response_model=dict[str, object],
     )
@@ -229,6 +374,40 @@ def create_opportunity_intelligence_app(
             opportunity_id,
             _resolve_as_of(as_of, current_time),
         )
+
+    @app.get("/api/v1/theses", response_model=dict[str, object])
+    async def list_theses(
+        instrument: str = DEFAULT_MVP_INSTRUMENT,
+        timeframe: str = DEFAULT_MVP_TIMEFRAME,
+        limit: Annotated[int, Query(ge=1, le=500)] = 100,
+    ) -> dict[str, object]:
+        if thesis_service is None:
+            raise StorageUnavailableError("Thesis service is not configured.")
+        items = await thesis_service.list(
+            instrument=instrument,
+            timeframe=timeframe,
+            limit=limit,
+        )
+        return _success({
+            "scope": {"instrument": instrument, "timeframe": timeframe},
+            "items": jsonable_encoder(items),
+            "matching_policy": "diagnostic.exact_geometry.v1",
+            "predictive_status": "unavailable_without_approved_artifact",
+        })
+
+    @app.get("/api/v1/theses/{thesis_id}", response_model=dict[str, object])
+    async def get_thesis(thesis_id: str) -> dict[str, object]:
+        if thesis_service is None:
+            raise StorageUnavailableError("Thesis service is not configured.")
+        item = await thesis_service.get(thesis_id)
+        if item is None:
+            raise EntityNotFoundError(thesis_id)
+        return _success({
+            "thesis": jsonable_encoder(item),
+            "matching_policy": "diagnostic.exact_geometry.v1",
+            "predictive_status": "unavailable_without_approved_artifact",
+            "extension_status": "diagnostic_only_not_validated",
+        })
 
     @app.get("/markets/live", response_model=dict[str, object])
     async def get_live_market(
@@ -283,6 +462,17 @@ def create_opportunity_intelligence_app(
             "api_version": OPPORTUNITY_API_VERSION,
             "read_only": True,
             "authentication_required": False,
+            "market_scope": {
+                "exchange": "binance",
+                "instrument": DEFAULT_MVP_INSTRUMENT,
+                "timeframe": DEFAULT_MVP_TIMEFRAME,
+                "candle_state": "closed",
+            },
+            # This endpoint describes the opportunity-read surface. It must
+            # not imply that an approved model artifact or external delivery
+            # channel exists merely because repositories are configured.
+            "model_score_status": "unavailable_without_approved_artifact",
+            "notification_status": "intent_persistence_only",
             "components": {
                 "market_snapshots": (
                     "configured" if market_repository_configured else "unavailable"
@@ -381,6 +571,170 @@ def _serialize_outcome(record: OutcomeRecord) -> dict[str, object]:
         "risk_reward": _field(record.risk_reward),
         "exclusion_reason": record.exclusion_reason,
     }
+
+
+def _serialize_assessment(opportunity) -> dict[str, object]:
+    """Serialize genuine persisted assessment data without ranking semantics."""
+    payload = opportunity.to_dict()
+    payload.update(
+        {
+            "projection_status": "assessment_only",
+            "model_score_status": "unavailable_without_approved_artifact",
+            "notification_status": "intent_persistence_only",
+        }
+    )
+    return payload
+
+
+async def _assessment_page(
+    *,
+    opportunity_repository: OpportunityRepository,
+    scope: MarketScope,
+    as_of: datetime,
+    limit: int,
+    cursor: str | None,
+    stance: OpportunityStance | None,
+    search: str | None,
+) -> dict[str, object]:
+    """Build the public feed fallback without creating ranking semantics."""
+    page = await opportunity_repository.get_by_scope(
+        ScopedRepositoryQuery(scope=scope, as_of=as_of, limit=500)
+    )
+    items = [
+        _assessment_dashboard_item(item)
+        for item in page.items
+        if (stance is None or item.stance is stance)
+        and (
+            not search
+            or search.casefold().strip() in item.opportunity_id.casefold()
+            or search.casefold().strip() in item.scope.instrument.casefold()
+        )
+    ]
+    offset = _cursor_offset(cursor)
+    selected = items[offset : offset + limit]
+    next_offset = offset + len(selected)
+    return _success(
+        {
+            "contract_version": OPPORTUNITY_API_VERSION,
+            "scope": {
+                "instrument": scope.instrument,
+                "timeframe": scope.timeframe,
+            },
+            "as_of": as_of.isoformat(),
+            "generated_at": as_of.isoformat(),
+            "items": tuple(selected),
+            "applied_filters": _applied_filters(stance, search),
+            "sort": "canonical.assessment_available_at",
+            "next_cursor": str(next_offset) if next_offset < len(items) else None,
+            "freshness_status": "historical_replay",
+            "coverage_status": "assessment_only_model_unavailable",
+            "partial_failures": (),
+            "projection_status": "assessment_only",
+            "model_score_status": "unavailable_without_approved_artifact",
+            "notification_status": "intent_persistence_only",
+        }
+    )
+
+
+def _assessment_dashboard_item(opportunity) -> dict[str, object]:
+    payload = opportunity.to_dict()
+    audit = payload["audit"]
+    return {
+        "opportunity_id": payload["opportunity_id"],
+        "opportunity_version_id": payload["opportunity_version_id"],
+        "scope": payload["scope"],
+        "stance": payload["stance"],
+        "lifecycle_state": "ASSESSMENT_ONLY",
+        "evidence_cutoff": audit["evidence_cutoff"],
+        "available_at": audit["available_at"],
+        "freshness_state": "historical_replay",
+        "rank": None,
+        "reason_codes": payload["reason_codes"],
+        "has_plan": payload.get("plan") is not None,
+        "plan": payload.get("plan"),
+        "limitations": payload["limitations"],
+        "detail_reference": payload["opportunity_version_id"],
+        "quality_score": None,
+        "projection_status": "assessment_only",
+        "model_score_status": "unavailable_without_approved_artifact",
+        "notification_status": "intent_persistence_only",
+    }
+
+
+async def _thesis_page(
+    *,
+    thesis_service: ThesisIntelligenceService,
+    scope: MarketScope,
+    as_of: datetime,
+    limit: int,
+    cursor: str | None,
+    stance: OpportunityStance | None,
+    search: str | None,
+) -> dict[str, object]:
+    """Project one primary card per diagnostic detection family."""
+    theses = await thesis_service.list(
+        instrument=scope.instrument,
+        timeframe=scope.timeframe,
+        limit=500,
+    )
+    selected: list[dict[str, object]] = []
+    for thesis in theses:
+        if stance is not None and thesis["direction"] != stance.value:
+            continue
+        if search and search.casefold() not in str(thesis["thesis_id"]).casefold():
+            continue
+        available_at = thesis["original_created_at"]
+        if available_at > as_of:
+            continue
+        plan = thesis.get("original_plan")
+        selected.append({
+            "opportunity_id": thesis["original_opportunity_id"],
+            "opportunity_version_id": thesis["original_opportunity_version_id"],
+            "scope": {"instrument": scope.instrument, "timeframe": scope.timeframe},
+            "stance": thesis["direction"],
+            "lifecycle_state": thesis["current_state"],
+            "evidence_cutoff": available_at.isoformat(),
+            "available_at": available_at.isoformat(),
+            "freshness_state": "CURRENT",
+            "rank": None,
+            "reason_codes": [
+                "thesis.primary_detection_family",
+                f"thesis.related_assessments.{thesis['related_assessment_count']}",
+            ],
+            "has_plan": plan is not None,
+            "limitations": [
+                "model_score_unavailable_without_approved_artifact",
+                "diagnostic_matching_policy_not_predictive_validation",
+            ] + (["multiple_assessments_require_review"] if thesis["review_cluster_status"] != "SINGLE_THESIS" else []),
+            "detail_reference": thesis["original_opportunity_id"],
+            "projection_status": "assessment_only",
+            "model_score_status": "unavailable_without_approved_artifact",
+            "notification_status": "intent_persistence_only",
+            "thesis_id": thesis["thesis_id"],
+            "related_thesis_ids": thesis["related_thesis_ids"],
+            "related_assessment_count": thesis["related_assessment_count"],
+            "review_cluster_status": thesis["review_cluster_status"],
+            "plan": plan,
+        })
+    offset = _cursor_offset(cursor)
+    page = selected[offset : offset + limit]
+    next_offset = offset + len(page)
+    return _success({
+        "contract_version": OPPORTUNITY_API_VERSION,
+        "scope": {"instrument": scope.instrument, "timeframe": scope.timeframe},
+        "as_of": as_of.isoformat(),
+        "generated_at": as_of.isoformat(),
+        "items": page,
+        "applied_filters": _applied_filters(stance, search),
+        "sort": "thesis.original_created_at",
+        "next_cursor": str(next_offset) if next_offset < len(selected) else None,
+        "freshness_status": "live_observation",
+        "coverage_status": "thesis_primary_assessment_only",
+        "partial_failures": (),
+        "projection_status": "assessment_only",
+        "model_score_status": "unavailable_without_approved_artifact",
+        "notification_status": "intent_persistence_only",
+    })
 
 
 def _filter_items(

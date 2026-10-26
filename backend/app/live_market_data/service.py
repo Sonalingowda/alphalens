@@ -261,6 +261,11 @@ class LiveMarketIngestionService:
         return self._metrics
 
     @property
+    def repository(self) -> MarketSnapshotRepository:
+        """Expose the canonical repository to an ordered runtime coordinator."""
+        return self._repository
+
+    @property
     def client(self) -> BinanceWebSocketClient:
         return self._client
 
@@ -322,6 +327,7 @@ class LiveMarketIngestionService:
         *,
         attempts: int = 3,
         backoff_seconds: float = 15.0,
+        limit: int = 1000,
     ) -> int:
         """Run warmup_history(), retrying transient failures.
 
@@ -334,7 +340,9 @@ class LiveMarketIngestionService:
         for attempt in range(1, attempts + 1):
             try:
                 self._warmup_history_fetched = False
-                return await self.warmup_history()
+                if limit == 1000:
+                    return await self.warmup_history()
+                return await self.warmup_history(limit=limit)
             except Exception as error:  # noqa: BLE001 - retried below
                 last_error = error
                 logger.warning(
@@ -555,6 +563,17 @@ class LiveMarketIngestionService:
             stored.audit.result_hash,
         )
         return stored
+
+    async def persist_completed_candle(
+        self, candle: CompletedCandle
+    ) -> MarketSnapshot | None:
+        """Persist one already-validated closed candle for a runtime coordinator.
+
+        The continuous processor owns ordering/checkpoints; this method keeps
+        canonical persistence and immutable identity handling in the existing
+        ingestion service.
+        """
+        return await self._persist(candle)
 
 
 def _same_market_content(first: MarketSnapshot, second: MarketSnapshot) -> bool:

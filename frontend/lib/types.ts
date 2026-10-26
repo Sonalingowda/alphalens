@@ -33,6 +33,31 @@ export type MetricsResponse = {
   health: string;
 };
 
+export type LocalRuntimeStatus = {
+  status: "configured" | "unconfigured" | "unavailable";
+  reason?: string;
+  worker?: {
+    worker_status: string;
+    symbol: string;
+    timeframe: string;
+    source: string;
+    checkpoint: {
+      last_finalized_candle?: string | null;
+      last_successful_processing?: string | null;
+      gap_status: string;
+      model_artifact_status: string;
+      worker_status: string;
+      last_error?: string | null;
+    };
+    connection: {
+      state: string;
+      healthy: boolean;
+      reconnect_count: number;
+      last_message_at?: string | null;
+    };
+  };
+};
+
 export type ResourceResponse = {
   api_version: string;
   uptime_seconds: number;
@@ -270,12 +295,27 @@ export type OpportunityDashboardItem = {
   evidence_cutoff: string;
   available_at: string;
   freshness_state: string;
-  rank: number;
+  rank: number | null;
   reason_codes: string[];
   has_plan: boolean;
+  plan?: OpportunityPlan | null;
   limitations: string[];
   detail_reference: string;
   quality_score?: string | null;
+  projection_status?: "assessment_only";
+  thesis_id?: string;
+  related_assessment_count?: number;
+  related_thesis_ids?: string[];
+  review_cluster_status?: "SINGLE_THESIS" | "AMBIGUOUS_REVIEW_CLUSTER";
+  model_score_status?: "unavailable_without_approved_artifact";
+  notification_status?: "intent_persistence_only";
+};
+
+export type AssessmentDetailResponse = {
+  projection_status: "assessment_only";
+  model_score_status: "unavailable_without_approved_artifact";
+  notification_status: "intent_persistence_only";
+  opportunity: OpportunityDetailOpportunity;
 };
 
 export type IntegrityReference = {
@@ -498,6 +538,14 @@ export type MvpHealth = {
   api_version: string;
   read_only: boolean;
   authentication_required: boolean;
+  market_scope: {
+    exchange: "binance";
+    instrument: "BTCUSDT";
+    timeframe: "5m";
+    candle_state: "closed";
+  };
+  model_score_status: "unavailable_without_approved_artifact";
+  notification_status: "intent_persistence_only";
   components: {
     market_snapshots: "configured" | "unavailable";
     opportunity_dashboard: "configured";

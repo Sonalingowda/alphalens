@@ -6,6 +6,8 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { ClerkProvider } from "@clerk/nextjs";
 
+const localDemoMode = process.env.NEXT_PUBLIC_ALPHALENS_LOCAL_DEMO_MODE === "true";
+
 const geist = Geist({ subsets: ["latin"], variable: "--font-sans" });
 
 export const metadata: Metadata = {
@@ -29,11 +31,17 @@ export default function RootLayout({
       suppressHydrationWarning
     >
       <body>
-        <ClerkProvider>
+        {localDemoMode ? (
           <TooltipProvider>
             <AppShell>{children}</AppShell>
           </TooltipProvider>
-        </ClerkProvider>
+        ) : (
+          <ClerkProvider>
+            <TooltipProvider>
+              <AppShell>{children}</AppShell>
+            </TooltipProvider>
+          </ClerkProvider>
+        )}
       </body>
     </html>
   );

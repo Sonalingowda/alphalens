@@ -81,8 +81,6 @@ function Navigation({ onNavigate }: { onNavigate?: () => void }) {
 }
 
 export function AppShell({ children }: { children: ReactNode }) {
-  const { isSignedIn } = useAuth();
-
   return (
     <div className="min-h-screen lg:grid lg:grid-cols-[256px_1fr]">
       <aside className="fixed inset-y-0 left-0 z-30 hidden w-64 border-r bg-sidebar lg:flex lg:flex-col">
@@ -132,15 +130,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             Market intelligence console
           </div>
           <div className="flex items-center gap-3">
-            {!isSignedIn ? (
-              <SignInButton mode="modal">
-                <Button variant="outline" size="sm">
-                  Sign in
-                </Button>
-              </SignInButton>
-            ) : (
-              <UserButton />
-            )}
+            <AuthControls />
             <ThemeToggle />
           </div>
         </header>
@@ -149,5 +139,30 @@ export function AppShell({ children }: { children: ReactNode }) {
         </main>
       </div>
     </div>
+  );
+}
+
+function AuthControls() {
+  if (process.env.NEXT_PUBLIC_ALPHALENS_LOCAL_DEMO_MODE === "true") {
+    return (
+      <span className="rounded-md border border-amber-400/30 px-3 py-1.5 text-xs text-amber-200">
+        Local owner mode
+      </span>
+    );
+  }
+
+  return <ClerkAuthControls />;
+}
+
+function ClerkAuthControls() {
+  const { isSignedIn } = useAuth();
+  return !isSignedIn ? (
+    <SignInButton mode="modal">
+      <Button variant="outline" size="sm">
+        Sign in
+      </Button>
+    </SignInButton>
+  ) : (
+    <UserButton />
   );
 }
