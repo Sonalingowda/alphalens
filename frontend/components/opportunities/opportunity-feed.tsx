@@ -10,6 +10,7 @@ import type {
   OpportunityDashboardItem,
   OpportunityFilters,
   OpportunityPlan,
+  OpportunityView,
 } from "@/lib/types";
 
 type Enrichment = {
@@ -28,12 +29,16 @@ export function OpportunityFeed({
   initialEnrichments,
   initialPartialFailures,
   currentPrice,
+  initialView = "active",
+  initialFeedStatus,
 }: {
   filters: OpportunityFilters;
   initialItems: OpportunityDashboardItem[];
   initialEnrichments: Map<string, Enrichment>;
   initialPartialFailures?: string[];
   currentPrice: string | null;
+  initialView?: OpportunityView;
+  initialFeedStatus?: { state: string; warning: string | null; evaluated_at: string };
 }) {
   const [items, setItems] = useState<OpportunityDashboardItem[]>(initialItems);
   const [enrichments, setEnrichments] = useState<Map<string, Enrichment>>(initialEnrichments);
@@ -42,6 +47,8 @@ export function OpportunityFeed({
   );
   const [error, setError] = useState<string | null>(null);
   const [failureCount, setFailureCount] = useState(0);
+  const [view, setView] = useState<OpportunityView>(initialView);
+  const [feedStatus, setFeedStatus] = useState(initialFeedStatus);
   const enrichmentsRef = useRef(enrichments);
   const pollInFlightRef = useRef(false);
   const mountedRef = useRef(true);
@@ -59,7 +66,7 @@ export function OpportunityFeed({
     const controller = new AbortController();
     pollAbortRef.current = controller;
     try {
-      const result = await fetchOpportunities(filters, undefined, controller.signal);
+      const result = await fetchOpportunities(filters, undefined, controller.signal, view);
       if (!mountedRef.current || epoch !== pollEpochRef.current) return;
       if (!result.ok) {
         setFailureCount((count) => count + 1);
@@ -70,6 +77,7 @@ export function OpportunityFeed({
       setError(null);
       setItems(result.data.items);
       setPartialFailureCount(result.data.partial_failures?.length ?? 0);
+      setFeedStatus(result.data.feed_status);
 
       const existing = enrichmentsRef.current;
       const newEnrichments = new Map<string, Enrichment>();
@@ -86,7 +94,7 @@ export function OpportunityFeed({
         pollAbortRef.current = null;
       }
     }
-  }, [filters]);
+  }, [filters, view]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -104,6 +112,24 @@ export function OpportunityFeed({
   if (error !== null && failureCount >= FAILURE_THRESHOLD) {
     return <ApiUnavailable message={error} />;
   }
+
+  const tabs = (
+    <div className="flex flex-wrap gap-2" role="tablist" aria-label="Opportunity views">
+      {(["active", "monitoring", "history"] as OpportunityView[]).map((tab) => (
+        <button key={tab} type="button" role="tab" aria-selected={view === tab}
+          onClick={() => setView(tab)}
+          className={`rounded-md border px-3 py-1.5 text-xs font-medium capitalize ${view === tab ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground"}`}>
+          {tab}
+        </button>
+      ))}
+    </div>
+  );
+  const freshnessNotice = feedStatus?.warning ? (
+    <div className="flex items-center gap-2 rounded-lg border border-amber-500/25 bg-amber-500/5 px-4 py-3 text-sm text-amber-300">
+      <TriangleAlert className="size-4 shrink-0" aria-hidden="true" />
+      <span>{feedStatus.warning}</span>
+    </div>
+  ) : null;
 
   const cardsGrid = (
     <div className="grid gap-4 md:grid-cols-2 2xl:grid-cols-3">
@@ -126,6 +152,8 @@ export function OpportunityFeed({
   if (error !== null) {
     return (
       <div className="space-y-4">
+        {tabs}
+        {freshnessNotice}
         <div className="flex items-center gap-2 rounded-lg border border-amber-500/25 bg-amber-500/5 px-4 py-3 text-sm text-amber-300">
           <TriangleAlert className="size-4 shrink-0" aria-hidden="true" />
           <span>
@@ -162,17 +190,19 @@ export function OpportunityFeed({
 
   if (items.length === 0) {
     return (
-      <EmptyState
-        title="No qualified opportunities"
-        description="No immutable ranked opportunities match this scope. AlphaLens does not create placeholder signals."
-      />
+      <div className="space-y-4">{tabs}{freshnessNotice}<EmptyState
+        title={view === "history" ? "No opportunity history" : "No verified opportunities"}
+        description={feedStatus?.warning ?? "No opportunities match this view. AlphaLens does not create placeholder signals."}
+      /></div>
     );
   }
 
   return partialFailureNotice ? (
     <div className="space-y-4">
+      {tabs}
+      {freshnessNotice}
       {partialFailureNotice}
       {cardsGrid}
     </div>
-  ) : cardsGrid;
+  ) : <div className="space-y-4">{tabs}{freshnessNotice}{cardsGrid}</div>;
 }

@@ -16,6 +16,7 @@ import type {
   AssessmentDetailResponse,
   OpportunityFilters,
   OpportunityPage,
+  OpportunityView,
   LocalRuntimeStatus,
 } from "@/lib/types";
 
@@ -103,6 +104,7 @@ export function getLiveMarket(
 export function getOpportunities(
   filters: OpportunityFilters,
   asOf: string = new Date().toISOString(),
+  view: OpportunityView = "active",
 ): Promise<ApiResult<OpportunityPage>> {
   const query = queryString({
     as_of: asOf,
@@ -110,6 +112,7 @@ export function getOpportunities(
     timeframe: filters.timeframe,
     stance: filters.stance,
     search: filters.search,
+    view,
   });
   return requestEnvelope<OpportunityPage>(`/api/v1/opportunities?${query}`);
 }

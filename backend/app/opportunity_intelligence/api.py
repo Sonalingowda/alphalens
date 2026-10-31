@@ -1,6 +1,6 @@
 """Versioned contract-driven read API for Opportunity Intelligence."""
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 import json
@@ -46,7 +46,15 @@ OPPORTUNITY_API_VERSION = "1.0.0"
 DEFAULT_MVP_INSTRUMENT = "BTCUSDT"
 DEFAULT_MVP_TIMEFRAME = "5m"
 _ACTIVE_MAX_AGE_MINUTES: int = 10
+_FEED_VIEWS = {"active", "monitoring", "history"}
+_ACTIONABLE_THESIS_STATES = {"ENTRY_AVAILABLE"}
+_MONITORING_THESIS_STATES = {"WAITING_FOR_ENTRY", "ENTRY_MISSED", "MONITORING"}
+_TERMINAL_THESIS_STATES = {
+    "INITIAL_TARGET_REACHED", "INVALIDATED", "EXPIRED", "RESOLVED",
+    "OUTCOME_AMBIGUOUS", "SUPERSEDED", "ARCHIVED",
+}
 Clock = Callable[[], datetime]
+RuntimeStatusProvider = Callable[[], Mapping[str, object] | None]
 
 
 def create_opportunity_intelligence_app(
@@ -60,6 +68,7 @@ def create_opportunity_intelligence_app(
     opportunity_repository: OpportunityRepository | None = None,
     thesis_service: ThesisIntelligenceService | None = None,
     clock: Clock | None = None,
+    runtime_status_provider: RuntimeStatusProvider | None = None,
 ) -> FastAPI:
     """Create the read-only API with repository ports supplied by the caller."""
     app = FastAPI(
@@ -97,10 +106,14 @@ def create_opportunity_intelligence_app(
         stance: OpportunityStance | None = None,
         search: str | None = None,
         sort: str = "canonical.rank",
+        view: str = "active",
     ) -> dict[str, object]:
         if sort != "canonical.rank":
             raise ValidationError("Unsupported sort; use canonical.rank.")
+        if view not in _FEED_VIEWS:
+            raise ValidationError("Unsupported view; use active, monitoring or history.")
         scope = MarketScope(instrument=instrument, timeframe=timeframe)
+        feed = _feed_snapshot(runtime_status_provider() if runtime_status_provider else None, current_time())
         if thesis_service is not None:
             return await _thesis_page(
                 thesis_service=thesis_service,
@@ -110,6 +123,9 @@ def create_opportunity_intelligence_app(
                 cursor=cursor,
                 stance=stance,
                 search=search,
+                view=view,
+                feed=feed,
+                now=current_time(),
             )
         try:
             page = await dashboard_repository.get_latest(
@@ -128,7 +144,7 @@ def create_opportunity_intelligence_app(
                 search=search,
             )
         filtered = _filter_items(page.items, stance=stance, search=search)
-        filtered = _filter_active_items(filtered, as_of=as_of)
+        filtered = _filter_dashboard_items(filtered, as_of=as_of, view=view, feed=feed)
         offset = _cursor_offset(cursor)
         items = filtered[offset : offset + limit]
         next_offset = offset + len(items)
@@ -150,6 +166,9 @@ def create_opportunity_intelligence_app(
         payload["next_cursor"] = (
             str(next_offset) if next_offset < len(filtered) else None
         )
+        payload["view"] = view
+        payload["feed_status"] = feed
+        payload["freshness_warning"] = feed["warning"]
         payload.pop("previous_cursor", None)
         return _success(payload)
 
@@ -163,6 +182,7 @@ def create_opportunity_intelligence_app(
         stance: OpportunityStance | None = None,
         search: str | None = None,
         sort: str = "canonical.rank",
+        view: str = "active",
     ) -> dict[str, object]:
         try:
             return await list_opportunities(
@@ -174,6 +194,7 @@ def create_opportunity_intelligence_app(
                 stance=stance,
                 search=search,
                 sort=sort,
+                view=view,
             )
         except EntityNotFoundError:
             return _success(
@@ -670,6 +691,9 @@ async def _thesis_page(
     cursor: str | None,
     stance: OpportunityStance | None,
     search: str | None,
+    view: str = "active",
+    feed: Mapping[str, object] | None = None,
+    now: datetime | None = None,
 ) -> dict[str, object]:
     """Project one primary card per diagnostic detection family."""
     theses = await thesis_service.list(
@@ -678,15 +702,28 @@ async def _thesis_page(
         limit=500,
     )
     selected: list[dict[str, object]] = []
+    feed = feed or _feed_snapshot(None, as_of)
+    now = now or as_of
     for thesis in theses:
         if stance is not None and thesis["direction"] != stance.value:
             continue
         if search and search.casefold() not in str(thesis["thesis_id"]).casefold():
             continue
-        available_at = thesis["original_created_at"]
+        available_at = _utc_timestamp(thesis["original_created_at"])
         if available_at > as_of:
             continue
         plan = thesis.get("original_plan")
+        observed_at = _utc_timestamp(thesis.get("last_observed_at") or available_at)
+        classification, reason = _classify_thesis(
+            state=str(thesis["current_state"]),
+            observed_at=observed_at,
+            plan=plan,
+            view=view,
+            feed=feed,
+            now=now,
+        )
+        if classification != view:
+            continue
         selected.append({
             "opportunity_id": thesis["original_opportunity_id"],
             "opportunity_version_id": thesis["original_opportunity_version_id"],
@@ -695,7 +732,7 @@ async def _thesis_page(
             "lifecycle_state": thesis["current_state"],
             "evidence_cutoff": available_at.isoformat(),
             "available_at": available_at.isoformat(),
-            "freshness_state": "CURRENT",
+            "freshness_state": str(feed["state"]),
             "rank": None,
             "reason_codes": [
                 "thesis.primary_detection_family",
@@ -715,6 +752,11 @@ async def _thesis_page(
             "related_assessment_count": thesis["related_assessment_count"],
             "review_cluster_status": thesis["review_cluster_status"],
             "plan": plan,
+            "last_observed_at": observed_at.isoformat(),
+            "age_minutes": max(0, int((now - observed_at).total_seconds() // 60)),
+            "feed_view": classification,
+            "classification_reason": reason,
+            "entry_confirmation_status": "not_recorded",
         })
     offset = _cursor_offset(cursor)
     page = selected[offset : offset + limit]
@@ -728,7 +770,10 @@ async def _thesis_page(
         "applied_filters": _applied_filters(stance, search),
         "sort": "thesis.original_created_at",
         "next_cursor": str(next_offset) if next_offset < len(selected) else None,
-        "freshness_status": "live_observation",
+        "view": view,
+        "freshness_status": feed["state"],
+        "freshness_warning": feed["warning"],
+        "feed_status": feed,
         "coverage_status": "thesis_primary_assessment_only",
         "partial_failures": (),
         "projection_status": "assessment_only",
@@ -757,18 +802,77 @@ def _filter_items(
     )
 
 
-def _filter_active_items(
+def _filter_dashboard_items(
     items: tuple[DashboardItem, ...],
     *,
     as_of: datetime,
+    view: str,
+    feed: Mapping[str, object],
 ) -> tuple[DashboardItem, ...]:
-    """Exclude opportunities whose signal age exceeds the active horizon."""
+    """Classify projection records without mutating their lifecycle history."""
     max_age = timedelta(minutes=_ACTIVE_MAX_AGE_MINUTES)
     return tuple(
         item
         for item in items
-        if as_of - item.evidence_cutoff < max_age
+        if (
+            view == "active"
+            and feed["state"] == "current"
+            and as_of - item.evidence_cutoff < max_age
+        ) or (
+            view == "history"
+            and (
+                feed["state"] != "current"
+                or as_of - item.evidence_cutoff >= max_age
+            )
+        )
     )
+
+
+def _classify_thesis(*, state: str, observed_at: datetime, plan: object,
+                     view: str, feed: Mapping[str, object], now: datetime) -> tuple[str, str]:
+    observed_recent = now - observed_at < _FEED_FRESHNESS_MAX_AGE
+    if state in _TERMINAL_THESIS_STATES:
+        classification, reason = "history", "terminal_lifecycle_state"
+    elif isinstance(plan, Mapping) and plan.get("valid_until"):
+        try:
+            if _utc_timestamp(plan["valid_until"]) < now:
+                classification, reason = "history", "plan_expired"
+            else:
+                classification, reason = "monitoring", "pending_setup"
+        except (TypeError, ValueError):
+            classification, reason = "monitoring", "pending_setup"
+    elif feed["state"] == "current" and observed_recent and state in _ACTIONABLE_THESIS_STATES:
+        classification, reason = "active", "fresh_actionable_entry"
+    elif observed_recent and state in _MONITORING_THESIS_STATES:
+        classification, reason = "monitoring", "feed_unavailable_non_actionable" if feed["state"] != "current" else "fresh_non_actionable_setup"
+    else:
+        classification, reason = "history", "stale_or_feed_unavailable"
+    return classification, reason
+
+
+_FEED_FRESHNESS_MAX_AGE = timedelta(minutes=_ACTIVE_MAX_AGE_MINUTES)
+
+
+def _feed_snapshot(status: Mapping[str, object] | None, now: datetime) -> dict[str, object]:
+    """Derive a fail-closed feed state from the worker's persisted status."""
+    if status is None:
+        return {"state": "current", "warning": None, "evaluated_at": now.isoformat()}
+    worker = status.get("worker") if isinstance(status.get("worker"), Mapping) else status
+    connection = status.get("connection") if isinstance(status.get("connection"), Mapping) else {}
+    checkpoint = status.get("checkpoint") if isinstance(status.get("checkpoint"), Mapping) else {}
+    worker_state = worker.get("status") or worker.get("worker_status")
+    if worker_state != "RUNNING" or connection.get("state") not in {"connected", "running"} or connection.get("healthy") is False:
+        state, warning = "stopped", "Live market feed is stopped; no current opportunities are verified."
+    elif checkpoint.get("gap_status") not in {None, "CLEAR"}:
+        state, warning = "quarantined", "Live market feed is quarantined; no current opportunities are verified."
+    else:
+        raw = connection.get("last_message_at") or checkpoint.get("last_successful_processing")
+        try:
+            state = "current" if raw and now - _utc_timestamp(raw) < _FEED_FRESHNESS_MAX_AGE else "stale"
+        except (TypeError, ValueError):
+            state = "stale"
+        warning = None if state == "current" else "Market feed evidence is stale; no current opportunities are verified."
+    return {"state": state, "warning": warning, "evaluated_at": now.isoformat()}
 
 
 async def _overlay_plan_presence(
@@ -852,6 +956,18 @@ def _response_hash(payload: dict[str, object]) -> str:
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _utc_timestamp(value: object) -> datetime:
+    if isinstance(value, datetime):
+        result = value
+    elif isinstance(value, str):
+        result = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    else:
+        raise TypeError("timestamp must be datetime or ISO string")
+    if result.tzinfo is None or result.utcoffset() is None:
+        raise ValueError("timestamp must be timezone-aware")
+    return result.astimezone(timezone.utc)
 
 
 def _resolve_as_of(value: datetime | None, clock: Clock) -> datetime:

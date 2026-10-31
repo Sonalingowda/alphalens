@@ -47,6 +47,19 @@ from app.paper_execution import (
     PaperTrackingSelectionService,
     RepositoryBackedPaperTrackingAuthoritativeLoader,
 )
+
+
+def _local_runtime_status_payload() -> dict[str, object] | None:
+    if settings.environment != "development":
+        return None
+    status_path = os.getenv("ALPHALENS_LOCAL_RUNTIME_STATUS_PATH")
+    if not status_path:
+        return None
+    try:
+        payload = json.loads(Path(status_path).read_text())
+    except (OSError, ValueError):
+        return None
+    return payload if isinstance(payload, dict) else None
 from app.paper_execution.api import create_paper_tracking_router
 from app.paper_execution.auth import ClerkPaperTrackingAuthenticator
 from app.settings import load_settings
@@ -253,6 +266,7 @@ opportunity_app = create_opportunity_intelligence_app(
     outcome_repository=OutcomePostgreSQLRepository(session_factory),
     opportunity_repository=OpportunityPostgreSQLRepository(session_factory),
     thesis_service=thesis_service,
+    runtime_status_provider=_local_runtime_status_payload,
 )
 _mvp_paths = {
     "/api/v1/opportunities",
@@ -305,13 +319,9 @@ async def local_runtime_status() -> dict[str, object]:
     """
     if settings.environment != "development":
         return {"status": "unavailable", "reason": "local_runtime_disabled"}
-    status_path = os.getenv("ALPHALENS_LOCAL_RUNTIME_STATUS_PATH")
-    if not status_path:
+    payload = _local_runtime_status_payload()
+    if payload is None:
         return {"status": "unconfigured", "reason": "worker_status_path_missing"}
-    try:
-        payload = json.loads(Path(status_path).read_text())
-    except (OSError, ValueError):
-        return {"status": "unavailable", "reason": "worker_status_unavailable"}
     return {"status": "configured", "worker": payload}
 
 

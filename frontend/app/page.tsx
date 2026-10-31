@@ -162,6 +162,8 @@ export default async function DashboardPage({
                 ]),
               )}
               currentPrice={currentPrice}
+              initialView="active"
+              initialFeedStatus={opportunities.data.feed_status}
             />
           )}
         </section>

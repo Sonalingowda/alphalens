@@ -309,7 +309,14 @@ export type OpportunityDashboardItem = {
   review_cluster_status?: "SINGLE_THESIS" | "AMBIGUOUS_REVIEW_CLUSTER";
   model_score_status?: "unavailable_without_approved_artifact";
   notification_status?: "intent_persistence_only";
+  last_observed_at?: string | null;
+  age_minutes?: number | null;
+  feed_view?: OpportunityView;
+  classification_reason?: string;
+  entry_confirmation_status?: string;
 };
+
+export type OpportunityView = "active" | "monitoring" | "history";
 
 export type AssessmentDetailResponse = {
   projection_status: "assessment_only";
@@ -497,6 +504,13 @@ export type OpportunityPage = {
   freshness_status?: string;
   coverage_status?: string;
   partial_failures?: string[];
+  view?: OpportunityView;
+  freshness_warning?: string | null;
+  feed_status?: {
+    state: string;
+    warning: string | null;
+    evaluated_at: string;
+  };
 };
 
 export type OpportunityDetail = {

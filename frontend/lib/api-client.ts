@@ -1,4 +1,4 @@
-import type { ApiEnvelope, ApiResult, OpportunityFilters, OpportunityPage } from "@/lib/types";
+import type { ApiEnvelope, ApiResult, OpportunityFilters, OpportunityPage, OpportunityView } from "@/lib/types";
 
 const DEFAULT_API_BASE_URL = "http://127.0.0.1:8000";
 
@@ -133,6 +133,7 @@ export function fetchOpportunities(
   filters: OpportunityFilters,
   asOf: string = new Date().toISOString(),
   signal?: AbortSignal,
+  view: OpportunityView = "active",
 ): Promise<ApiResult<OpportunityPage>> {
   const query = queryString({
     as_of: asOf,
@@ -140,6 +141,7 @@ export function fetchOpportunities(
     timeframe: filters.timeframe,
     stance: filters.stance,
     search: filters.search,
+    view,
   });
   return clientRequestEnvelope<OpportunityPage>(`/api/v1/opportunities?${query}`, signal);
 }

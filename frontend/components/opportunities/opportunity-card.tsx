@@ -1,12 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import { ArrowDownRight, ArrowUpRight, Clock3, TriangleAlert } from "lucide-react";
 import Link from "next/link";
 
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
-import { formatPrice, signalAgeMinutes, titleCase } from "@/lib/format";
+import { formatPrice, titleCase } from "@/lib/format";
 import type { OpportunityDashboardItem, OpportunityPlan } from "@/lib/types";
 
 function deriveStatus(
@@ -75,13 +74,11 @@ export function OpportunityCard({
   const parsedCurrent = currentPrice ? Number(currentPrice) : null;
   const numericCurrent = parsedCurrent !== null && Number.isFinite(parsedCurrent) ? parsedCurrent : null;
 
-  const [age, setAge] = useState(() => signalAgeMinutes(item.available_at));
-  useEffect(() => {
-    const id = setInterval(() => setAge(signalAgeMinutes(item.available_at)), 30_000);
-    return () => clearInterval(id);
-  }, [item.available_at]);
-
-  const status = deriveStatus(item.stance as "BUY" | "SELL", plan ?? null, numericCurrent);
+  const status = item.feed_view === "history"
+    ? { label: item.lifecycle_state === "INITIAL_TARGET_REACHED" ? "TARGET REACHED / ENTRY UNCONFIRMED" : titleCase(item.lifecycle_state.replaceAll("_", " ")), tone: "neutral" as const }
+    : item.feed_view === "monitoring" && item.lifecycle_state === "ENTRY_MISSED"
+      ? { label: "ENTRY MISSED / MONITORING", tone: "amber" as const }
+      : deriveStatus(item.stance as "BUY" | "SELL", plan ?? null, numericCurrent);
   const entryLow = plan?.entry_zone.lower ?? null;
   const entryHigh = plan?.entry_zone.upper ?? null;
   const stop = plan?.invalidation_price ?? null;
@@ -133,14 +130,14 @@ export function OpportunityCard({
             />
             <Cell label="STOP / INVALIDATION" value={stop ? formatPrice(stop) : "Unavailable"} />
             <Cell label="TARGET 1" value={target1 ? formatPrice(target1) : "Unavailable"} />
-            <Cell label="RISK / REWARD" value={rr ?? "Unavailable"} />
+            <Cell label="RISK / REWARD" value={rr ? Number(rr).toFixed(2) : "Unavailable"} />
           </div>
 
           <div className="flex items-center justify-between border-t border-border/70 px-4 py-2.5">
             <div className="flex items-center gap-3 text-[10px] text-muted-foreground">
               <span className="flex items-center gap-1">
                 <Clock3 className="size-3" aria-hidden="true" />
-                {age}
+                {item.age_minutes == null ? "Age unavailable" : item.age_minutes < 1 ? "<1 min" : `${item.age_minutes} min old`}
               </span>
               <span>
                 SNR: {snr ? `${Number(snr).toFixed(2)}x` : "Unavailable"}
