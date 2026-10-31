@@ -2,27 +2,21 @@
 
 Date: 2026-10-27
 Scope: Binance BTCUSDT / closed 5-minute candles, local-only
-Overall status: IN PROGRESS — no six-hour PASS claimed.
+Overall status: **PARTIAL / FAILED SIX-HOUR ACCEPTANCE** — the original observation was retained and finalized; no replacement trial was created.
 
 ## Finalization inspection snapshot
 
-Inspection time: `2026-10-26T20:01:28Z`.
+Final evidence inspection: `2026-10-31`.
 
-- Worker PID `34264`: alive, elapsed approximately 11 minutes 55 seconds from the verified connected start.
-- Browser observer PID `34353`: alive, elapsed approximately 11 minutes 14 seconds from its first browser sample.
-- Stop scheduler PID `34265`: alive; scheduled observation end approximately `2026-10-27T01:49:33Z`.
-- Live run end timestamp: not yet reached.
-- Finalized candles: 3.
-- Incomplete updates: 306.
-- Processing errors: 0.
-- Gap events: 0; checkpoint gap state `CLEAR`.
-- Reconnects: 0; connection remained healthy.
-- Pipeline runs: 3; processor outcomes `PROCESSED=3`.
-- Checkpoint sequence: 3; last committed candle `2026-10-26T19:55:00Z`.
-- Batch 6Z database: 3 thesis rows, 3 assessment relationships and 8 lifecycle events; current states are one `ENTRY_AVAILABLE` and two `MONITORING`.
-- Browser JSONL evidence: 112 records at inspection, including 44 HTTP 200 opportunity polls, 68 UI samples, no request failures and no console errors.
+- Worker PID `34264`, scheduler PID `34265` and browser observer PID `34353` are no longer alive.
+- Verified connected start: approximately `2026-10-26T19:49:33Z`; last committed candle: `2026-10-26T21:05:00Z`; final worker status update: `2026-10-27T21:09:15Z`.
+- Scheduled endpoint: `2026-10-27T01:49:33Z`; the retained run did not provide a complete six-hour window before entering quarantine/stopping.
+- Final retained status: `65` finalized-candle messages, `9,680` incomplete updates filtered, `17` pipeline runs (`PROCESSED=17`), `48` processor quarantines, `15` `NEW_THESIS` matches, `73` reconnects, and `last_error=missing_closed_candle_interval`.
+- Final checkpoint: sequence `17`, last committed open time `2026-10-26T21:05:00Z`, status `QUARANTINED`, missing interval `2026-10-26T21:10:00Z` through `2026-10-27T20:55:00Z`.
+- The database was persisted on isolated PostgreSQL `55458`, but it could not be reopened during this acceptance run because the stopped cluster retained an orphaned shared-memory block. No reset, WAL manipulation, or data deletion was attempted. The last durable database measurement before finalization was `9` thesis rows, `9` assessment relationships and `28` lifecycle events at `2026-10-26T20:30:54Z`, with states `INITIAL_TARGET_REACHED=4`, `INVALIDATED=2`, `MONITORING=3`; all relationships were `NEW_THESIS`.
+- The final status counters corroborate `15` raw thesis-assessment creations and `15` new thesis identities; no exact-geometry match, ambiguity relation, or overmerge is evidenced. Final lifecycle-state totals after the database became unavailable are **not claimed**.
 
-Because the required six hours and 30 minutes have not elapsed, these are finalization measurements but not completed-duration acceptance evidence.
+This is an incomplete, fail-closed observation. It is not a six-hour reliability PASS.
 
 ## Parallel thesis regression tests
 
@@ -52,22 +46,22 @@ The current implementation returns a new thesis for the changed-geometry fixture
 
 The first Batch 6Z launch attempt failed before ingestion because its environment omitted `PYTHONPATH`; it produced no market evidence. It was not counted. The detached relaunch was verified independently by PID, status file and logs.
 
-## Current live observation
+## Final live observation
 
-The corrected run began at approximately `2026-10-26T19:49:33Z` and is scheduled to end at approximately `2026-10-27T01:49:33Z`. At the latest inspection:
+The corrected run began at approximately `2026-10-26T19:49:33Z`. It ended before the scheduled endpoint after reconnect/gap handling quarantined the stream:
 
-- worker: `RUNNING`
-- Binance connection: healthy
+- worker: `STOPPED` / `QUARANTINED`
+- Binance connection: `stopped`, `healthy=false`
 - source: public Binance market-data WebSocket
 - symbol/timeframe: BTCUSDT / 5m
 - closed-candle-only: true
-- finalized candles: 1
-- incomplete updates quarantined: 12
-- pipeline runs: 1
-- processor result: `PROCESSED` 1
-- thesis match: `NEW_THESIS` 1
-- last finalized candle: `2026-10-26T19:45:00Z`
-- gap state: `CLEAR`
+- finalized candles: 65 retained finality messages
+- incomplete updates quarantined: 9,680
+- pipeline runs: 17; processor `PROCESSED=17`, `QUARANTINED=48`
+- thesis match: `NEW_THESIS=15`
+- last finalized candle: `2026-10-26T21:05:00Z`
+- gap state: `QUARANTINED`; `missing_closed_candle_interval`
+- reconnects: `73`
 - persistence: `AVAILABLE`
 - model artifact: `UNAVAILABLE_WITHOUT_APPROVED_ARTIFACT`
 - external notifications: disabled
@@ -119,7 +113,7 @@ A real Chromium page was connected through the existing CDP browser session and 
 - JSONL evidence: `/private/tmp/alphalens-batch6z-live-20261026/browser-observation-2.jsonl`;
 - early samples: repeated API HTTP 200 responses, no request failures, no console errors, and no `Load failed` marker.
 
-The required 30-minute browser observation is still in progress and therefore not marked PASS.
+The browser observer completed normally from `2026-10-26T19:50:17.002Z` to `2026-10-26T20:20:21.888Z` (`1,800` seconds, `180` UI samples, `119` HTTP 200 responses, zero request failures and zero console errors). The JSONL evidence contains `300` records including the completion record. Browser stability therefore passes for the captured 30-minute window, but it does not prove six-hour worker reliability.
 
 ## Migration safety
 
@@ -144,8 +138,8 @@ Repository-wide scripts Ruff still has 82 inherited diagnostics and is not repre
 - Engineering infrastructure: **PASS**. Isolated resources, backup, migration rollback/re-upgrade and protected-resource checks passed.
 - Persistent thesis engineering: **PARTIAL**. Identity, append-only events, conservative non-merging and lifecycle persistence are evidenced; no live exact-match continuity was observed and the six-hour evidence is incomplete.
 - Economic viability: **PASS locally**. Genuine persisted plans, deterministic assumptions, API/UI behavior and unfavorable-cost classification were verified. This does not validate profitability.
-- Six-hour live operation: **PARTIAL**. Three finalized candles were processed with zero errors, gaps or reconnects, but the six-hour window has not ended.
-- Browser stability: **PARTIAL**. Polling remained clean, but the 30-minute observation and recovery exercises are incomplete.
+- Six-hour live operation: **FAIL**. The run ended/quarantined before six hours, with a missing closed-candle interval and 73 reconnects.
+- Browser stability: **PASS for the captured 30-minute window**. The browser observer completed with 180 UI samples, 119 HTTP 200 responses, zero request failures and zero console errors; this is not a six-hour or predictive claim.
 - Multi-hour predictive accuracy: **NOT VALIDATED**.
 - Target-extension intelligence: **NOT VALIDATED**.
 - Gate 6: **NOT VALIDATED**.
@@ -154,6 +148,6 @@ Repository-wide scripts Ruff still has 82 inherited diagnostics and is not repre
 
 ## Next evidence collection
 
-The existing worker and browser observer remain active. After the scheduled windows, record final status, checkpoint, candle/assessment/thesis/event counts, reconnects, gaps, errors, browser completion and report hashes. Do not convert this incomplete observation into a PASS.
+No worker, scheduler, browser observer, replacement observation or long-running trial was started during this acceptance run.
 
-Report content hash (excluding this final hash line): `05e1a0e6a7dbf64bc711a7969744cd2d794b8949f6f08bfd97d702afefd54f01`
+Report content hash (excluding this final hash line): `684674a0dbf0dd29aeeaa8fbee3e2ee7a8857793fccaac34a7b0e2431318c2ff`

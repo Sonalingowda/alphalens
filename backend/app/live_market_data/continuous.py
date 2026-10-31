@@ -189,6 +189,7 @@ class RuntimeHealthSnapshot:
 
 
 PipelineRunner = Callable[[MarketSnapshot, datetime], Awaitable[object]]
+GapRecovery = Callable[[datetime, datetime], Awaitable[list[CompletedCandle]]]
 
 
 class ContinuousClosedCandleProcessor:
@@ -211,11 +212,15 @@ class ContinuousClosedCandleProcessor:
         clock: Callable[[], datetime] | None = None,
         retry_attempts: int = 3,
         retry_backoff_seconds: float = 0.1,
+        gap_recovery: GapRecovery | None = None,
+        max_recoverable_gap_intervals: int = 3,
     ) -> None:
         if not code_version.strip():
             raise ValueError("Runtime processor code version is required.")
         if retry_attempts < 1 or retry_backoff_seconds < 0:
             raise ValueError("Runtime retry configuration is invalid.")
+        if max_recoverable_gap_intervals < 1:
+            raise ValueError("Maximum recoverable gap must be positive.")
         self._ingestion = ingestion
         self._store = checkpoint_store
         self._pipeline = pipeline
@@ -223,6 +228,8 @@ class ContinuousClosedCandleProcessor:
         self._clock = clock or (lambda: datetime.now(timezone.utc))
         self._retry_attempts = retry_attempts
         self._retry_backoff_seconds = retry_backoff_seconds
+        self._gap_recovery = gap_recovery
+        self._max_recoverable_gap_intervals = max_recoverable_gap_intervals
         self._lock = asyncio.Lock()
         self._checkpoint = checkpoint_store.load()
         self._retry_status = "idle"
@@ -291,7 +298,35 @@ class ContinuousClosedCandleProcessor:
                 return RuntimeProcessingOutcome.DUPLICATE
             expected = checkpoint.last_committed_open_time + _FIVE_MINUTES
             if candle.open_time != expected:
-                return await self._quarantine_gap(candle, expected)
+                missing_end = candle.open_time - _FIVE_MINUTES
+                missing_count = int((missing_end - expected) / _FIVE_MINUTES) + 1
+                if (
+                    self._gap_recovery is not None
+                    and missing_count <= self._max_recoverable_gap_intervals
+                ):
+                    try:
+                        recovered = await self._gap_recovery(expected, missing_end)
+                        if len(recovered) != missing_count:
+                            raise RuntimeGapError("Gap recovery returned an incomplete range.")
+                        for recovered_candle in recovered:
+                            outcome = await self._process_locked(recovered_candle)
+                            if outcome not in {
+                                RuntimeProcessingOutcome.PROCESSED,
+                                RuntimeProcessingOutcome.DUPLICATE,
+                            }:
+                                return outcome
+                        checkpoint = self._checkpoint
+                        if checkpoint is None or checkpoint.last_committed_open_time is None:
+                            return await self._quarantine_gap(candle, expected)
+                        expected = checkpoint.last_committed_open_time + _FIVE_MINUTES
+                        if candle.open_time == expected:
+                            pass
+                        else:
+                            return await self._quarantine_gap(candle, expected)
+                    except Exception:
+                        return await self._quarantine_gap(candle, expected)
+                else:
+                    return await self._quarantine_gap(candle, expected)
 
         recovering_in_flight = bool(
             checkpoint is not None

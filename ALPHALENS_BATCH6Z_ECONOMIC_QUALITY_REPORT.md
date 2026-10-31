@@ -6,7 +6,7 @@ Status: PASS for deterministic local arithmetic and truthful observability; pred
 
 The owner-facing local database contained 13 genuine persisted thesis records derived from BTCUSDT/5m Detection assessments. They represented two registered detection-family clusters, five non-terminal current states and eight terminal states. All assessment relationships were recorded as `NEW_THESIS` because no exact geometry match was present in the retained sample. This report does not merge or rewrite those records.
 
-The isolated Batch 6Z live database had 3 thesis records, 3 assessment relationships and 8 lifecycle events at the `2026-10-26T20:01:28Z` finalization inspection. Their current states were one `ENTRY_AVAILABLE` and two `MONITORING`; the six-hour aggregate remains incomplete.
+The isolated Batch 6Z live database had 9 thesis records, 9 assessment relationships and 28 lifecycle events at the last readable finalization snapshot (`2026-10-26T20:30:54Z`). States were `INITIAL_TARGET_REACHED=4`, `INVALIDATED=2`, `MONITORING=3`; all 9 relationships were `NEW_THESIS`. The final status file later recorded 15 `NEW_THESIS` creations and a quarantined checkpoint, but the database could not be reopened without touching an orphaned shared-memory block, so later lifecycle row totals are not claimed.
 
 The parallel thesis tests did not modify this live database or change any economic assumptions. Economic results therefore remain the previously reported deterministic calculations for genuine persisted plans.
 
@@ -56,6 +56,11 @@ The result demonstrates that a technically valid geometry can be economically un
 
 The API and thesis layer expose direction, thesis identity, lifecycle state, target/stop geometry, original timestamps and economic status under explicit assumptions. Aggregation by direction, state and economic classification is supported without selecting thresholds or suppressing unfavorable records. A six-hour live aggregate is not yet available because the supervised run is still in progress.
 
+## Final acceptance limitations
+
+- The observation did not produce a complete six-hour evidence window. It ended in fail-closed quarantine with 73 reconnects and `missing_closed_candle_interval`.
+- These calculations remain deterministic arithmetic under explicit assumptions; they are not predictive accuracy, expectancy, or profitability evidence.
+
 ## Limitations
 
 - Fees and slippage are configured assumptions, not verified exchange account rates.
@@ -64,4 +69,4 @@ The API and thesis layer expose direction, thesis identity, lifecycle state, tar
 - No approved model artifact exists.
 - No predictive validation or economic performance conclusion is permitted.
 
-Report content hash (excluding this final hash line): `81b76411bd7143c59a118760b05bcd07a8976858be31396d7611fb37c5b2379c`
+Report content hash (excluding this final hash line): `aa3bbf3b63e2232535ea493cc3550fbe6472d86559122865b423000d929d13c7`

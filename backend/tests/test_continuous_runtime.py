@@ -63,6 +63,30 @@ def _processor(path: Path, pipeline: AsyncMock) -> ContinuousClosedCandleProcess
     )
 
 
+def _processor_with_recovery(
+    path: Path,
+    pipeline: AsyncMock,
+    recovery,
+) -> ContinuousClosedCandleProcessor:
+    repository = MarketSnapshotMemoryRepository()
+    ingestion = LiveMarketIngestionService(
+        repository=repository,
+        code_version="checkpoint04.test",
+        rest_base_url="http://127.0.0.1:9",
+        rest_fallback_urls=(),
+    )
+    return ContinuousClosedCandleProcessor(
+        ingestion=ingestion,
+        checkpoint_store=FilesystemRuntimeCheckpointStore(
+            path, source_dataset_sha256=SOURCE_HASH
+        ),
+        pipeline=pipeline,
+        code_version="checkpoint04.test",
+        gap_recovery=recovery,
+        max_recoverable_gap_intervals=3,
+    )
+
+
 class ContinuousRuntimeTests(unittest.IsolatedAsyncioTestCase):
     def test_trial_can_bind_the_websocket_to_5m_only(self) -> None:
         client = BinanceWebSocketClient(
@@ -130,6 +154,40 @@ class ContinuousRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 await processor.process(_candle(2)), RuntimeProcessingOutcome.PROCESSED
             )
             self.assertEqual(processor.health.gap_status, "CLEAR")
+
+    async def test_bounded_rest_gap_recovery_processes_missing_candles_in_order(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            pipeline = AsyncMock()
+            recovery = AsyncMock(return_value=[_candle(1)])
+            processor = _processor_with_recovery(
+                Path(directory) / "checkpoint.json", pipeline, recovery
+            )
+
+            await processor.process(_candle(0))
+            self.assertEqual(
+                await processor.process(_candle(2)), RuntimeProcessingOutcome.PROCESSED
+            )
+            recovery.assert_awaited_once_with(
+                START + timedelta(minutes=5), START + timedelta(minutes=5)
+            )
+            self.assertEqual(pipeline.await_count, 3)
+            self.assertEqual(processor.checkpoint.sequence, 3)  # type: ignore[union-attr]
+            self.assertEqual(processor.health.gap_status, "CLEAR")
+
+    async def test_oversized_gap_remains_quarantined_without_recovery(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            pipeline = AsyncMock()
+            recovery = AsyncMock()
+            processor = _processor_with_recovery(
+                Path(directory) / "checkpoint.json", pipeline, recovery
+            )
+            await processor.process(_candle(0))
+
+            result = await processor.process(_candle(5))
+
+            self.assertEqual(result, RuntimeProcessingOutcome.QUARANTINED)
+            recovery.assert_not_awaited()
+            self.assertEqual(processor.health.gap_status, "QUARANTINED")
 
     async def test_bounded_retry_recovers_transient_pipeline_failure(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

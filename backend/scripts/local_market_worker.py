@@ -104,6 +104,8 @@ async def main() -> None:
         code_version="alphalens.local.product.1.0.0",
         retry_attempts=3,
         retry_backoff_seconds=1.0,
+        gap_recovery=ingestion.recover_closed_candle_gap,
+        max_recoverable_gap_intervals=3,
     )
     parser_impl = BinanceKlineParser()
 

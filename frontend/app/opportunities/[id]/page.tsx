@@ -517,7 +517,7 @@ function Fact({
           <p className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
             {label}
           </p>
-          <p className={`mt-1 truncate text-sm font-medium ${mono ? "font-mono" : ""}`}>
+          <p className={`mt-1 break-words text-sm font-medium leading-5 ${mono ? "font-mono" : ""}`}>
             {value}
           </p>
           {detail ? <p className="mt-1 text-xs text-muted-foreground">{detail}</p> : null}

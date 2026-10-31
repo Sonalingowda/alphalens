@@ -305,6 +305,30 @@ class PredictionAPITests(unittest.TestCase):
         )
         self.assertEqual(audits[0].error_code, "ARTIFACT_UNAVAILABLE")
 
+    def test_audit_persistence_failure_fails_closed_without_bypassing_audit(self) -> None:
+        calls = []
+
+        async def failing_writer(audit):
+            calls.append(audit)
+            raise RuntimeError("database unavailable")
+
+        client = TestClient(
+            create_prediction_app(
+                artifact_provider=self.app.state.artifact_provider,
+                audit_writer=failing_writer,
+            )
+        )
+
+        response = client.get("/api/v1/version")
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(
+            response.json()["error"]["code"],
+            "AUDIT_PERSISTENCE_UNAVAILABLE",
+        )
+        self.assertEqual(len(calls), 1)
+        self.assertNotIn("X-AlphaLens-Audit-ID", response.headers)
+
     def test_metrics_report_operational_timing_counters(self) -> None:
         self.client.get("/api/v1/version")
         self.client.post("/api/v1/predict", json=_request())

@@ -1,7 +1,7 @@
 """Fail-closed orchestration for live Binance completed candles."""
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from hashlib import sha256
 from json import dumps
@@ -125,6 +125,7 @@ class LiveMarketIngestionService:
         timeframe: CandleTimeframe,
         limit: int,
         end_time_ms: int,
+        start_time_ms: int | None = None,
     ) -> list[Sequence[object]]:
         """Fetch historical klines, trying every configured source in order.
 
@@ -147,6 +148,8 @@ class LiveMarketIngestionService:
                         "limit": limit,
                         "endTime": end_time_ms,
                     }
+                    if start_time_ms is not None:
+                        params["startTime"] = start_time_ms
                 elif provider == "bybit":
                     full = f"{url}/v5/market/kline"
                     params = {
@@ -354,6 +357,46 @@ class LiveMarketIngestionService:
                     await asyncio.sleep(backoff_seconds)
         assert last_error is not None
         raise last_error
+
+    async def recover_closed_candle_gap(
+        self,
+        missing_start: datetime,
+        missing_end: datetime,
+    ) -> list[CompletedCandle]:
+        """Fetch and validate a bounded range of genuine closed Binance candles."""
+        if missing_start.tzinfo is None or missing_end.tzinfo is None:
+            raise ValueError("Gap bounds must be timezone-aware.")
+        missing_start = missing_start.astimezone(timezone.utc)
+        missing_end = missing_end.astimezone(timezone.utc)
+        if missing_end < missing_start:
+            raise ValueError("Gap end must not precede gap start.")
+        step = _interval_ms(CandleTimeframe.MINUTE_5)
+        span = int((missing_end - missing_start).total_seconds() * 1000)
+        count = span // step + 1
+        if count < 1 or count > 1000:
+            raise ValueError("Gap recovery range is outside the bounded limit.")
+        rows = await self._fetch_klines(
+            SUPPORTED_SYMBOL,
+            CandleTimeframe.MINUTE_5,
+            count,
+            int((missing_end + timedelta(minutes=5)).timestamp() * 1000),
+            start_time_ms=int(missing_start.timestamp() * 1000),
+        )
+        candles = [_completed_candle_from_rest_kline(row) for row in rows]
+        expected = missing_start
+        for candle in candles:
+            if (
+                candle.symbol != SUPPORTED_SYMBOL
+                or candle.timeframe is not CandleTimeframe.MINUTE_5
+                or candle.open_time != expected
+                or candle.event_time < candle.close_time
+                or not _is_valid_ingestion_candle(candle)
+            ):
+                raise ValueError("REST gap recovery returned non-contiguous candle data.")
+            expected += timedelta(minutes=5)
+        if expected != missing_end + timedelta(minutes=5):
+            raise ValueError("REST gap recovery did not cover the requested interval.")
+        return candles
 
     async def run(self, stop_event: asyncio.Event) -> None:
         await self.initialize()

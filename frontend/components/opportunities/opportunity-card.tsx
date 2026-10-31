@@ -184,7 +184,7 @@ function Cell({
       <p className="text-[9px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
         {label}
       </p>
-      <p className="mt-0.5 truncate font-mono text-xs font-medium tabular">
+      <p className="mt-0.5 break-words font-mono text-xs font-medium leading-5 tabular">
         {value}
       </p>
     </div>

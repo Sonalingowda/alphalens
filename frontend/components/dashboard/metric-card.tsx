@@ -32,7 +32,9 @@ export function MetricCard({
         />
       </CardHeader>
       <CardContent>
-        <p className="tabular text-2xl font-semibold tracking-tight">{value}</p>
+        <p className="break-words text-lg font-semibold leading-6 tracking-tight tabular sm:text-2xl">
+          {value}
+        </p>
         {detail ? (
           <p className="mt-2 text-xs text-muted-foreground">{detail}</p>
         ) : null}

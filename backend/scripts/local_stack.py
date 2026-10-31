@@ -22,10 +22,10 @@ ROOT = Path(__file__).resolve().parents[2]
 BACKEND = ROOT / "backend"
 FRONTEND = ROOT / "frontend"
 STATE = Path(os.getenv("ALPHALENS_LOCAL_STATE_DIR", "/private/tmp/alphalens-local-20261026"))
+PGDATA = Path(os.getenv("ALPHALENS_LOCAL_PGDATA", str(STATE / "postgres")))
 ENV_FILE = STATE / "runtime.env"
 PIDS = STATE / "pids.json"
 LOGS = STATE / "logs"
-PGDATA = STATE / "postgres"
 REDISDATA = STATE / "redis"
 CHECKPOINT = STATE / "checkpoint.json"
 STATUS = STATE / "worker-status.json"
@@ -99,8 +99,30 @@ def _ensure_services(env: dict[str, str]) -> None:
     initdb = postgres_bin / "initdb" if (postgres_bin / "initdb").exists() else Path(shutil.which("initdb") or "initdb")
     pg_ctl = postgres_bin / "pg_ctl" if (postgres_bin / "pg_ctl").exists() else Path(shutil.which("pg_ctl") or "pg_ctl")
     psql = postgres_bin / "psql" if (postgres_bin / "psql").exists() else Path(shutil.which("psql") or "psql")
-    if not (PGDATA / "PG_VERSION").exists():
-        _run([initdb, "-D", str(PGDATA), "--no-locale", "--encoding=UTF8"])
+    has_cluster_marker = (
+        (PGDATA / "PG_VERSION").is_file()
+        and (PGDATA / "global" / "pg_control").is_file()
+    )
+    if not PGDATA.exists():
+        PGDATA.mkdir(parents=True)
+    if not has_cluster_marker and any(PGDATA.iterdir()):
+        raise RuntimeError(
+            f"Refusing to initialize non-empty non-cluster PostgreSQL directory: {PGDATA}"
+        )
+    if not has_cluster_marker:
+        _run(
+            [
+                initdb,
+                "-D",
+                str(PGDATA),
+                "--no-locale",
+                "--encoding=UTF8",
+                "-c",
+                "shared_memory_type=mmap",
+                "-c",
+                "dynamic_shared_memory_type=mmap",
+            ]
+        )
     if _run([pg_ctl, "-D", str(PGDATA), "status"], check=False).returncode != 0:
         _run([pg_ctl, "-D", str(PGDATA), "-l", str(LOGS / "postgres.log"), "-o", f"-p {PGPORT} -h 127.0.0.1", "start"])
     _run([psql, "-h", "127.0.0.1", "-p", str(PGPORT), "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-c", f"DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '{env['ALPHALENS_LOCAL_PGUSER']}') THEN CREATE ROLE {env['ALPHALENS_LOCAL_PGUSER']} LOGIN PASSWORD '{env['ALPHALENS_LOCAL_PGPASS']}'; END IF; END $$;"])
@@ -172,8 +194,9 @@ def start() -> None:
     _ensure_services(env)
     _run([str(BACKEND / ".venv/bin/python"), "-m", "alembic", "upgrade", "head"], cwd=BACKEND, env=_base_env() | env)
     runtime_env = _base_env() | env
+    python = BACKEND / ".venv/bin/python"
     pids = {
-        "api": _start_process([str(BACKEND / ".venv/bin/uvicorn"), "app.prediction_api:app", "--host", "127.0.0.1", "--port", str(APIPORT)], name="api", env=runtime_env, cwd=BACKEND),
+        "api": _start_process([str(python), "-m", "uvicorn", "app.prediction_api:app", "--host", "127.0.0.1", "--port", str(APIPORT)], name="api", env=runtime_env, cwd=BACKEND),
         "worker": _start_process([str(BACKEND / ".venv/bin/python"), "scripts/local_market_worker.py", "--checkpoint", str(CHECKPOINT), "--status", str(STATUS), "--source-identity", SOURCE_IDENTITY_DIGEST, "--warmup-limit", "250"], name="worker", env=runtime_env, cwd=BACKEND),
     }
     node_bin = Path.home() / ".nvm/versions/node/v22.23.3/bin"
