@@ -16,6 +16,19 @@ export function PaperTrackControl({
   opportunityId: string;
   opportunityVersionId: string;
 }) {
+  if (process.env.NEXT_PUBLIC_ALPHALENS_LOCAL_ONLY === "true") {
+    return <Button disabled>Paper tracking requires Clerk authentication</Button>;
+  }
+  return <ClerkPaperTrackControl opportunityId={opportunityId} opportunityVersionId={opportunityVersionId} />;
+}
+
+function ClerkPaperTrackControl({
+  opportunityId,
+  opportunityVersionId,
+}: {
+  opportunityId: string;
+  opportunityVersionId: string;
+}) {
   const { isLoaded, isSignedIn, getToken } = useAuth();
   const [state, setState] = useState<"idle" | "working" | "active" | "error">("idle");
   const [message, setMessage] = useState<string | null>(null);

@@ -14,8 +14,11 @@ from pathlib import Path
 import secrets
 import signal
 import shutil
+import socket
 import subprocess
 import time
+from urllib.error import HTTPError, URLError
+from urllib.request import urlopen
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -75,10 +78,42 @@ def _base_env() -> dict[str, str]:
             "ALPHALENS_MARKET_DATA_STARTUP_ENABLED": "false",
             "ALPHALENS_CORS_ALLOWED_ORIGINS": f"http://127.0.0.1:{FRONTENDPORT},http://localhost:{FRONTENDPORT}",
             "ALPHALENS_LOCAL_RUNTIME_STATUS_PATH": str(STATUS),
+            "ALPHALENS_LOCAL_ONLY": "true",
+            "ALPHALENS_LOCAL_BIND_ADDRESS": "localhost",
+            "ALPHALENS_API_HOST": "127.0.0.1",
             "PYTHONPATH": str(BACKEND),
         }
     )
     return values
+
+
+def _wait_for_http(url: str, *, timeout_seconds: float = 20.0) -> None:
+    deadline = time.monotonic() + timeout_seconds
+    last_error = "no response"
+    while time.monotonic() < deadline:
+        try:
+            with urlopen(url, timeout=1.0) as response:  # noqa: S310 - loopback URL is constructed locally
+                if response.status < 600:
+                    return
+        except HTTPError as error:
+            if error.code < 600:
+                return
+            last_error = str(error)
+        except (OSError, URLError) as error:
+            last_error = str(error)
+        time.sleep(0.25)
+    raise RuntimeError(f"Timed out waiting for local service {url}: {last_error}")
+
+
+def _assert_port_available(port: int, *, name: str) -> None:
+    """Refuse to take over a port owned by an unrelated local process."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.settimeout(0.25)
+        if probe.connect_ex(("127.0.0.1", port)) == 0:
+            raise RuntimeError(
+                f"Refusing to start {name}: 127.0.0.1:{port} is already in use. "
+                "Inspect the owning process or stop the matching AlphaLens stack."
+            )
 
 
 def _start_process(command: list[str], *, name: str, env: dict[str, str], cwd: Path) -> int:
@@ -182,8 +217,10 @@ def start() -> None:
             "ALPHALENS_LOCAL_PGDB": f"alphalens_local_{secrets.token_hex(4)}",
             "ALPHALENS_LOCAL_REDISPASS": secrets.token_urlsafe(24),
         }
-        ENV_FILE.write_text("\n".join(f"{key}={value}" for key, value in env.items()) + "\n")
-        ENV_FILE.chmod(0o600)
+    if "ALPHALENS_LOCAL_ACCESS_TOKEN" not in env:
+        env["ALPHALENS_LOCAL_ACCESS_TOKEN"] = secrets.token_urlsafe(32)
+    ENV_FILE.write_text("\n".join(f"{key}={value}" for key, value in env.items()) + "\n")
+    ENV_FILE.chmod(0o600)
     env.update(
         {
             "ALPHALENS_DATABASE_URL": f"postgresql+asyncpg://{env['ALPHALENS_LOCAL_PGUSER']}:{env['ALPHALENS_LOCAL_PGPASS']}@127.0.0.1:{PGPORT}/{env['ALPHALENS_LOCAL_PGDB']}",
@@ -191,14 +228,20 @@ def start() -> None:
             "ALPHALENS_REDIS_URL": f"redis://:{env['ALPHALENS_LOCAL_REDISPASS']}@127.0.0.1:{REDISPORT}/0",
         }
     )
+    _assert_port_available(APIPORT, name="backend API")
+    _assert_port_available(FRONTENDPORT, name="frontend")
     _ensure_services(env)
     _run([str(BACKEND / ".venv/bin/python"), "-m", "alembic", "upgrade", "head"], cwd=BACKEND, env=_base_env() | env)
     runtime_env = _base_env() | env
     python = BACKEND / ".venv/bin/python"
     pids = {
         "api": _start_process([str(python), "-m", "uvicorn", "app.prediction_api:app", "--host", "127.0.0.1", "--port", str(APIPORT)], name="api", env=runtime_env, cwd=BACKEND),
-        "worker": _start_process([str(BACKEND / ".venv/bin/python"), "scripts/local_market_worker.py", "--checkpoint", str(CHECKPOINT), "--status", str(STATUS), "--source-identity", SOURCE_IDENTITY_DIGEST, "--warmup-limit", "250"], name="worker", env=runtime_env, cwd=BACKEND),
     }
+    try:
+        _wait_for_http(f"http://127.0.0.1:{APIPORT}/api/v1/local-runtime/status")
+    except Exception:
+        _stop_process_group(pids["api"])
+        raise
     node_bin = Path.home() / ".nvm/versions/node/v22.23.3/bin"
     frontend_env = runtime_env | {
         "ALPHALENS_API_BASE_URL": f"http://127.0.0.1:{APIPORT}",
@@ -206,14 +249,24 @@ def start() -> None:
         # server-rendered page can use ALPHALENS_API_BASE_URL, but client-side
         # polling must receive the same isolated local API endpoint explicitly.
         "NEXT_PUBLIC_ALPHALENS_API_BASE_URL": f"http://127.0.0.1:{APIPORT}",
-        "ALPHALENS_LOCAL_DEMO_MODE": "true",
-        "NEXT_PUBLIC_ALPHALENS_LOCAL_DEMO_MODE": "true",
+        "ALPHALENS_LOCAL_ONLY": "true",
+        "NEXT_PUBLIC_ALPHALENS_LOCAL_ONLY": "true",
+        "ALPHALENS_LOCAL_ACCESS_TOKEN": env["ALPHALENS_LOCAL_ACCESS_TOKEN"],
+        "HOSTNAME": "localhost",
         "PATH": f"{node_bin}:{os.environ.get('PATH', '')}",
     }
     npm = str(node_bin / "npm") if (node_bin / "npm").exists() else "npm"
-    pids["frontend"] = _start_process([npm, "run", "dev", "--", "--hostname", "127.0.0.1", "--port", str(FRONTENDPORT)], name="frontend", env=frontend_env, cwd=FRONTEND)
+    pids["frontend"] = _start_process([npm, "run", "dev", "--", "--hostname", "localhost", "--port", str(FRONTENDPORT)], name="frontend", env=frontend_env, cwd=FRONTEND)
     PIDS.write_text(json.dumps({"ports": {"api": APIPORT, "frontend": FRONTENDPORT, "postgres": PGPORT, "redis": REDISPORT}, "pids": pids}, indent=2) + "\n")
-    print(f"AlphaLens local stack started: http://127.0.0.1:{FRONTENDPORT}")
+    try:
+        _wait_for_http(f"http://localhost:{FRONTENDPORT}/local-login")
+    except Exception:
+        for pid in pids.values():
+            _stop_process_group(pid)
+        PIDS.unlink(missing_ok=True)
+        raise
+    print(f"AlphaLens local stack started: http://localhost:{FRONTENDPORT}/local-login")
+    print("Local access token is stored in the private runtime environment file; enter it at the login page.")
 
 
 def stop() -> None:
@@ -234,7 +287,7 @@ def stop() -> None:
 
 def status() -> None:
     record = json.loads(PIDS.read_text()) if PIDS.exists() else {"pids": {}}
-    print(json.dumps({"frontend_url": f"http://127.0.0.1:{FRONTENDPORT}", "pids_alive": {name: _pid_alive(int(pid)) for name, pid in record.get("pids", {}).items()}, "state_dir": str(STATE), "worker_status": json.loads(STATUS.read_text()) if STATUS.exists() else None}, indent=2, default=str))
+    print(json.dumps({"frontend_url": f"http://localhost:{FRONTENDPORT}/local-login", "pids_alive": {name: _pid_alive(int(pid)) for name, pid in record.get("pids", {}).items()}, "state_dir": str(STATE), "worker_status": json.loads(STATUS.read_text()) if STATUS.exists() else None}, indent=2, default=str))
 
 
 if __name__ == "__main__":

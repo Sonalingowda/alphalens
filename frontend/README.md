@@ -54,12 +54,31 @@ authenticated page can render.
 
 ## Local development
 
+For the single-user localhost application, use the repository operator command.
+It keeps PostgreSQL and Redis in persistent local state, binds the API and
+frontend to loopback, generates a private local access token, and does not
+start the quarantined market-data worker:
+
 ```shell
-npm install
-npm run dev
+uv run --directory backend python scripts/local_stack.py start
+# Open the printed http://localhost:13003/local-login URL.
+uv run --directory backend python scripts/local_stack.py status
+uv run --directory backend python scripts/local_stack.py stop
 ```
 
-Open `http://127.0.0.1:3000`. The API runs separately on port `8000`.
+The token is stored only in the mode-600 runtime environment file reported by
+the operator command. Do not put it in source control or a browser-visible
+variable. Local-only mode is loopback restricted and is not a replacement for
+Clerk in externally exposed or production deployments.
+
+For direct frontend development with Clerk enabled:
+
+```shell
+npm install
+HOSTNAME=localhost PORT=3000 npm run dev
+```
+
+Open `http://localhost:3000`. The API runs separately on port `8000`.
 
 ## Pages
 

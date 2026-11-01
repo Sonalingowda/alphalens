@@ -143,11 +143,12 @@ export function AppShell({ children }: { children: ReactNode }) {
 }
 
 function AuthControls() {
-  if (process.env.NEXT_PUBLIC_ALPHALENS_LOCAL_DEMO_MODE === "true") {
+  if (process.env.NEXT_PUBLIC_ALPHALENS_LOCAL_ONLY === "true") {
     return (
-      <span className="rounded-md border border-amber-400/30 px-3 py-1.5 text-xs text-amber-200">
-        Local owner mode
-      </span>
+      <div className="flex items-center gap-2">
+        <span className="rounded-md border border-amber-400/30 px-3 py-1.5 text-xs text-amber-200">Local owner mode</span>
+        <Link href="/api/local-auth/logout" className="text-xs text-muted-foreground underline">Sign out</Link>
+      </div>
     );
   }
 

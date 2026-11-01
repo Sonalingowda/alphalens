@@ -46,6 +46,8 @@ class Settings:
     build_git_sha: str | None
     build_app_version: str
     build_time: str | None
+    local_only: bool
+    local_bind_address: str
 
 
 def load_settings() -> Settings:
@@ -131,6 +133,8 @@ def load_settings() -> Settings:
         build_git_sha=build_git_sha,
         build_app_version=build_app_version,
         build_time=build_time,
+        local_only=_environment_bool("ALPHALENS_LOCAL_ONLY", False),
+        local_bind_address=os.getenv("ALPHALENS_LOCAL_BIND_ADDRESS", "localhost"),
     )
     validate_settings(settings)
     return settings
@@ -148,6 +152,13 @@ def validate_settings(settings: Settings) -> None:
         )
     if not settings.app_name.strip():
         raise ConfigurationError("ALPHALENS_API_NAME cannot be empty.")
+    if settings.local_only:
+        if settings.environment not in {"development", "test"}:
+            raise ConfigurationError("ALPHALENS_LOCAL_ONLY is limited to local development/test environments.")
+        if settings.host not in {"127.0.0.1", "localhost", "::1"}:
+            raise ConfigurationError("ALPHALENS_LOCAL_ONLY requires a loopback API host.")
+        if settings.local_bind_address not in {"127.0.0.1", "localhost", "::1"}:
+            raise ConfigurationError("ALPHALENS_LOCAL_BIND_ADDRESS must be loopback-only.")
     if not 1 <= settings.port <= 65_535:
         raise ConfigurationError(
             "ALPHALENS_API_PORT must be between 1 and 65535."

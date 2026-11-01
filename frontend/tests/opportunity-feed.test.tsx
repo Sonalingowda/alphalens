@@ -82,7 +82,7 @@ async function advanceOnePoll(): Promise<void> {
 
 describe("OpportunityFeed transient failure handling", () => {
   it("keeps last-good cards with a reconnecting notice on the first failed poll", async () => {
-    script = [timeoutFailure];
+    script = [timeoutFailure, timeoutFailure];
 
     render(
       <OpportunityFeed
@@ -108,7 +108,7 @@ describe("OpportunityFeed transient failure handling", () => {
   });
 
   it("shows ApiUnavailable with the raw message after three consecutive failures", async () => {
-    script = [timeoutFailure, timeoutFailure, timeoutFailure];
+    script = [timeoutFailure, timeoutFailure, timeoutFailure, timeoutFailure];
 
     render(
       <OpportunityFeed
@@ -136,7 +136,7 @@ describe("OpportunityFeed transient failure handling", () => {
       stance: "BUY",
       rank: 2,
     });
-    script = [timeoutFailure, success([refreshed]), timeoutFailure];
+    script = [timeoutFailure, timeoutFailure, success([refreshed]), timeoutFailure];
 
     render(
       <OpportunityFeed
@@ -167,7 +167,7 @@ describe("OpportunityFeed transient failure handling", () => {
   });
 
   it("preserves a legitimate empty state after one transient failure", async () => {
-    script = [timeoutFailure];
+    script = [timeoutFailure, timeoutFailure];
 
     render(
       <OpportunityFeed
@@ -186,7 +186,7 @@ describe("OpportunityFeed transient failure handling", () => {
   });
 
   it("shows an outage only after repeated failures with an empty last-good state", async () => {
-    script = [timeoutFailure, timeoutFailure, timeoutFailure];
+    script = [timeoutFailure, timeoutFailure, timeoutFailure, timeoutFailure];
 
     render(
       <OpportunityFeed

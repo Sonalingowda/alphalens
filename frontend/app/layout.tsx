@@ -4,7 +4,7 @@ import { AppShell } from "@/components/dashboard/app-shell";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ClerkProvider } from "@clerk/nextjs";
 
-const localDemoMode = process.env.NEXT_PUBLIC_ALPHALENS_LOCAL_DEMO_MODE === "true";
+const localOnly = process.env.ALPHALENS_LOCAL_ONLY === "true";
 
 export const metadata: Metadata = {
   title: {
@@ -27,7 +27,7 @@ export default function RootLayout({
       suppressHydrationWarning
     >
       <body>
-        {localDemoMode ? (
+        {localOnly ? (
           <TooltipProvider>
             <AppShell>{children}</AppShell>
           </TooltipProvider>

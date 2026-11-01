@@ -99,6 +99,7 @@ export function OpportunityFeed({
   useEffect(() => {
     mountedRef.current = true;
     pollEpochRef.current += 1;
+    void poll();
     const id = setInterval(poll, POLL_INTERVAL_MS);
     return () => {
       mountedRef.current = false;
