@@ -184,7 +184,14 @@ export default async function DashboardPage({
         </section>
         </div>
 
-        <DashboardRail runtime={runtime.ok ? runtime.data : null} market={market.ok ? market.data : null} items={opportunities.ok ? opportunities.data.items : []} />
+        <DashboardRail
+          runtime={runtime.ok ? runtime.data : null}
+          market={market.ok ? market.data : null}
+          items={[
+            ...(opportunities.ok ? opportunities.data.items : []),
+            ...(history.ok ? history.data.items : []),
+          ]}
+        />
       </div>
     </>
   );
