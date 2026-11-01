@@ -1,6 +1,9 @@
 import { Activity, Radar, ShieldCheck, TriangleAlert } from "lucide-react";
 
 import { MarketStatus } from "@/components/markets/market-status";
+import { MarketCandlestickChart } from "@/components/markets/market-candlestick-chart";
+import { DashboardRail } from "@/components/dashboard/dashboard-rail";
+import { HistoricalOpportunitiesTable } from "@/components/opportunities/historical-opportunities-table";
 import { OpportunityFeed } from "@/components/opportunities/opportunity-feed";
 import { OpportunityFilters } from "@/components/opportunities/opportunity-filters";
 import { ApiUnavailable } from "@/components/dashboard/data-states";
@@ -45,11 +48,12 @@ export default async function DashboardPage({
         : undefined,
     search: requested.search?.trim() || undefined,
   };
-  const [health, market, opportunities, runtime] = await Promise.all([
+  const [health, market, opportunities, runtime, history] = await Promise.all([
     getMvpHealth(),
     getLiveMarket(filters.instrument, filters.timeframe),
     getOpportunities(filters),
     getLocalRuntimeStatus(),
+    getOpportunities(filters, undefined, "history"),
   ]);
   const { enrichments, partialFailures } = await loadOpportunityEnrichments(
     opportunities.ok ? opportunities.data.items : [],
@@ -75,8 +79,14 @@ export default async function DashboardPage({
         }
       />
 
-      <div className="space-y-6">
+      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_320px] xl:items-start">
+        <div className="min-w-0 space-y-6">
         {market.ok ? <MarketStatus snapshot={market.data} /> : <ApiUnavailable message={market.error} />}
+
+        <section className="rounded-xl border border-border/80 bg-card/90 p-4" aria-label="BTCUSDT market chart">
+          <div className="mb-3 flex items-center justify-between gap-3"><div><p className="text-xs font-medium uppercase tracking-[0.16em] text-primary">Live candles</p><h2 className="mt-1 text-lg font-semibold">BTCUSDT / 5m</h2></div><span className="text-[10px] text-muted-foreground">Closed candles only</span></div>
+          {market.ok && market.data.candles.length > 0 ? <MarketCandlestickChart candles={market.data.candles} /> : <ApiUnavailable message="No verified market candles are available for this chart." />}
+        </section>
 
         <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
           <MetricCard
@@ -167,6 +177,14 @@ export default async function DashboardPage({
             />
           )}
         </section>
+
+        <section className="space-y-4" aria-label="Historical opportunities">
+          <div><p className="text-xs font-medium uppercase tracking-[0.16em] text-primary">History</p><h2 className="mt-1 text-xl font-semibold">Historical opportunities</h2><p className="mt-1 text-sm text-muted-foreground">Immutable completed, invalidated and missed-entry records.</p></div>
+          {history.ok ? <HistoricalOpportunitiesTable items={history.data.items} /> : <ApiUnavailable message={history.error} />}
+        </section>
+        </div>
+
+        <DashboardRail runtime={runtime.ok ? runtime.data : null} market={market.ok ? market.data : null} items={opportunities.ok ? opportunities.data.items : []} />
       </div>
     </>
   );
