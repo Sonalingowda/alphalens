@@ -67,6 +67,7 @@ def _processor_with_recovery(
     path: Path,
     pipeline: AsyncMock,
     recovery,
+    max_recoverable_gap_intervals: int = 3,
 ) -> ContinuousClosedCandleProcessor:
     repository = MarketSnapshotMemoryRepository()
     ingestion = LiveMarketIngestionService(
@@ -83,7 +84,7 @@ def _processor_with_recovery(
         pipeline=pipeline,
         code_version="checkpoint04.test",
         gap_recovery=recovery,
-        max_recoverable_gap_intervals=3,
+        max_recoverable_gap_intervals=max_recoverable_gap_intervals,
     )
 
 
@@ -188,6 +189,51 @@ class ContinuousRuntimeTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(result, RuntimeProcessingOutcome.QUARANTINED)
             recovery.assert_not_awaited()
             self.assertEqual(processor.health.gap_status, "QUARANTINED")
+
+    async def test_bounded_recovery_replays_multi_hour_gap_before_newer_candle(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            pipeline = AsyncMock()
+            missing = [_candle(index) for index in range(1, 59)]
+            recovery = AsyncMock(return_value=missing)
+            processor = _processor_with_recovery(
+                Path(directory) / "checkpoint.json",
+                pipeline,
+                recovery,
+                max_recoverable_gap_intervals=120,
+            )
+
+            await processor.process(_candle(0))
+            result = await processor.process(_candle(59))
+
+            self.assertEqual(result, RuntimeProcessingOutcome.PROCESSED)
+            recovery.assert_awaited_once_with(
+                START + timedelta(minutes=5),
+                START + timedelta(minutes=58 * 5),
+            )
+            self.assertEqual(processor.checkpoint.sequence, 60)  # type: ignore[union-attr]
+            self.assertEqual(
+                processor.checkpoint.last_committed_open_time,  # type: ignore[union-attr]
+                _candle(59).open_time,
+            )
+            self.assertEqual(pipeline.await_count, 60)
+
+    async def test_invalid_recovery_range_quarantines_without_processing_future_candle(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            pipeline = AsyncMock()
+            recovery = AsyncMock(return_value=[_candle(2)])
+            processor = _processor_with_recovery(
+                Path(directory) / "checkpoint.json", pipeline, recovery, 120
+            )
+
+            await processor.process(_candle(0))
+            result = await processor.process(_candle(3))
+
+            self.assertEqual(result, RuntimeProcessingOutcome.QUARANTINED)
+            self.assertEqual(pipeline.await_count, 1)
+            self.assertEqual(
+                processor.checkpoint.last_committed_open_time,  # type: ignore[union-attr]
+                _candle(0).open_time,
+            )
 
     async def test_bounded_retry_recovers_transient_pipeline_failure(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

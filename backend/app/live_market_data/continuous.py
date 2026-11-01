@@ -306,8 +306,11 @@ class ContinuousClosedCandleProcessor:
                 ):
                     try:
                         recovered = await self._gap_recovery(expected, missing_end)
-                        if len(recovered) != missing_count:
-                            raise RuntimeGapError("Gap recovery returned an incomplete range.")
+                        _validate_recovered_range(
+                            recovered,
+                            expected_start=expected,
+                            expected_count=missing_count,
+                        )
                         for recovered_candle in recovered:
                             outcome = await self._process_locked(recovered_candle)
                             if outcome not in {
@@ -433,6 +436,27 @@ def _validate_closed_scope(candle: CompletedCandle) -> None:
         raise RuntimeProcessingError("Continuous processor accepts BTCUSDT/5m only.")
     if candle.event_time < candle.close_time:
         raise RuntimeProcessingError("Incomplete candle cannot enter processing.")
+
+
+def _validate_recovered_range(
+    recovered: list[CompletedCandle],
+    *,
+    expected_start: datetime,
+    expected_count: int,
+) -> None:
+    """Validate a REST repair before any recovered candle is persisted."""
+    if len(recovered) != expected_count:
+        raise RuntimeGapError("Gap recovery returned an incomplete range.")
+    expected = expected_start
+    seen: set[datetime] = set()
+    for candle in recovered:
+        _validate_closed_scope(candle)
+        if candle.provider != "binance_spot":
+            raise RuntimeGapError("Gap recovery returned a non-Binance candle.")
+        if candle.open_time in seen or candle.open_time != expected:
+            raise RuntimeGapError("Gap recovery returned non-contiguous candles.")
+        seen.add(candle.open_time)
+        expected += _FIVE_MINUTES
 
 
 def _same_snapshot_content(first: MarketSnapshot, second: MarketSnapshot) -> bool:

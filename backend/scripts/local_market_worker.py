@@ -6,8 +6,10 @@ import argparse
 import asyncio
 from dataclasses import asdict
 from datetime import datetime, timezone
+import fcntl
 import json
 import logging
+import os
 from pathlib import Path
 import signal
 import tempfile
@@ -29,6 +31,45 @@ from app.runtime_pipeline import build_runtime_pipeline
 PROTECTED_START = datetime(2027, 1, 11, tzinfo=timezone.utc)
 PROTECTED_END = datetime(2027, 2, 10, tzinfo=timezone.utc)
 logger = logging.getLogger("alphalens.local_market_worker")
+DEFAULT_MAX_RECOVERABLE_GAP_INTERVALS = 120
+
+
+class WorkerOwnershipError(RuntimeError):
+    """Raised when another local worker owns the checkpoint stream."""
+
+
+class WorkerOwnershipLock:
+    """A process-scoped advisory lock that survives stale lock files safely."""
+
+    def __init__(self, checkpoint: Path) -> None:
+        self.path = checkpoint.with_name(f".{checkpoint.name}.worker.lock")
+        self._handle = None
+
+    def acquire(self) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._handle = self.path.open("a+", encoding="utf-8")
+        try:
+            fcntl.flock(self._handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            self._handle.close()
+            self._handle = None
+            raise WorkerOwnershipError(
+                f"Another AlphaLens worker owns checkpoint {self.path}."
+            ) from error
+        self._handle.seek(0)
+        self._handle.truncate()
+        json.dump({"pid": os.getpid(), "checkpoint": str(self.path)}, self._handle)
+        self._handle.write("\n")
+        self._handle.flush()
+
+    def release(self) -> None:
+        if self._handle is None:
+            return
+        try:
+            fcntl.flock(self._handle.fileno(), fcntl.LOCK_UN)
+        finally:
+            self._handle.close()
+            self._handle = None
 
 
 def _write_json(path: Path, payload: dict[str, object]) -> None:
@@ -48,7 +89,16 @@ async def main() -> None:
     parser.add_argument("--status", type=Path, required=True)
     parser.add_argument("--source-identity", required=True)
     parser.add_argument("--warmup-limit", type=int, default=250)
+    parser.add_argument(
+        "--max-recoverable-gap-intervals",
+        type=int,
+        default=DEFAULT_MAX_RECOVERABLE_GAP_INTERVALS,
+    )
     args = parser.parse_args()
+    if not 1 <= args.max_recoverable_gap_intervals <= 1000:
+        raise ValueError("Maximum recoverable gap must be between 1 and 1000 intervals.")
+    ownership = WorkerOwnershipLock(args.checkpoint)
+    ownership.acquire()
 
     stop_event = asyncio.Event()
     for signum in (signal.SIGINT, signal.SIGTERM):
@@ -105,7 +155,7 @@ async def main() -> None:
         retry_attempts=3,
         retry_backoff_seconds=1.0,
         gap_recovery=ingestion.recover_closed_candle_gap,
-        max_recoverable_gap_intervals=3,
+        max_recoverable_gap_intervals=args.max_recoverable_gap_intervals,
     )
     parser_impl = BinanceKlineParser()
 
@@ -172,6 +222,7 @@ async def main() -> None:
         await ingestion.client.run(handle_message, stop_event)
     finally:
         write_status("STOPPED")
+        ownership.release()
 
 
 if __name__ == "__main__":
