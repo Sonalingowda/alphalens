@@ -18,7 +18,7 @@ export function DashboardRail({
   const worker = runtime?.worker;
   const feedState = worker?.connection.state ?? "unavailable";
   const healthy = worker?.connection.healthy === true && worker.worker_status === "RUNNING";
-  const recent = [...items]
+  const recent = [...new Map(items.map((item) => [item.opportunity_id, item])).values()]
     .sort((left, right) => right.available_at.localeCompare(left.available_at))
     .slice(0, 5);
 

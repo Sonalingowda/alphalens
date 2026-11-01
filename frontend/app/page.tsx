@@ -1,11 +1,8 @@
 import { Activity, Radar, ShieldCheck, TriangleAlert } from "lucide-react";
 
-import { MarketStatus } from "@/components/markets/market-status";
-import { MarketCandlestickChart } from "@/components/markets/market-candlestick-chart";
 import { DashboardRail } from "@/components/dashboard/dashboard-rail";
 import { HistoricalOpportunitiesTable } from "@/components/opportunities/historical-opportunities-table";
 import { OpportunityFeed } from "@/components/opportunities/opportunity-feed";
-import { OpportunityFilters } from "@/components/opportunities/opportunity-filters";
 import { ApiUnavailable } from "@/components/dashboard/data-states";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { MetricCard } from "@/components/dashboard/metric-card";
@@ -66,8 +63,8 @@ export default async function DashboardPage({
     <>
       <PageHeader
         eyebrow="Opportunity intelligence"
-        title="Market surveillance"
-        description="Deterministic, evidence-backed opportunities from completed market snapshots. AlphaLens informs; you make every trading decision."
+        title="Trading Opportunities"
+        description="Verified opportunity records from completed market snapshots. AlphaLens informs; you make every trading decision."
         actions={
           <Badge
             variant="outline"
@@ -79,16 +76,14 @@ export default async function DashboardPage({
         }
       />
 
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_320px] xl:items-start">
-        <div className="min-w-0 space-y-6">
-        {market.ok ? <MarketStatus snapshot={market.data} /> : <ApiUnavailable message={market.error} />}
-
-        <section className="rounded-xl border border-border/80 bg-card/90 p-4" aria-label="BTCUSDT market chart">
-          <div className="mb-3 flex items-center justify-between gap-3"><div><p className="text-xs font-medium uppercase tracking-[0.16em] text-primary">Live candles</p><h2 className="mt-1 text-lg font-semibold">BTCUSDT / 5m</h2></div><span className="text-[10px] text-muted-foreground">Closed candles only</span></div>
-          {market.ok && market.data.candles.length > 0 ? <MarketCandlestickChart candles={market.data.candles} /> : <ApiUnavailable message="No verified market candles are available for this chart." />}
-        </section>
-
-        <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="dashboard-layout">
+        <main className="min-w-0 space-y-6">
+        <section id="opportunities" className="scroll-mt-24 space-y-4">
+          <div>
+            <p className="text-xs font-medium uppercase tracking-[0.16em] text-primary">Primary feed</p>
+            <h2 className="mt-1 text-xl font-semibold">Opportunities</h2>
+          </div>
+          <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4" aria-label="Opportunity summary">
           <MetricCard
             label="Active opportunities"
             value={opportunities.ok ? String(opportunities.data.items.length) : "Unavailable"}
@@ -97,7 +92,7 @@ export default async function DashboardPage({
           />
           <MetricCard
             label="Market coverage"
-            value={opportunities.ok ? opportunities.data.coverage_status ?? "Not reported" : "Unavailable"}
+            value={opportunities.ok ? formatCoverageStatus(opportunities.data.coverage_status) : "Unavailable"}
             detail={`${filters.instrument} · ${filters.timeframe}`}
             icon={Activity}
           />
@@ -114,50 +109,7 @@ export default async function DashboardPage({
             detail="Fail-closed projection issues"
             icon={TriangleAlert}
           />
-        </section>
-
-        <section className="rounded-xl border border-primary/20 bg-primary/5 px-4 py-4" aria-label="Local runtime status">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <p className="text-xs font-medium uppercase tracking-[0.16em] text-primary">Local runtime</p>
-              <p className="mt-1 text-sm text-foreground">Binance BTCUSDT · finalized 5m candles</p>
-            </div>
-            <Badge variant="outline">{runtime.ok ? runtime.data.worker?.worker_status ?? runtime.data.status : "Unavailable"}</Badge>
-          </div>
-          <div className="mt-3 grid gap-2 text-xs text-muted-foreground sm:grid-cols-3">
-            <span>Last processed: {runtime.ok ? runtime.data.worker?.checkpoint.last_finalized_candle ?? "Not yet" : "Unavailable"}</span>
-            <span>Feed: {runtime.ok ? runtime.data.worker?.connection.state ?? "Unknown" : "Unavailable"}</span>
-            <span>Model: unavailable without approved artifact</span>
-          </div>
-        </section>
-
-        {health.ok ? (
-          <section
-            className="rounded-xl border border-amber-400/25 bg-amber-400/5 px-4 py-3 text-sm text-amber-200"
-            aria-label="Product capability status"
-          >
-            <p className="font-medium">BTCUSDT/5m product boundary</p>
-            <p className="mt-1 text-xs text-amber-200/80">
-              Closed-candle opportunity records may be displayed when persisted;
-              model scoring is unavailable without an approved artifact, and
-              notifications are currently persisted intents only.
-            </p>
           </section>
-        ) : null}
-
-        <section id="opportunities" className="scroll-mt-24 space-y-4">
-          <div className="flex flex-col justify-between gap-3 md:flex-row md:items-end">
-            <div>
-              <p className="text-xs font-medium uppercase tracking-[0.16em] text-primary">Ranked feed</p>
-              <h2 className="mt-1 text-xl font-semibold">Opportunities</h2>
-            </div>
-            {opportunities.ok ? (
-              <p className="font-mono text-[10px] text-muted-foreground">
-                RESPONSE {opportunities.responseHash.slice(0, 12)}
-              </p>
-            ) : null}
-          </div>
-          <OpportunityFilters values={filters} />
           {!opportunities.ok ? (
             <ApiUnavailable message={opportunities.error} />
           ) : (
@@ -178,11 +130,11 @@ export default async function DashboardPage({
           )}
         </section>
 
-        <section className="space-y-4" aria-label="Historical opportunities">
-          <div><p className="text-xs font-medium uppercase tracking-[0.16em] text-primary">History</p><h2 className="mt-1 text-xl font-semibold">Historical opportunities</h2><p className="mt-1 text-sm text-muted-foreground">Immutable completed, invalidated and missed-entry records.</p></div>
+        <section className="space-y-3" aria-label="Historical opportunities">
+          <div className="flex flex-wrap items-end justify-between gap-2"><div><p className="text-xs font-medium uppercase tracking-[0.16em] text-primary">History</p><h2 className="mt-1 text-lg font-semibold">Recent Opportunities</h2></div><p className="text-xs text-muted-foreground">Immutable historical records</p></div>
           {history.ok ? <HistoricalOpportunitiesTable items={history.data.items} /> : <ApiUnavailable message={history.error} />}
         </section>
-        </div>
+        </main>
 
         <DashboardRail
           runtime={runtime.ok ? runtime.data : null}
@@ -195,6 +147,17 @@ export default async function DashboardPage({
       </div>
     </>
   );
+}
+
+function formatCoverageStatus(value: string | null | undefined): string {
+  if (!value) return "Not reported";
+  const labels: Record<string, string> = {
+    thesis_primary_assessment_only: "Primary assessment only",
+    complete: "Complete",
+    partial: "Partial",
+    unavailable: "Unavailable",
+  };
+  return labels[value] ?? "Reported status";
 }
 
 async function loadOpportunityEnrichments(

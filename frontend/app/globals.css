@@ -122,7 +122,7 @@
     }
   body {
     @apply min-h-screen bg-background text-foreground antialiased selection:bg-primary/20;
-    background-image: radial-gradient(circle at 80% -10%, color-mix(in oklab, var(--primary) 9%, transparent), transparent 34rem);
+    background-image: radial-gradient(circle at 80% -10%, color-mix(in oklab, var(--primary) 7%, transparent), transparent 34rem);
     }
   html {
     @apply font-sans;
@@ -134,10 +134,16 @@
     font-variant-numeric: tabular-nums;
   }
 
-  .dashboard-grid {
-    background-image:
-      linear-gradient(to right, color-mix(in oklab, var(--border) 45%, transparent) 1px, transparent 1px),
-      linear-gradient(to bottom, color-mix(in oklab, var(--border) 45%, transparent) 1px, transparent 1px);
-    background-size: 32px 32px;
+  .dashboard-layout {
+    display: grid;
+    gap: 1.5rem;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  @media (min-width: 1280px) {
+    .dashboard-layout {
+      grid-template-columns: minmax(0, 1fr) 18rem;
+      align-items: start;
+    }
   }
 }

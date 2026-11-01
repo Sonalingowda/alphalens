@@ -4,11 +4,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { TriangleAlert } from "lucide-react";
 
 import { OpportunityCard } from "@/components/opportunities/opportunity-card";
+import { OpportunityFilters } from "@/components/opportunities/opportunity-filters";
 import { ApiUnavailable, EmptyState } from "@/components/dashboard/data-states";
 import { fetchOpportunities } from "@/lib/api-client";
 import type {
   OpportunityDashboardItem,
-  OpportunityFilters,
+  OpportunityFilters as OpportunityFiltersType,
   OpportunityPlan,
   OpportunityView,
 } from "@/lib/types";
@@ -32,7 +33,7 @@ export function OpportunityFeed({
   initialView = "active",
   initialFeedStatus,
 }: {
-  filters: OpportunityFilters;
+  filters: OpportunityFiltersType;
   initialItems: OpportunityDashboardItem[];
   initialEnrichments: Map<string, Enrichment>;
   initialPartialFailures?: string[];
@@ -125,6 +126,7 @@ export function OpportunityFeed({
       ))}
     </div>
   );
+  const filtersControl = <OpportunityFilters values={filters} />;
   const freshnessNotice = feedStatus?.warning ? (
     <div className="flex items-center gap-2 rounded-lg border border-amber-500/25 bg-amber-500/5 px-4 py-3 text-sm text-amber-300">
       <TriangleAlert className="size-4 shrink-0" aria-hidden="true" />
@@ -154,6 +156,7 @@ export function OpportunityFeed({
     return (
       <div className="space-y-4">
         {tabs}
+        {filtersControl}
         {freshnessNotice}
         <div className="flex items-center gap-2 rounded-lg border border-amber-500/25 bg-amber-500/5 px-4 py-3 text-sm text-amber-300">
           <TriangleAlert className="size-4 shrink-0" aria-hidden="true" />
@@ -191,7 +194,7 @@ export function OpportunityFeed({
 
   if (items.length === 0) {
     return (
-      <div className="space-y-4">{tabs}{freshnessNotice}<EmptyState
+      <div className="space-y-4">{tabs}{filtersControl}{freshnessNotice}<EmptyState
         title={view === "history" ? "No opportunity history" : "No verified opportunities"}
         description={feedStatus?.warning ?? "No opportunities match this view. AlphaLens does not create placeholder signals."}
       /></div>
@@ -201,9 +204,10 @@ export function OpportunityFeed({
   return partialFailureNotice ? (
     <div className="space-y-4">
       {tabs}
+      {filtersControl}
       {freshnessNotice}
       {partialFailureNotice}
       {cardsGrid}
     </div>
-  ) : <div className="space-y-4">{tabs}{freshnessNotice}{cardsGrid}</div>;
+  ) : <div className="space-y-4">{tabs}{filtersControl}{freshnessNotice}{cardsGrid}</div>;
 }

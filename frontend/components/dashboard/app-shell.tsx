@@ -134,7 +134,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             <ThemeToggle />
           </div>
         </header>
-        <main className="dashboard-grid min-h-[calc(100vh-4rem)] p-4 md:p-6 xl:p-8">
+        <main className="min-h-[calc(100vh-4rem)] p-4 md:p-6 xl:p-8">
           <div className="mx-auto max-w-[1600px]">{children}</div>
         </main>
       </div>
