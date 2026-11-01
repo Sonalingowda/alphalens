@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 
 import { ThemeToggle } from "@/components/dashboard/theme-toggle";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import {
   Sheet,
   SheetContent,
@@ -105,7 +105,11 @@ export function AppShell({ children }: { children: ReactNode }) {
             <Sheet>
               <SheetTrigger
                 render={
-                  <Button variant="outline" size="icon" aria-label="Open menu" />
+                  <button
+                    type="button"
+                    className={buttonVariants({ variant: "outline", size: "icon" })}
+                    aria-label="Open menu"
+                  />
                 }
               >
                 <Menu className="size-4" />
