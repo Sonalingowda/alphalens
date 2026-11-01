@@ -497,6 +497,30 @@ class LiveIngestionServiceTests(unittest.IsolatedAsyncioTestCase):
         page = await repository.get_by_scope(_scope_query("5m", limit=200))
         self.assertEqual(len(page.items), 200)
 
+    async def test_warmup_history_rejects_current_open_candle(self) -> None:
+        repository = MarketSnapshotMemoryRepository()
+        service = LiveMarketIngestionService(
+            repository=repository,
+            code_version="git:abcdef123456",
+        )
+        now = datetime.now(timezone.utc)
+        open_time = now.replace(
+            minute=(now.minute // 5) * 5,
+            second=0,
+            microsecond=0,
+        )
+        open_candle = _kline_for_open_time(open_time)
+
+        with patch("app.live_market_data.service.httpx") as mock_httpx:
+            mock_httpx.AsyncClient.return_value.__aenter__.return_value.get.return_value = (
+                _make_mock_response([open_candle])
+            )
+            persisted = await service.warmup_history(limit=1)
+
+        self.assertEqual(persisted, 0)
+        page = await repository.get_by_scope(_scope_query("5m", limit=10))
+        self.assertEqual(len(page.items), 0)
+
     async def test_warmup_history_is_idempotent(self) -> None:
         repository = MarketSnapshotMemoryRepository()
         service = LiveMarketIngestionService(
@@ -1216,6 +1240,28 @@ def _kline_for_index(index: int) -> list:
         close_ms,
         "42.00000000",
         100 + index,
+        "21.00000000",
+        "20.00000000",
+        "0",
+    ]
+
+
+def _kline_for_open_time(open_time: datetime) -> list:
+    open_ms = int(open_time.timestamp() * 1000)
+    close_ms = int(
+        (open_time + timedelta(minutes=5) - timedelta(milliseconds=1)).timestamp()
+        * 1000
+    )
+    return [
+        open_ms,
+        "10000.00000000",
+        "10005.00000000",
+        "9995.00000000",
+        "10001.00000000",
+        "10.00000000",
+        close_ms,
+        "42.00000000",
+        100,
         "21.00000000",
         "20.00000000",
         "0",

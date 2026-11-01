@@ -297,6 +297,16 @@ class LiveMarketIngestionService:
         klines = await self._fetch_klines(symbol, timeframe, limit, end_ms)
         for kline in klines:
             candle = _completed_candle_from_rest_kline(kline)
+            if candle.close_time >= now:
+                self._metrics.increment("invalid_candles")
+                logger.warning(
+                    "open_warmup_candle_rejected symbol=%s timeframe=%s open_time=%s close_time=%s",
+                    candle.symbol,
+                    candle.timeframe.value,
+                    candle.open_time.isoformat(),
+                    candle.close_time.isoformat(),
+                )
+                continue
             if not _is_valid_ingestion_candle(candle):
                 self._metrics.increment("invalid_candles")
                 logger.warning(
@@ -383,12 +393,14 @@ class LiveMarketIngestionService:
             start_time_ms=int(missing_start.timestamp() * 1000),
         )
         candles = [_completed_candle_from_rest_kline(row) for row in rows]
+        now = datetime.now(timezone.utc)
         expected = missing_start
         for candle in candles:
             if (
                 candle.symbol != SUPPORTED_SYMBOL
                 or candle.timeframe is not CandleTimeframe.MINUTE_5
                 or candle.open_time != expected
+                or candle.close_time >= now
                 or candle.event_time < candle.close_time
                 or not _is_valid_ingestion_candle(candle)
             ):
