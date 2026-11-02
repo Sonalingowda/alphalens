@@ -92,8 +92,8 @@ export default async function DashboardPage({
           />
           <MetricCard
             label="Market coverage"
-            value={opportunities.ok ? formatCoverageStatus(opportunities.data.coverage_status) : "Unavailable"}
-            detail={`${filters.instrument} · ${filters.timeframe}`}
+            value={market.ok ? `${market.data.scope.instrument} · ${market.data.scope.timeframe}` : "Unavailable"}
+            detail={opportunities.ok ? formatCoverageStatus(opportunities.data.coverage_status) : "Unavailable"}
             icon={Activity}
           />
           <MetricCard

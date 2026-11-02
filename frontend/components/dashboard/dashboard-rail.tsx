@@ -51,7 +51,7 @@ export function DashboardRail({
             <Metric label="Last close" value={candle ? formatTimestamp(candle.timestamp) : "Unavailable"} />
             <Metric label="Available" value={market ? formatTimestamp(market.audit.available_at) : "Unavailable"} />
           </div>
-          {!healthy ? <p className="flex gap-2 rounded-md border border-amber-400/20 bg-amber-400/5 px-3 py-2 text-amber-200"><CircleAlert className="size-3.5 shrink-0" />Feed is stopped or stale; no actionable opportunities are verified.</p> : null}
+          {!healthy ? <p className="flex items-center gap-2 rounded-md border border-amber-400/20 bg-amber-400/5 px-3 py-2 text-amber-200"><CircleAlert className="size-3.5 shrink-0" />Feed: {worker?.worker_status === "STOPPED" ? "Stopped" : "Stale"}</p> : null}
         </CardContent>
       </Card>
 

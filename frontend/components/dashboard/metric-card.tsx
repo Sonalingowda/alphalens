@@ -17,7 +17,7 @@ export function MetricCard({
   tone?: "default" | "positive" | "negative";
 }) {
   return (
-    <Card className="min-h-32 bg-card/95">
+    <Card size="sm" className="min-h-24 bg-card/95">
       <CardHeader className="flex-row items-center justify-between">
         <CardTitle className="text-xs font-medium uppercase tracking-[0.13em] text-muted-foreground">
           {label}
@@ -32,7 +32,7 @@ export function MetricCard({
         />
       </CardHeader>
       <CardContent>
-        <p className="break-words text-lg font-semibold leading-6 tracking-tight tabular sm:text-2xl">
+        <p className="whitespace-nowrap text-lg font-semibold leading-6 tracking-tight tabular sm:text-xl">
           {value}
         </p>
         {detail ? (
