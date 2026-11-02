@@ -70,6 +70,26 @@ def _verify_backup(path: Path) -> str:
     return _backup_sha256(path)
 
 
+def _run_schema_migrations(python: Path, environment: dict[str, str]) -> None:
+    """Bring the explicitly configured database to the reviewed Alembic head."""
+    backend_directory = Path(__file__).resolve().parents[1]
+    python_executable = python.resolve()
+    result = subprocess.run(
+        [str(python_executable), "-m", "alembic", "upgrade", "head"],
+        cwd=backend_directory,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip().splitlines()
+        raise RuntimeError(
+            "Database migration preflight failed: "
+            + (detail[-1] if detail else "unknown Alembic error")
+        )
+
+
 def _stop(process: subprocess.Popen[bytes] | None) -> None:
     if process is None or process.poll() is not None:
         return
@@ -136,6 +156,9 @@ def main() -> int:
     args.report_dir.mkdir(parents=True, exist_ok=True)
     backup_hash = _verify_backup(args.backup)
     args.state_dir.mkdir(parents=True, exist_ok=True)
+    environment = os.environ.copy()
+    environment.setdefault("PYTHONPATH", str(Path(__file__).resolve().parents[1]))
+    _run_schema_migrations(args.python, environment)
     command = [
         str(args.python),
         str(Path(__file__).with_name("local_market_worker.py")),
@@ -150,8 +173,6 @@ def main() -> int:
         "--max-recoverable-gap-intervals",
         str(args.max_recoverable_gap_intervals),
     ]
-    environment = os.environ.copy()
-    environment.setdefault("PYTHONPATH", str(Path(__file__).resolve().parents[1]))
     started_at = _utc_now()
     started_monotonic = time.monotonic()
     samples: list[dict[str, Any]] = []
