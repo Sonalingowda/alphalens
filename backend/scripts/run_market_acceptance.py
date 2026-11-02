@@ -158,9 +158,10 @@ def main() -> int:
     args.state_dir.mkdir(parents=True, exist_ok=True)
     environment = os.environ.copy()
     environment.setdefault("PYTHONPATH", str(Path(__file__).resolve().parents[1]))
-    _run_schema_migrations(args.python, environment)
+    python_executable = args.python.resolve()
+    _run_schema_migrations(python_executable, environment)
     command = [
-        str(args.python),
+        str(python_executable),
         str(Path(__file__).with_name("local_market_worker.py")),
         "--checkpoint",
         str(checkpoint),
