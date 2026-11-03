@@ -29,6 +29,8 @@ from app.live_market_data.processing import (
 from app.live_market_data.service import LiveMarketIngestionService
 from app.live_market_data.snapshots import build_market_snapshot
 from app.live_market_data.continuous import (
+    BoundedCheckpointCatchUp,
+    CheckpointCatchUpResult,
     ContinuousClosedCandleProcessor,
     FilesystemRuntimeCheckpointStore,
     RuntimeCheckpoint,
@@ -46,6 +48,8 @@ __all__ = (
     "BINANCE_STREAM_PATH",
     "BinanceKlineParser",
     "BinanceWebSocketClient",
+    "BoundedCheckpointCatchUp",
+    "CheckpointCatchUpResult",
     "CandleDeduplicator",
     "CandleGap",
     "CandleGapDetector",

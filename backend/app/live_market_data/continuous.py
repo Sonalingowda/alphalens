@@ -190,6 +190,103 @@ class RuntimeHealthSnapshot:
 
 PipelineRunner = Callable[[MarketSnapshot, datetime], Awaitable[object]]
 GapRecovery = Callable[[datetime, datetime], Awaitable[list[CompletedCandle]]]
+BatchVerifier = Callable[[tuple[CompletedCandle, ...]], Awaitable[None]]
+
+
+@dataclass(frozen=True, slots=True)
+class CheckpointCatchUpResult:
+    """Auditable result of one explicit bounded checkpoint catch-up."""
+
+    initial_open_time: datetime
+    final_open_time: datetime
+    processed_candles: int
+    batch_ranges: tuple[tuple[datetime, datetime], ...]
+
+
+class BoundedCheckpointCatchUp:
+    """Replay a stale checkpoint through the normal processor in bounded batches.
+
+    This is an explicit operator-directed recovery path. Each batch is fetched
+    and verified before any candle in that batch is processed. Checkpoint
+    advancement remains exclusively owned by ``ContinuousClosedCandleProcessor``
+    after persistence and the runtime pipeline succeed.
+    """
+
+    def __init__(
+        self,
+        *,
+        processor: "ContinuousClosedCandleProcessor",
+        recovery: GapRecovery,
+        batch_verifier: BatchVerifier,
+        max_batch_intervals: int = 120,
+    ) -> None:
+        if not 1 <= max_batch_intervals <= 120:
+            raise ValueError("Checkpoint catch-up batches must be between 1 and 120 intervals.")
+        if not callable(batch_verifier):
+            raise TypeError("Checkpoint catch-up requires a batch verifier.")
+        self._processor = processor
+        self._recovery = recovery
+        self._batch_verifier = batch_verifier
+        self._max_batch_intervals = max_batch_intervals
+
+    async def recover_to(self, end_open_time: datetime) -> CheckpointCatchUpResult:
+        """Recover through ``end_open_time`` without bypassing pipeline processing."""
+        if end_open_time.tzinfo is None or end_open_time.utcoffset() is None:
+            raise ValueError("Catch-up end must be timezone-aware.")
+        end_open_time = end_open_time.astimezone(timezone.utc)
+        checkpoint = self._processor.checkpoint
+        if checkpoint is None or checkpoint.last_committed_open_time is None:
+            raise RuntimeProcessingError("Catch-up requires an existing durable checkpoint.")
+        if checkpoint.status not in {"READY", "ERROR", "QUARANTINED", "PROCESSING"}:
+            raise RuntimeProcessingError(
+                f"Catch-up cannot start from checkpoint status {checkpoint.status}."
+            )
+        initial_open_time = checkpoint.last_committed_open_time + _FIVE_MINUTES
+        if end_open_time < initial_open_time:
+            raise RuntimeProcessingError("Catch-up end precedes the next checkpoint interval.")
+
+        current = initial_open_time
+        processed = 0
+        batch_ranges: list[tuple[datetime, datetime]] = []
+        while current <= end_open_time:
+            batch_end = min(
+                end_open_time,
+                current + _FIVE_MINUTES * (self._max_batch_intervals - 1),
+            )
+            expected_count = int((batch_end - current) / _FIVE_MINUTES) + 1
+            recovered = await self._recovery(current, batch_end)
+            _validate_recovered_range(
+                recovered,
+                expected_start=current,
+                expected_count=expected_count,
+            )
+            batch = tuple(recovered)
+            await self._batch_verifier(batch)
+            for candle in batch:
+                outcome = await self._processor.process_with_retry(candle)
+                if outcome not in {
+                    RuntimeProcessingOutcome.PROCESSED,
+                    RuntimeProcessingOutcome.DUPLICATE,
+                }:
+                    raise RuntimeProcessingError(
+                        f"Catch-up candle was not processed: {outcome.value}."
+                    )
+                processed += 1
+            batch_ranges.append((current, batch_end))
+            current = batch_end + _FIVE_MINUTES
+
+        final_checkpoint = self._processor.checkpoint
+        if (
+            final_checkpoint is None
+            or final_checkpoint.last_committed_open_time != end_open_time
+        ):
+            raise RuntimeCheckpointError("Catch-up did not reach the requested checkpoint boundary.")
+        return CheckpointCatchUpResult(
+            initial_open_time=initial_open_time,
+            final_open_time=end_open_time,
+            processed_candles=processed,
+            batch_ranges=tuple(batch_ranges),
+        )
 
 
 class ContinuousClosedCandleProcessor:

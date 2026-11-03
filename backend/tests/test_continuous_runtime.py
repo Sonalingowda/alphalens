@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock
 
 from app.live_market_data import (
     BinanceWebSocketClient,
+    BoundedCheckpointCatchUp,
     CompletedCandle,
     ContinuousClosedCandleProcessor,
     FilesystemRuntimeCheckpointStore,
@@ -234,6 +235,121 @@ class ContinuousRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 processor.checkpoint.last_committed_open_time,  # type: ignore[union-attr]
                 _candle(0).open_time,
             )
+
+    async def test_stale_checkpoint_catch_up_uses_120_120_54_verified_batches(self) -> None:
+        """A 294-interval stale checkpoint is replayed only in bounded batches."""
+        with tempfile.TemporaryDirectory() as directory:
+            pipeline = AsyncMock()
+            processor = _processor(Path(directory) / "checkpoint.json", pipeline)
+            await processor.process(_candle(0))
+            self.assertEqual(
+                await processor.process(_candle(294)),
+                RuntimeProcessingOutcome.QUARANTINED,
+            )
+
+            all_candles = [_candle(index) for index in range(1, 295)]
+            requested_ranges: list[tuple[datetime, datetime]] = []
+            verified_batch_sizes: list[int] = []
+
+            async def recover(start: datetime, end: datetime) -> list[CompletedCandle]:
+                requested_ranges.append((start, end))
+                return [
+                    candle
+                    for candle in all_candles
+                    if start <= candle.open_time <= end
+                ]
+
+            async def verify(batch: tuple[CompletedCandle, ...]) -> None:
+                verified_batch_sizes.append(len(batch))
+                self.assertEqual(
+                    [candle.open_time for candle in batch],
+                    [
+                        batch[0].open_time + timedelta(minutes=5 * index)
+                        for index in range(len(batch))
+                    ],
+                )
+
+            catch_up = BoundedCheckpointCatchUp(
+                processor=processor,
+                recovery=recover,
+                batch_verifier=verify,
+            )
+            result = await catch_up.recover_to(_candle(294).open_time)
+
+            self.assertEqual(verified_batch_sizes, [120, 120, 54])
+            self.assertEqual(len(requested_ranges), 3)
+            self.assertEqual(result.processed_candles, 294)
+            self.assertEqual(
+                result.batch_ranges,
+                (
+                    (_candle(1).open_time, _candle(120).open_time),
+                    (_candle(121).open_time, _candle(240).open_time),
+                    (_candle(241).open_time, _candle(294).open_time),
+                ),
+            )
+            self.assertEqual(
+                processor.checkpoint.last_committed_open_time,  # type: ignore[union-attr]
+                _candle(294).open_time,
+            )
+            self.assertEqual(processor.checkpoint.status, "READY")  # type: ignore[union-attr]
+            self.assertEqual(pipeline.await_count, 295)
+
+    async def test_stale_checkpoint_catch_up_restarts_from_durable_error_boundary(self) -> None:
+        """An interrupted pipeline is retried from its durable in-flight candle."""
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "checkpoint.json"
+            repository = MarketSnapshotMemoryRepository()
+            ingestion = LiveMarketIngestionService(
+                repository=repository,
+                code_version="checkpoint04.test",
+                rest_base_url="http://127.0.0.1:9",
+                rest_fallback_urls=(),
+            )
+            first_pipeline = AsyncMock(side_effect=[None, RuntimeError("interrupted")])
+            first = ContinuousClosedCandleProcessor(
+                ingestion=ingestion,
+                checkpoint_store=FilesystemRuntimeCheckpointStore(
+                    path, source_dataset_sha256=SOURCE_HASH
+                ),
+                pipeline=first_pipeline,
+                code_version="checkpoint04.test",
+            )
+            await first.process(_candle(0))
+            with self.assertRaises(RuntimeError):
+                await first.process(_candle(1))
+            self.assertEqual(first.checkpoint.status, "ERROR")  # type: ignore[union-attr]
+
+            second_pipeline = AsyncMock()
+            second = ContinuousClosedCandleProcessor(
+                ingestion=ingestion,
+                checkpoint_store=FilesystemRuntimeCheckpointStore(
+                    path, source_dataset_sha256=SOURCE_HASH
+                ),
+                pipeline=second_pipeline,
+                code_version="checkpoint04.test",
+            )
+            requested_starts: list[datetime] = []
+
+            async def recover(start: datetime, end: datetime) -> list[CompletedCandle]:
+                requested_starts.append(start)
+                return [_candle(index) for index in range(1, 4)]
+
+            async def verify(batch: tuple[CompletedCandle, ...]) -> None:
+                self.assertEqual(len(batch), 3)
+
+            result = await BoundedCheckpointCatchUp(
+                processor=second,
+                recovery=recover,
+                batch_verifier=verify,
+            ).recover_to(_candle(3).open_time)
+
+            self.assertEqual(requested_starts, [_candle(1).open_time])
+            self.assertEqual(result.processed_candles, 3)
+            self.assertEqual(
+                second.checkpoint.last_committed_open_time,  # type: ignore[union-attr]
+                _candle(3).open_time,
+            )
+            self.assertEqual(second_pipeline.await_count, 3)
 
     async def test_bounded_retry_recovers_transient_pipeline_failure(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
