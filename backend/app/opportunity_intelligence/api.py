@@ -289,11 +289,42 @@ def create_opportunity_intelligence_app(
         as_of: datetime | None = None,
         limit: Annotated[int, Query(ge=1, le=500)] = 50,
     ) -> dict[str, object]:
+        resolved_as_of = _resolve_as_of(as_of, current_time)
+        if thesis_service is not None:
+            thesis_history = await thesis_service.list_terminal_history(
+                instrument=instrument,
+                timeframe=timeframe,
+                as_of=resolved_as_of,
+                limit=limit,
+            )
+            items = [
+                {
+                    "opportunity_id": row["original_opportunity_id"],
+                    "scope": {
+                        "instrument": row["instrument"],
+                        "timeframe": row["timeframe"],
+                    },
+                    "direction": row["direction"],
+                    "lifecycle_state": row["current_state"],
+                    "available_at": _utc_timestamp(
+                        row["last_observed_at"] or row["original_created_at"]
+                    ).isoformat(),
+                    "event_count": int(row["event_count"]),
+                }
+                for row in thesis_history
+            ]
+            return _success(
+                {
+                    "contract_version": OPPORTUNITY_API_VERSION,
+                    "scope": {"instrument": instrument, "timeframe": timeframe},
+                    "items": tuple(items),
+                    "as_of": resolved_as_of.isoformat(),
+                }
+            )
         if lifecycle_repository is None:
             raise StorageUnavailableError(
                 "Lifecycle repository is not configured."
             )
-        resolved_as_of = _resolve_as_of(as_of, current_time)
         scope = MarketScope(instrument=instrument, timeframe=timeframe)
         terminal_lifecycles = await lifecycle_repository.list_terminal_lifecycles(
             scope=scope,

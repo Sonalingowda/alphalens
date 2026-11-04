@@ -634,6 +634,7 @@ class OpportunityHistoryRouteTests(unittest.TestCase):
         self,
         *,
         lifecycle_repository=None,
+        thesis_service=None,
     ) -> TestClient:
         dashboard_value = SimpleNamespace(
             items=(),
@@ -655,6 +656,7 @@ class OpportunityHistoryRouteTests(unittest.TestCase):
                 get_current=AsyncMock(return_value=detail_value),
             ),
             lifecycle_repository=lifecycle_repository,
+            thesis_service=thesis_service,
             clock=lambda: self.NOW,
         )
         return TestClient(app)
@@ -715,6 +717,32 @@ class OpportunityHistoryRouteTests(unittest.TestCase):
         items = response.json()["data"]["items"]
         self.assertEqual(len(items), 1)
         self.assertEqual(items[0]["opportunity_id"], "opp.expired")
+
+    def test_history_uses_persistent_thesis_projection_when_configured(self) -> None:
+        thesis_service = SimpleNamespace(
+            list_terminal_history=AsyncMock(
+                return_value=[
+                    {
+                        "original_opportunity_id": "opp.invalidated",
+                        "instrument": "BTCUSDT",
+                        "timeframe": "5m",
+                        "direction": "SELL",
+                        "current_state": "INVALIDATED",
+                        "last_observed_at": self.NOW,
+                        "original_created_at": self.NOW,
+                        "event_count": 3,
+                    }
+                ]
+            )
+        )
+        client = self._history_client(thesis_service=thesis_service)
+        response = client.get(
+            "/api/v1/opportunities/history",
+            params={"instrument": "BTCUSDT", "timeframe": "5m", "as_of": self.NOW.isoformat()},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["data"]["items"][0]["lifecycle_state"], "INVALIDATED")
+        thesis_service.list_terminal_history.assert_awaited_once()
 
     def test_openapi_includes_history_route(self) -> None:
         """History endpoint appears in the OpenAPI schema."""

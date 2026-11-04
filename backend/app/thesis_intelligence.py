@@ -344,6 +344,66 @@ class ThesisIntelligenceService:
                 result.append(primary)
             return result[:limit]
 
+    async def list_terminal_history(
+        self,
+        *,
+        instrument: str = "BTCUSDT",
+        timeframe: str = "5m",
+        as_of: datetime | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        """Return immutable terminal thesis records for the history projection.
+
+        Thesis records are persisted in the thesis tables, not in the legacy
+        immutable lifecycle aggregate projection.  Keep this query read-only
+        and point-in-time bounded so history cannot expose records created
+        after the requested observation time.
+        """
+        resolved_as_of = _utc(as_of or datetime.now(timezone.utc))
+        async with self._sessions() as session:
+            rows = (
+                await session.execute(
+                    text(
+                        """
+                        SELECT t.thesis_id,
+                               t.original_opportunity_id,
+                               t.instrument,
+                               t.timeframe,
+                               t.direction,
+                               t.current_state,
+                               t.original_created_at,
+                               t.last_observed_at,
+                               COUNT(e.event_id) AS event_count
+                        FROM opportunity_theses AS t
+                        LEFT JOIN opportunity_thesis_events AS e
+                          ON e.thesis_id = t.thesis_id
+                        WHERE t.instrument = :instrument
+                          AND t.timeframe = :timeframe
+                          AND t.current_state IN (
+                              'INITIAL_TARGET_REACHED', 'INVALIDATED',
+                              'EXPIRED', 'RESOLVED', 'OUTCOME_AMBIGUOUS',
+                              'SUPERSEDED', 'ARCHIVED'
+                          )
+                          AND COALESCE(t.last_observed_at, t.original_created_at) <= :as_of
+                        GROUP BY t.thesis_id, t.original_opportunity_id,
+                                 t.instrument, t.timeframe, t.direction,
+                                 t.current_state, t.original_created_at,
+                                 t.last_observed_at
+                        ORDER BY COALESCE(t.last_observed_at, t.original_created_at) DESC,
+                                 t.thesis_id DESC
+                        LIMIT :limit
+                        """
+                    ),
+                    {
+                        "instrument": instrument,
+                        "timeframe": timeframe,
+                        "as_of": resolved_as_of,
+                        "limit": limit,
+                    },
+                )
+            ).mappings().all()
+        return [dict(row) for row in rows]
+
     async def get(self, thesis_id: str) -> dict[str, Any] | None:
         async with self._sessions() as session:
             row = (await session.execute(text("SELECT * FROM opportunity_theses WHERE thesis_id = :thesis_id"), {"thesis_id": thesis_id})).mappings().first()
