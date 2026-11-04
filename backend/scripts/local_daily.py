@@ -9,6 +9,7 @@ bounded pipeline.
 from __future__ import annotations
 
 import argparse
+import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import fcntl
@@ -25,7 +26,7 @@ from urllib.request import urlopen
 from urllib.parse import urlsplit
 from uuid import uuid4
 
-from app.live_market_data import FilesystemRuntimeCheckpointStore
+from app.live_market_data import FilesystemRuntimeCheckpointStore, RuntimeCheckpoint
 from app.live_market_data.continuous import RuntimeCheckpointError
 
 
@@ -37,6 +38,50 @@ MAX_RECOVERY_BATCH_INTERVALS = 120
 
 class DailyRuntimeError(RuntimeError):
     """Raised when the daily runtime cannot prove safe ownership/configuration."""
+
+
+async def verify_owner_database_continuity(
+    config: "DailyRuntimeConfig",
+    checkpoint: RuntimeCheckpoint,
+    *,
+    connect: Any | None = None,
+) -> None:
+    """Read-only proof that the owner DB contains the checkpoint boundary."""
+    if connect is None:
+        import asyncpg
+
+        connect = asyncpg.connect
+    dsn = config.database_url.replace(
+        "postgresql+asyncpg://", "postgresql://", 1
+    )
+    connection = await connect(dsn)
+    try:
+        database_name, schema_name = await connection.fetchrow(
+            "SELECT current_database(), current_schema()"
+        )
+        if database_name != config.expected_database or schema_name != "public":
+            raise DailyRuntimeError(
+                "Connected database identity does not match the daily owner contract."
+            )
+        timestamp = checkpoint.last_committed_open_time.isoformat().replace(
+            "+00:00", "Z"
+        )
+        count = await connection.fetchval(
+            """
+            SELECT count(*)
+            FROM immutable_runtime_aggregates
+            WHERE scope_instrument = 'BTCUSDT'
+              AND scope_timeframe = '5m'
+              AND canonical_payload->'candles'->0->>'timestamp' = $1
+            """,
+            timestamp,
+        )
+        if count != 1:
+            raise DailyRuntimeError(
+                "Owner database does not contain the authoritative checkpoint boundary."
+            )
+    finally:
+        await connection.close()
 
 
 @dataclass(frozen=True, slots=True)
@@ -170,6 +215,15 @@ class DailyRuntimeConfig:
             raise DailyRuntimeError(
                 "Authoritative checkpoint must contain a durable committed boundary."
             )
+        content_hash = checkpoint.last_committed_content_hash
+        if (
+            content_hash is None
+            or len(content_hash) != 64
+            or any(character not in "0123456789abcdef" for character in content_hash)
+        ):
+            raise DailyRuntimeError(
+                "Authoritative checkpoint committed content hash is invalid."
+            )
 
 
 def _parse_timestamp(value: object) -> datetime | None:
@@ -252,6 +306,18 @@ class DailySupervisor:
 
     def preflight(self) -> None:
         self.config.validate()
+        checkpoint = FilesystemRuntimeCheckpointStore(
+            self.config.checkpoint,
+            source_dataset_sha256=self.config.source_identity,
+        ).load()
+        if checkpoint is None:
+            raise DailyRuntimeError("Authoritative checkpoint disappeared during preflight.")
+        try:
+            asyncio.run(verify_owner_database_continuity(self.config, checkpoint))
+        except DailyRuntimeError:
+            raise
+        except Exception as error:  # noqa: BLE001 - fail closed without DSN details
+            raise DailyRuntimeError("Owner database continuity verification failed.") from error
         self.config.state_dir.mkdir(parents=True, exist_ok=True)
         self._acquire_checkpoint_lock()
         for port, name in ((self.config.api_port, "API"), (self.config.frontend_port, "frontend")):

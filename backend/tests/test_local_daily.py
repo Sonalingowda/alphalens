@@ -13,6 +13,7 @@ from scripts.local_daily import (
     DailyRuntimeError,
     DailySupervisor,
     derive_runtime_state,
+    verify_owner_database_continuity,
 )
 from app.opportunity_intelligence.api import _feed_snapshot
 from app.live_market_data import FilesystemRuntimeCheckpointStore, RuntimeCheckpoint
@@ -214,3 +215,33 @@ def test_supervisors_share_checkpoint_lock_not_daily_state_lock() -> None:
                     second._acquire_checkpoint_lock()
             finally:
                 first.stop()
+
+
+def test_database_continuity_probe_requires_expected_owner_boundary() -> None:
+    class Connection:
+        async def fetchrow(self, query: str) -> tuple[str, str]:
+            return "db", "public"
+
+        async def fetchval(self, query: str, timestamp: str) -> int:
+            assert timestamp == "2026-11-03T18:10:00Z"
+            return 1
+
+        async def close(self) -> None:
+            return None
+
+    async def connect(dsn: str) -> Connection:
+        assert dsn == "postgresql://user:pass@127.0.0.1:55461/db"
+        return Connection()
+
+    with tempfile.TemporaryDirectory() as directory:
+        checkpoint = _write_checkpoint(Path(directory) / "owner" / "checkpoint.json")
+        config = _config(Path(directory) / "daily", checkpoint)
+        loaded = FilesystemRuntimeCheckpointStore(
+            checkpoint, source_dataset_sha256=SOURCE
+        ).load()
+        assert loaded is not None
+        import asyncio
+
+        asyncio.run(
+            verify_owner_database_continuity(config, loaded, connect=connect)
+        )
