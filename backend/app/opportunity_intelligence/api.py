@@ -891,6 +891,18 @@ def _feed_snapshot(status: Mapping[str, object] | None, now: datetime) -> dict[s
     worker = status.get("worker") if isinstance(status.get("worker"), Mapping) else status
     connection = status.get("connection") if isinstance(status.get("connection"), Mapping) else {}
     checkpoint = status.get("checkpoint") if isinstance(status.get("checkpoint"), Mapping) else {}
+    runtime_state = status.get("runtime_state")
+    if runtime_state is not None and runtime_state != "LIVE":
+        warning = (
+            "Live market feed is unavailable; no current opportunities are verified."
+        )
+        if runtime_state == "STALE":
+            warning = "Live market feed telemetry is stale; no current opportunities are verified."
+        elif runtime_state == "FAILED":
+            warning = "Live market feed failed closed; no current opportunities are verified."
+        elif runtime_state == "RECOVERING":
+            warning = "Live market feed is recovering; no current opportunities are verified."
+        return {"state": "stopped", "warning": warning, "evaluated_at": now.isoformat()}
     worker_state = worker.get("status") or worker.get("worker_status")
     if worker_state != "RUNNING" or connection.get("state") not in {"connected", "running"} or connection.get("healthy") is False:
         state, warning = "stopped", "Live market feed is stopped; no current opportunities are verified."

@@ -41,12 +41,16 @@ from app.opportunity_intelligence.repositories import (
 from app.persistence.database import session_factory
 from app.runtime_pipeline import build_runtime_pipeline
 from app.thesis_intelligence import ThesisIntelligenceService
+from scripts.local_daily import derive_runtime_state
 from app.inference.repository import load_expected_move_artifact
 from app.paper_execution import (
     PaperExecutionPersistence,
     PaperTrackingSelectionService,
     RepositoryBackedPaperTrackingAuthoritativeLoader,
 )
+from app.paper_execution.api import create_paper_tracking_router
+from app.paper_execution.auth import ClerkPaperTrackingAuthenticator
+from app.settings import load_settings
 
 
 def _local_runtime_status_payload() -> dict[str, object] | None:
@@ -59,10 +63,19 @@ def _local_runtime_status_payload() -> dict[str, object] | None:
         payload = json.loads(Path(status_path).read_text())
     except (OSError, ValueError):
         return None
-    return payload if isinstance(payload, dict) else None
-from app.paper_execution.api import create_paper_tracking_router
-from app.paper_execution.auth import ClerkPaperTrackingAuthenticator
-from app.settings import load_settings
+    if not isinstance(payload, dict):
+        return None
+    try:
+        freshness = float(os.getenv("ALPHALENS_HEARTBEAT_FRESHNESS_SECONDS", "30"))
+        payload["runtime_state"] = derive_runtime_state(
+            payload,
+            now=datetime.now(timezone.utc),
+            heartbeat_freshness_seconds=freshness,
+            expected_run_id=os.getenv("ALPHALENS_LOCAL_DAILY_RUN_ID") or None,
+        )
+    except (TypeError, ValueError):
+        payload["runtime_state"] = "STALE"
+    return payload
 
 
 logger = logging.getLogger("alphalens.prediction_api")

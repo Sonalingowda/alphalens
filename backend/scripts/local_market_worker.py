@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 import signal
 import tempfile
+from uuid import uuid4
 
 from app.live_market_data import (
     BinanceKlineParser,
@@ -32,6 +33,7 @@ PROTECTED_START = datetime(2027, 1, 11, tzinfo=timezone.utc)
 PROTECTED_END = datetime(2027, 2, 10, tzinfo=timezone.utc)
 logger = logging.getLogger("alphalens.local_market_worker")
 DEFAULT_MAX_RECOVERABLE_GAP_INTERVALS = 120
+DEFAULT_HEARTBEAT_INTERVAL_SECONDS = 5.0
 
 
 class WorkerOwnershipError(RuntimeError):
@@ -88,6 +90,12 @@ async def main() -> None:
     parser.add_argument("--checkpoint", type=Path, required=True)
     parser.add_argument("--status", type=Path, required=True)
     parser.add_argument("--source-identity", required=True)
+    parser.add_argument("--run-id", default=None)
+    parser.add_argument(
+        "--heartbeat-interval-seconds",
+        type=float,
+        default=DEFAULT_HEARTBEAT_INTERVAL_SECONDS,
+    )
     parser.add_argument("--warmup-limit", type=int, default=250)
     parser.add_argument(
         "--max-recoverable-gap-intervals",
@@ -97,6 +105,10 @@ async def main() -> None:
     args = parser.parse_args()
     if not 1 <= args.max_recoverable_gap_intervals <= 1000:
         raise ValueError("Maximum recoverable gap must be between 1 and 1000 intervals.")
+    if args.heartbeat_interval_seconds <= 0:
+        raise ValueError("Heartbeat interval must be positive.")
+    run_id = args.run_id or uuid4().hex
+    started_at = datetime.now(timezone.utc).isoformat()
     ownership = WorkerOwnershipLock(args.checkpoint)
     ownership.acquire()
 
@@ -159,11 +171,24 @@ async def main() -> None:
     )
     parser_impl = BinanceKlineParser()
 
+    current_status = "STARTING"
+    current_error: str | None = None
+
     def write_status(worker_status: str, last_error: str | None = None) -> None:
+        nonlocal current_status, current_error
+        current_status = worker_status
+        current_error = last_error
+        now = datetime.now(timezone.utc).isoformat()
         _write_json(
             args.status,
             {
                 "worker_status": worker_status,
+                "run_id": run_id,
+                "pid": os.getpid(),
+                "started_at": started_at,
+                "heartbeat_at": now,
+                "checkpoint_path": str(args.checkpoint.resolve()),
+                "source_identity": args.source_identity,
                 "symbol": "BTCUSDT",
                 "timeframe": "5m",
                 "closed_candles_only": True,
@@ -175,9 +200,15 @@ async def main() -> None:
                 "external_notifications": False,
                 "trading": False,
                 "last_error": last_error,
-                "updated_at": datetime.now(timezone.utc).isoformat(),
+                "updated_at": now,
             },
         )
+
+    async def heartbeat() -> None:
+        while not stop_event.is_set():
+            await asyncio.sleep(args.heartbeat_interval_seconds)
+            if not stop_event.is_set():
+                write_status(current_status, current_error)
 
     write_status("STARTING")
     try:
@@ -188,6 +219,7 @@ async def main() -> None:
     except Exception as error:  # noqa: BLE001 - status remains observable
         write_status("WARMUP_FAILED", type(error).__name__)
         logger.exception("local_warmup_failed")
+        ownership.release()
         raise
 
     async def handle_message(raw_message: str | bytes) -> None:
@@ -218,9 +250,12 @@ async def main() -> None:
             raise
 
     write_status("RUNNING")
+    heartbeat_task = asyncio.create_task(heartbeat())
     try:
         await ingestion.client.run(handle_message, stop_event)
     finally:
+        heartbeat_task.cancel()
+        await asyncio.gather(heartbeat_task, return_exceptions=True)
         write_status("STOPPED")
         ownership.release()
 
