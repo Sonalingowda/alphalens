@@ -368,6 +368,25 @@ class LiveMarketIngestionService:
         assert last_error is not None
         raise last_error
 
+    async def latest_closed_candle(self) -> CompletedCandle:
+        """Return the latest genuine closed Binance BTCUSDT/5m candle."""
+        now = datetime.now(timezone.utc)
+        rows = await self._fetch_klines(
+            SUPPORTED_SYMBOL,
+            CandleTimeframe.MINUTE_5,
+            3,
+            int(now.timestamp() * 1000),
+        )
+        candles = [_completed_candle_from_rest_kline(row) for row in rows]
+        closed = [
+            candle
+            for candle in candles
+            if candle.close_time < now and _is_valid_ingestion_candle(candle)
+        ]
+        if not closed:
+            raise ValueError("Binance REST returned no closed BTCUSDT/5m candle.")
+        return max(closed, key=lambda candle: candle.open_time)
+
     async def recover_closed_candle_gap(
         self,
         missing_start: datetime,

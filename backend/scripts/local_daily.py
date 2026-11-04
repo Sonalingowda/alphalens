@@ -180,7 +180,12 @@ def derive_runtime_state(
     worker_status = status.get("worker_status")
     if worker_status in {"WARMED", "STARTING"}:
         return "RECOVERING"
-    if worker_status in {"WARMUP_FAILED", "PROCESSING_ERROR", "STOPPED_PROTECTED_WINDOW"}:
+    if worker_status in {
+        "WARMUP_FAILED",
+        "RECOVERY_FAILED",
+        "PROCESSING_ERROR",
+        "STOPPED_PROTECTED_WINDOW",
+    }:
         return "FAILED"
     if worker_status == "STOPPED":
         return "STOPPED"

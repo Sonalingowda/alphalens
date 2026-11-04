@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 from dataclasses import asdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import fcntl
 import json
 import logging
@@ -18,6 +18,8 @@ from uuid import uuid4
 from app.live_market_data import (
     BinanceKlineParser,
     BinanceWebSocketClient,
+    BoundedCheckpointCatchUp,
+    CompletedCandle,
     ContinuousClosedCandleProcessor,
     FilesystemRuntimeCheckpointStore,
     LiveMarketIngestionService,
@@ -103,8 +105,8 @@ async def main() -> None:
         default=DEFAULT_MAX_RECOVERABLE_GAP_INTERVALS,
     )
     args = parser.parse_args()
-    if not 1 <= args.max_recoverable_gap_intervals <= 1000:
-        raise ValueError("Maximum recoverable gap must be between 1 and 1000 intervals.")
+    if not 1 <= args.max_recoverable_gap_intervals <= 120:
+        raise ValueError("Maximum recoverable gap must be between 1 and 120 intervals.")
     if args.heartbeat_interval_seconds <= 0:
         raise ValueError("Heartbeat interval must be positive.")
     run_id = args.run_id or uuid4().hex
@@ -173,6 +175,7 @@ async def main() -> None:
 
     current_status = "STARTING"
     current_error: str | None = None
+    heartbeat_task: asyncio.Task[None] | None = None
 
     def write_status(worker_status: str, last_error: str | None = None) -> None:
         nonlocal current_status, current_error
@@ -210,15 +213,53 @@ async def main() -> None:
             if not stop_event.is_set():
                 write_status(current_status, current_error)
 
+    async def verify_recovery_batch(batch: tuple[CompletedCandle, ...]) -> None:
+        """Verify that every recovered batch is genuine Binance closed data."""
+        now = datetime.now(timezone.utc)
+        previous = None
+        for candle in batch:
+            if candle.provider != "binance_spot":
+                raise ValueError("Recovery batch contains a non-Binance candle.")
+            if candle.symbol != "BTCUSDT" or candle.timeframe is not CandleTimeframe.MINUTE_5:
+                raise ValueError("Recovery batch contains an unsupported candle scope.")
+            if candle.close_time >= now or candle.event_time < candle.close_time:
+                raise ValueError("Recovery batch contains an open or incomplete candle.")
+            if previous is not None and candle.open_time != previous + timedelta(minutes=5):
+                raise ValueError("Recovery batch is not chronologically contiguous.")
+            previous = candle.open_time
+
+    async def recover_startup_gap() -> None:
+        checkpoint = processor.checkpoint
+        if checkpoint is None or checkpoint.last_committed_open_time is None:
+            return
+        latest = await ingestion.latest_closed_candle()
+        if latest.open_time <= checkpoint.last_committed_open_time:
+            return
+        write_status("RECOVERING")
+        result = await BoundedCheckpointCatchUp(
+            processor=processor,
+            recovery=ingestion.recover_closed_candle_gap,
+            batch_verifier=verify_recovery_batch,
+            max_batch_intervals=args.max_recoverable_gap_intervals,
+        ).recover_to(latest.open_time)
+        increment("recovery_batches", len(result.batch_ranges))
+        increment("recovery_candles", result.processed_candles)
+
     write_status("STARTING")
+    heartbeat_task = asyncio.create_task(heartbeat())
     try:
         if args.warmup_limit < 200:
             raise ValueError("Local warmup must retain at least 200 closed candles.")
         await ingestion.warmup_history_with_retry(limit=args.warmup_limit)
         write_status("WARMED")
+        await recover_startup_gap()
+        write_status("WARMED")
     except Exception as error:  # noqa: BLE001 - status remains observable
-        write_status("WARMUP_FAILED", type(error).__name__)
-        logger.exception("local_warmup_failed")
+        write_status("RECOVERY_FAILED", type(error).__name__)
+        logger.exception("local_startup_recovery_failed")
+        assert heartbeat_task is not None
+        heartbeat_task.cancel()
+        await asyncio.gather(heartbeat_task, return_exceptions=True)
         ownership.release()
         raise
 
@@ -250,10 +291,10 @@ async def main() -> None:
             raise
 
     write_status("RUNNING")
-    heartbeat_task = asyncio.create_task(heartbeat())
     try:
         await ingestion.client.run(handle_message, stop_event)
     finally:
+        assert heartbeat_task is not None
         heartbeat_task.cancel()
         await asyncio.gather(heartbeat_task, return_exceptions=True)
         write_status("STOPPED")

@@ -497,6 +497,21 @@ class LiveIngestionServiceTests(unittest.IsolatedAsyncioTestCase):
         page = await repository.get_by_scope(_scope_query("5m", limit=200))
         self.assertEqual(len(page.items), 200)
 
+    async def test_latest_closed_candle_is_selected_from_verified_rest_rows(self) -> None:
+        repository = MarketSnapshotMemoryRepository()
+        service = LiveMarketIngestionService(
+            repository=repository,
+            code_version="git:abcdef123456",
+        )
+        service._fetch_klines = AsyncMock(  # type: ignore[method-assign]
+            return_value=[_kline_for_index(1), _kline_for_index(2)]
+        )
+
+        latest = await service.latest_closed_candle()
+
+        self.assertEqual(latest.open_time, START + timedelta(minutes=10))
+        self.assertEqual(latest.provider, "binance_spot")
+
     async def test_warmup_history_rejects_current_open_candle(self) -> None:
         repository = MarketSnapshotMemoryRepository()
         service = LiveMarketIngestionService(
