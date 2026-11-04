@@ -25,6 +25,9 @@ from urllib.request import urlopen
 from urllib.parse import urlsplit
 from uuid import uuid4
 
+from app.live_market_data import FilesystemRuntimeCheckpointStore
+from app.live_market_data.continuous import RuntimeCheckpointError
+
 
 RuntimeState = Literal["LIVE", "RECOVERING", "STOPPED", "STALE", "FAILED"]
 DEFAULT_HEARTBEAT_INTERVAL_SECONDS = 5.0
@@ -62,6 +65,7 @@ class DailyRuntimeConfig:
         *,
         root: Path,
         state_dir: Path,
+        checkpoint_path: Path,
         source_identity: str,
         heartbeat_freshness_seconds: float = DEFAULT_HEARTBEAT_FRESHNESS_SECONDS,
         heartbeat_interval_seconds: float = DEFAULT_HEARTBEAT_INTERVAL_SECONDS,
@@ -78,7 +82,7 @@ class DailyRuntimeConfig:
         config = cls(
             root=root.resolve(),
             state_dir=state_dir.resolve(),
-            checkpoint=state_dir.resolve() / "checkpoint.json",
+            checkpoint=checkpoint_path.resolve(),
             status=state_dir.resolve() / "worker-status.json",
             manifest=state_dir.resolve() / "daily-runtime.json",
             source_identity=source_identity,
@@ -138,6 +142,34 @@ class DailyRuntimeConfig:
             raise DailyRuntimeError("Daily runtime state cannot reuse acceptance evidence.")
         if self.state_dir == self.root or self.state_dir in self.root.parents:
             raise DailyRuntimeError("Daily runtime state must be outside the source checkout.")
+        if not self.checkpoint.is_absolute() or not self.checkpoint.is_file():
+            raise DailyRuntimeError(
+                "An existing authoritative checkpoint file is required; refusing implicit creation."
+            )
+        if self.checkpoint.is_symlink():
+            raise DailyRuntimeError("Authoritative checkpoint must not be a symlink.")
+        if self.checkpoint.parent == self.state_dir:
+            raise DailyRuntimeError(
+                "Authoritative checkpoint must be separate from daily runtime state."
+            )
+        path_parts = {part.lower() for part in self.checkpoint.parts}
+        if "acceptance" in path_parts or any("acceptance" in part for part in path_parts):
+            raise DailyRuntimeError(
+                "Acceptance checkpoint is immutable; an audited checkpoint handoff is required."
+            )
+        try:
+            checkpoint = FilesystemRuntimeCheckpointStore(
+                self.checkpoint,
+                source_dataset_sha256=self.source_identity,
+            ).load()
+        except RuntimeCheckpointError as error:
+            raise DailyRuntimeError(
+                "Authoritative checkpoint failed integrity or source validation."
+            ) from error
+        if checkpoint is None or checkpoint.last_committed_open_time is None:
+            raise DailyRuntimeError(
+                "Authoritative checkpoint must contain a durable committed boundary."
+            )
 
 
 def _parse_timestamp(value: object) -> datetime | None:
@@ -221,7 +253,18 @@ class DailySupervisor:
     def preflight(self) -> None:
         self.config.validate()
         self.config.state_dir.mkdir(parents=True, exist_ok=True)
-        lock_path = self.config.state_dir / ".daily-supervisor.lock"
+        self._acquire_checkpoint_lock()
+        for port, name in ((self.config.api_port, "API"), (self.config.frontend_port, "frontend")):
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+                probe.settimeout(0.25)
+                if probe.connect_ex(("127.0.0.1", port)) == 0:
+                    self.stop()
+                    raise DailyRuntimeError(f"Refusing to start: {name} port {port} is occupied.")
+
+    def _acquire_checkpoint_lock(self) -> None:
+        lock_path = self.config.checkpoint.with_name(
+            f".{self.config.checkpoint.name}.daily-supervisor.lock"
+        )
         self._lock_handle = lock_path.open("a+", encoding="utf-8")
         try:
             fcntl.flock(self._lock_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -229,11 +272,6 @@ class DailySupervisor:
             self._lock_handle.close()
             self._lock_handle = None
             raise DailyRuntimeError("Another daily supervisor owns this runtime.") from error
-        for port, name in ((self.config.api_port, "API"), (self.config.frontend_port, "frontend")):
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
-                probe.settimeout(0.25)
-                if probe.connect_ex(("127.0.0.1", port)) == 0:
-                    raise DailyRuntimeError(f"Refusing to start: {name} port {port} is occupied.")
 
     def worker_command(self) -> list[str]:
         return [
@@ -322,7 +360,14 @@ def _wait_http(url: str, timeout_seconds: float = 20.0) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[2])
-    parser.add_argument("--state-dir", type=Path, required=True)
+    parser.add_argument(
+        "--daily-state-dir",
+        "--state-dir",
+        dest="state_dir",
+        type=Path,
+        required=True,
+    )
+    parser.add_argument("--checkpoint-path", type=Path, required=True)
     parser.add_argument("--source-identity", required=True)
     parser.add_argument("--heartbeat-freshness-seconds", type=float, default=DEFAULT_HEARTBEAT_FRESHNESS_SECONDS)
     parser.add_argument("--heartbeat-interval-seconds", type=float, default=DEFAULT_HEARTBEAT_INTERVAL_SECONDS)
@@ -330,6 +375,7 @@ def main() -> int:
     config = DailyRuntimeConfig.from_environment(
         root=args.root,
         state_dir=args.state_dir,
+        checkpoint_path=args.checkpoint_path,
         source_identity=args.source_identity,
         heartbeat_freshness_seconds=args.heartbeat_freshness_seconds,
         heartbeat_interval_seconds=args.heartbeat_interval_seconds,

@@ -15,6 +15,7 @@ from scripts.local_daily import (
     derive_runtime_state,
 )
 from app.opportunity_intelligence.api import _feed_snapshot
+from app.live_market_data import FilesystemRuntimeCheckpointStore, RuntimeCheckpoint
 
 
 ROOT = Path("/private/tmp/alphalens-final-localhost-integration-20261102")
@@ -35,7 +36,28 @@ def _status(**overrides: object) -> dict[str, object]:
     return value
 
 
-def _config(state_dir: Path, **env: str) -> DailyRuntimeConfig:
+def _write_checkpoint(path: Path, source: str = SOURCE) -> Path:
+    FilesystemRuntimeCheckpointStore(path, source_dataset_sha256=source).save(
+        RuntimeCheckpoint(
+            source_dataset_sha256=source,
+            symbol="BTCUSDT",
+            timeframe="5m",
+            sequence=567,
+            status="READY",
+            last_committed_open_time=datetime(2026, 11, 3, 18, 10, tzinfo=timezone.utc),
+            last_committed_content_hash="a" * 64,
+            in_flight_open_time=None,
+            in_flight_content_hash=None,
+            missing_start=None,
+            missing_end=None,
+            last_error=None,
+            updated_at=datetime(2026, 11, 3, 18, 15, tzinfo=timezone.utc),
+        )
+    )
+    return path
+
+
+def _config(state_dir: Path, checkpoint_path: Path | None = None, **env: str) -> DailyRuntimeConfig:
     values = {
         "ALPHALENS_LOCAL_ONLY": "true",
         "ALPHALENS_ENVIRONMENT": "development",
@@ -47,10 +69,13 @@ def _config(state_dir: Path, **env: str) -> DailyRuntimeConfig:
         "ALPHALENS_DAILY_EXPECTED_REDIS_PORT": "56398",
     }
     values.update(env)
+    if checkpoint_path is None:
+        checkpoint_path = _write_checkpoint(state_dir.parent / "owner-checkpoint.json")
     with patch.dict(os.environ, values, clear=True):
         return DailyRuntimeConfig.from_environment(
             root=ROOT,
             state_dir=state_dir,
+            checkpoint_path=checkpoint_path,
             source_identity=SOURCE,
         )
 
@@ -86,6 +111,7 @@ def test_daily_config_refuses_acceptance_state_and_short_heartbeat_window() -> N
                 DailyRuntimeConfig.from_environment(
                     root=ROOT,
                     state_dir=Path(directory) / "runtime",
+                    checkpoint_path=_write_checkpoint(Path(directory) / "checkpoint.json"),
                     source_identity=SOURCE,
                     heartbeat_interval_seconds=5,
                     heartbeat_freshness_seconds=10,
@@ -139,3 +165,52 @@ def test_supervisor_worker_command_keeps_recovery_batch_bounded() -> None:
         assert command[index + 1] == "120"
         assert "--run-id" in command
         assert "--heartbeat-interval-seconds" in command
+
+
+def test_explicit_checkpoint_is_separate_from_daily_state() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        state = Path(directory) / "daily"
+        checkpoint = _write_checkpoint(Path(directory) / "owner" / "checkpoint.json")
+        config = _config(state, checkpoint)
+        assert config.checkpoint == checkpoint.resolve()
+        assert config.status.parent == state.resolve()
+        assert str(config.checkpoint) in DailySupervisor(config).worker_command()
+
+
+def test_missing_malformed_source_mismatch_and_acceptance_checkpoints_fail_closed() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        with pytest.raises(DailyRuntimeError, match="existing authoritative checkpoint"):
+            _config(root / "daily", root / "missing.json")
+
+        malformed = root / "malformed.json"
+        malformed.write_text("{}", encoding="utf-8")
+        with pytest.raises(DailyRuntimeError, match="integrity or source"):
+            _config(root / "daily", malformed)
+
+        mismatch = _write_checkpoint(root / "mismatch.json", "b" * 64)
+        with pytest.raises(DailyRuntimeError, match="integrity or source"):
+            _config(root / "daily", mismatch)
+
+        acceptance = _write_checkpoint(root / "alphalens-acceptance" / "state" / "checkpoint.json")
+        with pytest.raises(DailyRuntimeError, match="Acceptance checkpoint is immutable"):
+            _config(root / "daily", acceptance)
+
+
+def test_supervisors_share_checkpoint_lock_not_daily_state_lock() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        checkpoint = _write_checkpoint(root / "owner" / "checkpoint.json")
+        first = DailySupervisor(_config(root / "daily-one", checkpoint))
+        second = DailySupervisor(_config(root / "daily-two", checkpoint))
+        with patch.dict(os.environ, {"ALPHALENS_LOCAL_ONLY": "true", "ALPHALENS_ENVIRONMENT": "development"}):
+            first.config.validate()
+            second.config.validate()
+            first.config.state_dir.mkdir(parents=True)
+            second.config.state_dir.mkdir(parents=True)
+            first._acquire_checkpoint_lock()
+            try:
+                with pytest.raises(DailyRuntimeError, match="Another daily supervisor"):
+                    second._acquire_checkpoint_lock()
+            finally:
+                first.stop()
