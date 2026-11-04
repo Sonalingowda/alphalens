@@ -55,6 +55,42 @@ without printing it, set the database and Redis endpoints to ports `55461` and
 `state/worker-status.json`, and start only the backend/frontend from this
 worktree. Keep `ALPHALENS_MARKET_DATA_STARTUP_ENABLED=false`.
 
+The verified integration configuration can be reconstructed without displaying
+the token or passwords:
+
+```sh
+cd /private/tmp/alphalens-final-localhost-integration-20261102
+set -a
+source /private/tmp/alphalens-market-continuity-recovery-state-20261102/runtime.env
+set +a
+export ALPHALENS_ENVIRONMENT=development
+export ALPHALENS_LOCAL_ONLY=true
+export ALPHALENS_LOCAL_BIND_ADDRESS=localhost
+export ALPHALENS_API_HOST=127.0.0.1
+export ALPHALENS_API_PORT=18023
+export ALPHALENS_CORS_ALLOWED_ORIGINS=http://127.0.0.1:13023,http://localhost:13023
+export ALPHALENS_MARKET_DATA_STARTUP_ENABLED=false
+export ALPHALENS_DATABASE_URL="postgresql+asyncpg://${ALPHALENS_LOCAL_PGUSER}:${ALPHALENS_LOCAL_PGPASS}@127.0.0.1:55461/${ALPHALENS_LOCAL_PGDB}"
+export ALPHALENS_MIGRATION_DATABASE_URL="$ALPHALENS_DATABASE_URL"
+export ALPHALENS_REDIS_URL="redis://:${ALPHALENS_LOCAL_REDISPASS}@127.0.0.1:56398/0"
+export ALPHALENS_LOCAL_RUNTIME_STATUS_PATH=/private/tmp/alphalens-six-hour-acceptance-retry-20261103T121931Z/state/worker-status.json
+export PYTHONPATH="$PWD/backend"
+
+# Start only after confirming 13023/18023 are free or owned by this worktree.
+nohup /private/tmp/alphalens-binance-reliability-20261102/backend/.venv/bin/python \
+  -m uvicorn app.prediction_api:app --host 127.0.0.1 --port 18023 \
+  >/private/tmp/alphalens-gate8b-api.log 2>&1 </dev/null &
+
+cd frontend
+export ALPHALENS_API_BASE_URL=http://127.0.0.1:18023
+export NEXT_PUBLIC_ALPHALENS_API_BASE_URL=http://127.0.0.1:18023
+export NEXT_PUBLIC_ALPHALENS_LOCAL_ONLY=true
+nohup npm run dev -- --hostname localhost --port 13023 \
+  >/private/tmp/alphalens-gate8b-frontend.log 2>&1 </dev/null &
+```
+
+This starts no ingestion worker and does not initialize or migrate a database.
+
 ## Shutdown
 
 Stop only processes proven to belong to this worktree and this demo:
