@@ -185,6 +185,13 @@ def create_prediction_app(
         request: Request,
         call_next,
     ):
+        # CORS preflight is transport negotiation, not an application API
+        # request.  It must reach CORSMiddleware without being persisted in
+        # the GET/POST-only immutable audit stream; otherwise authenticated
+        # browser requests fail before Clerk authorization can run.
+        if request.method == "OPTIONS":
+            return await call_next(request)
+
         received_at = datetime.now(timezone.utc)
         started_ns = perf_counter_ns()
         declared_size = _content_length(request)
