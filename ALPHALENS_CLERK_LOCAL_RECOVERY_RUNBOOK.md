@@ -1,6 +1,7 @@
 # AlphaLens Clerk Local Recovery Runbook
 
-Status: checkpoint 01 — local Clerk/browser recovery is partially verified.
+Status: checkpoint 02 — approved runtime and CORS recovery are verified;
+real authenticated API success remains pending.
 
 ## Scope
 
@@ -47,6 +48,8 @@ was verified without changing the backend bind address.
 - `/health` returned the expected HTTP 503 `ARTIFACT_UNAVAILABLE`.
 - Browser visually showed the Clerk user avatar; authenticated protected API
   success was not claimed.
+- The approved owner-only runtime configuration restored PostgreSQL and Redis;
+  readiness returned HTTP 200 and the audit table/migration were present.
 
 ## Known limitation and correction
 
@@ -55,17 +58,21 @@ CORS preflight. The API audit stream accepts application `GET`/`POST` only;
 preflight `OPTIONS` requests must pass through CORS without entering that
 stream. The local correction is in `backend/app/api/application.py`.
 
-The correction passed the targeted prediction API suite. Live authenticated
-verification still requires the approved backend runtime environment and a
-real owner browser session. No auth bypass is permitted.
+The correction and regression coverage pass the targeted prediction API and
+Clerk boundary suites. Live authenticated verification still requires a real
+owner browser session and a valid persisted opportunity to exercise the
+paper-tracking control. No auth bypass or fabricated request is permitted.
 
 ## Safe verification
 
-Run targeted backend tests from `backend/` with `PYTHONPATH=.`. Confirm the
-backend listens only on `127.0.0.1:18000`, the frontend container publishes
-only `127.0.0.1:3000`, readiness is 200, `/health` preserves
-`ARTIFACT_UNAVAILABLE`, and unauthenticated protected requests remain 401.
-Complete real Clerk sign-in before testing an authenticated protected request.
+Run targeted backend tests from `backend/` with `PYTHONPATH=.`. The current
+checkpoint verifies 27 backend tests, one frontend API-client test, and
+frontend typecheck under Node 22. Confirm the backend listens only on
+`127.0.0.1:18000`, the frontend container publishes only `127.0.0.1:3000`,
+readiness is 200, `/health` preserves `ARTIFACT_UNAVAILABLE`, allowed-origin
+preflight is 200, disallowed-origin preflight has no allow-origin header, and
+unauthenticated protected requests remain 401. Complete real Clerk sign-in
+before testing an authenticated protected request.
 
 ## Rollback
 

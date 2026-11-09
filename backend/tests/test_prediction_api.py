@@ -16,6 +16,8 @@ from app.api.rate_limit import RateLimitUnavailable, RedisRateLimiter
 from app.inference.artifact import PackagedRidgeInference
 from app.inference.repository import LoadedProductionArtifact
 from app.inference.service import ProductionPredictionService
+from app.paper_execution.api import create_paper_tracking_router
+from app.paper_execution.auth import ClerkPaperTrackingAuthenticator
 from app.research.dataset import MODEL_FEATURE_NAMES
 
 
@@ -371,6 +373,7 @@ class PredictionAPITests(unittest.TestCase):
             headers={
                 "Origin": "https://dashboard.example.com",
                 "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "authorization",
             },
         )
         denied = client.options(
@@ -390,6 +393,84 @@ class PredictionAPITests(unittest.TestCase):
             "access-control-allow-origin",
             denied.headers,
         )
+
+    def test_cors_preflight_is_not_written_to_get_post_audit_stream(self) -> None:
+        audits = []
+
+        async def writer(audit):
+            audits.append(audit)
+            return UUID(int=300)
+
+        client = TestClient(
+            create_prediction_app(
+                artifact_provider=self.app.state.artifact_provider,
+                audit_writer=writer,
+                cors_allowed_origins=("http://localhost:3000",),
+            )
+        )
+
+        response = client.options(
+            "/api/v1/paper-tracking/confirmation",
+            headers={
+                "Origin": "http://localhost:3000",
+                "Access-Control-Request-Method": "GET",
+                "Access-Control-Request-Headers": "authorization",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.headers["access-control-allow-origin"],
+            "http://localhost:3000",
+        )
+        self.assertIn(
+            "authorization",
+            response.headers["access-control-allow-headers"].lower(),
+        )
+        self.assertEqual(audits, [])
+
+    def test_protected_unauthenticated_request_remains_401_and_is_audited(self) -> None:
+        class _Service:
+            async def confirmation_by_reference(self, **kwargs):
+                del kwargs
+                raise AssertionError("unauthenticated request reached service")
+
+            async def select_by_reference(self, **kwargs):
+                del kwargs
+                raise AssertionError("unauthenticated request reached service")
+
+        audits = []
+
+        async def writer(audit):
+            audits.append(audit)
+            return UUID(int=301)
+
+        app = create_prediction_app(
+            artifact_provider=self.app.state.artifact_provider,
+            audit_writer=writer,
+            cors_allowed_origins=("http://localhost:3000",),
+        )
+        app.include_router(
+            create_paper_tracking_router(
+                selection_service=_Service(),
+                authenticator=ClerkPaperTrackingAuthenticator(
+                    secret_key="test-secret",
+                    authorized_parties=("http://localhost:3000",),
+                    authorized_user_id="user_authorized",
+                ),
+            )
+        )
+        response = TestClient(app).get(
+            "/api/v1/paper-tracking/confirmation",
+            params={
+                "opportunity_id": "opportunity-1",
+                "opportunity_version_id": "version-1",
+            },
+        )
+
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(len(audits), 1)
+        self.assertEqual(audits[0].response_status, 401)
 
     def test_dashboard_endpoint_returns_read_only_projection(self) -> None:
         response = self.client.get("/api/v1/dashboard")
