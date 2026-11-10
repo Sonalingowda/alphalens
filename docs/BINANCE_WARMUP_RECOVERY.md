@@ -62,3 +62,23 @@ independent encrypted off-device copy. Then run the worker with a newly
 generated source identity and `--warmup-limit 240`, review the accepted batch
 manifest and counts, and confirm the dashboard reports genuine market data
 only after the accepted contiguous range is present.
+
+## Owner migration approval gate
+
+The owner migration is a separate maintenance operation. Before running it,
+confirm the database identity, current revision `20261027_0043`, a fresh
+PostgreSQL 16 custom-format backup with a recorded SHA-256, and a tested
+independent encrypted recovery copy. Stop all ingestion and predictive-worker
+processes and keep the services loopback-only.
+
+Apply only the single revision `20261110_0044`, then verify the Alembic
+revision, both Binance warmup tables, the member foreign key, required unique
+constraints and indexes, and unchanged audit and market-data counts. Verify
+`/health/readiness` returns 200 after the migration. Do not start acquisition
+as part of migration verification.
+
+If migration fails before any approved acquisition, preserve the failure
+evidence, restore the disposable rehearsal procedure, and use
+`alembic downgrade 20261027_0043` only during an explicitly approved rollback
+window. That downgrade drops the new warmup tables; it must not be used after
+accepted warmup data exists without a separately reviewed recovery plan.
