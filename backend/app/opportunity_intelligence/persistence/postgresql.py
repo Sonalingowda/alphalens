@@ -9,7 +9,7 @@ from enum import Enum
 from types import UnionType
 from typing import Any, Generic, TypeVar, Union, get_args, get_origin, get_type_hints
 
-from sqlalchemy import Select, select, text
+from sqlalchemy import Select, exists, or_, select, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -385,6 +385,49 @@ class MarketSnapshotPostgreSQLRepository(PostgreSQLImmutableRepository[MarketSna
     def __init__(self, sessions: async_sessionmaker[AsyncSession]) -> None:
         super().__init__(sessions, MarketSnapshot, lambda item: item.snapshot_id, scope=lambda item: item.scope)
 
+    async def _warmup_membership_clause(self, session: AsyncSession):
+        """Return the accepted-lineage guard when the optional migration exists."""
+        installed = await session.scalar(
+            text("SELECT to_regclass('public.binance_warmup_batch_members')")
+        )
+        if installed is None:
+            # The owner database remains pre-migration during staged rollout.
+            return None
+        member = BinanceWarmupBatchMemberRecord
+        batch = BinanceWarmupBatchRecord
+        linked = exists(
+            select(1).where(member.snapshot_id == ImmutableAggregateRecord.entity_id)
+        )
+        accepted = exists(
+            select(1)
+            .select_from(member)
+            .join(batch, batch.batch_id == member.batch_id)
+            .where(
+                member.snapshot_id == ImmutableAggregateRecord.entity_id,
+                batch.state == "ACCEPTED",
+            )
+        )
+        # Ordinary live snapshots remain readable; a snapshot explicitly
+        # claimed by a warmup manifest is readable only from an accepted batch.
+        return or_(~linked, accepted)
+
+    async def get_by_id(self, entity_id: EntityId) -> MarketSnapshot:
+        self._require(entity_id, EntityId, "get_by_id")
+        try:
+            async with self._sessions() as session:
+                statement = self._base_select().where(
+                    ImmutableAggregateRecord.entity_id == entity_id.value
+                )
+                clause = await self._warmup_membership_clause(session)
+                if clause is not None:
+                    statement = statement.where(clause)
+                row = await session.scalar(statement)
+        except SQLAlchemyError as error:
+            raise StorageUnavailableError("Market snapshot read failed.") from error
+        if row is None:
+            raise EntityNotFoundError(entity_id.value)
+        return self._decode(row)
+
     async def save_binance_warmup_batch(
         self,
         batch: BinanceWarmupBatch,
@@ -494,16 +537,17 @@ class MarketSnapshotPostgreSQLRepository(PostgreSQLImmutableRepository[MarketSna
             *_scope_predicates(query.scope),
             ImmutableAggregateRecord.available_at <= query.as_of,
         )
-        page = await self._page(
-            statement,
-            query.as_of,
-            query.limit,
-            query.cursor,
-            descending=True,
-        )
-        if not page.items:
+        try:
+            async with self._sessions() as session:
+                clause = await self._warmup_membership_clause(session)
+                if clause is not None:
+                    statement = statement.where(clause)
+                row = await session.scalar(self._ordered(statement, descending=True).limit(1))
+        except SQLAlchemyError as error:
+            raise StorageUnavailableError("Market snapshot latest read failed.") from error
+        if row is None:
             raise EntityNotFoundError("No entity exists in the requested scope.")
-        return page.items[0]
+        return self._decode(row)
 
     async def get_by_scope(
         self,
@@ -516,6 +560,9 @@ class MarketSnapshotPostgreSQLRepository(PostgreSQLImmutableRepository[MarketSna
         )
         try:
             async with self._sessions() as session:
+                clause = await self._warmup_membership_clause(session)
+                if clause is not None:
+                    statement = statement.where(clause)
                 rows = (
                     await session.scalars(
                         self._ordered(statement, descending=False)

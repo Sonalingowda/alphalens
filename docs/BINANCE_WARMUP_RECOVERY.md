@@ -40,6 +40,13 @@ crash before commit leaves no accepted batch.
 The existing continuous WebSocket checkpoint remains a separate contract and
 is not rewritten by this protocol.
 
+After migration `20261110_0044` is installed, PostgreSQL market-snapshot reads
+apply a membership guard: a snapshot linked to a warmup member is visible only
+when its batch state is `ACCEPTED`. Pending, rejected, recovery-required, or
+orphaned membership links therefore cannot enter feature-history reads. Before
+the migration is installed, the guard detects the absent optional table and
+leaves the pre-migration owner read path unchanged during staged rollout.
+
 ## Verification boundary
 
 Migration `20261110_0044` was exercised only against a disposable PostgreSQL
