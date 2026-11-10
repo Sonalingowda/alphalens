@@ -32,6 +32,116 @@ class Base(DeclarativeBase):
     pass
 
 
+class BinanceWarmupBatchRecord(Base):
+    """Database-authoritative Binance warmup acceptance manifest."""
+
+    __tablename__ = "binance_warmup_batches"
+    __table_args__ = (
+        CheckConstraint(
+            "symbol = 'BTCUSDT' AND interval = '5m'",
+            name="ck_binance_warmup_batches_scope",
+        ),
+        CheckConstraint(
+            "requested_start < requested_end_exclusive",
+            name="ck_binance_warmup_batches_range",
+        ),
+        CheckConstraint(
+            "candle_count >= 200",
+            name="ck_binance_warmup_batches_count",
+        ),
+        CheckConstraint(
+            "contiguous_start < contiguous_end",
+            name="ck_binance_warmup_batches_contiguous_range",
+        ),
+        CheckConstraint(
+            "char_length(source_response_hash) = 64 AND "
+            "char_length(configuration_hash) = 64 AND "
+            "char_length(membership_hash) = 64 AND "
+            "char_length(batch_hash) = 64",
+            name="ck_binance_warmup_batches_hashes",
+        ),
+        CheckConstraint(
+            "state IN ('PENDING', 'ACCEPTED', 'REJECTED', 'RECOVERY_REQUIRED')",
+            name="ck_binance_warmup_batches_state",
+        ),
+        CheckConstraint(
+            "(state = 'ACCEPTED') = (accepted_at IS NOT NULL)",
+            name="ck_binance_warmup_batches_acceptance",
+        ),
+        CheckConstraint("immutable", name="ck_binance_warmup_batches_immutable"),
+        UniqueConstraint("lineage_id", name="uq_binance_warmup_batches_lineage"),
+        UniqueConstraint("batch_hash", name="uq_binance_warmup_batches_hash"),
+        Index(
+            "ix_binance_warmup_batches_scope",
+            "symbol",
+            "interval",
+            "state",
+            "contiguous_end",
+        ),
+    )
+
+    batch_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    lineage_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    endpoint: Mapped[str] = mapped_column(String(256), nullable=False)
+    request_parameters: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    symbol: Mapped[str] = mapped_column(String(16), nullable=False)
+    interval: Mapped[str] = mapped_column(String(8), nullable=False)
+    requested_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    requested_end_exclusive: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    retrieved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    source_response_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    candle_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    contiguous_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    contiguous_end: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    code_version: Mapped[str] = mapped_column(String(128), nullable=False)
+    configuration_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    membership_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    batch_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    state: Mapped[str] = mapped_column(String(32), nullable=False)
+    accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    immutable: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class BinanceWarmupBatchMemberRecord(Base):
+    """Immutable membership evidence for one accepted Binance warmup."""
+
+    __tablename__ = "binance_warmup_batch_members"
+    __table_args__ = (
+        CheckConstraint("ordinal >= 0", name="ck_binance_warmup_members_ordinal"),
+        CheckConstraint(
+            "char_length(source_payload_hash) = 64 AND "
+            "char_length(snapshot_result_hash) = 64 AND "
+            "char_length(member_hash) = 64",
+            name="ck_binance_warmup_members_hashes",
+        ),
+        CheckConstraint("immutable", name="ck_binance_warmup_members_immutable"),
+        ForeignKeyConstraint(
+            ["batch_id"],
+            ["binance_warmup_batches.batch_id"],
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint(
+            "batch_id",
+            "snapshot_id",
+            name="uq_binance_warmup_members_snapshot",
+        ),
+        Index("ix_binance_warmup_members_snapshot", "snapshot_id"),
+    )
+
+    batch_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True
+    )
+    ordinal: Mapped[int] = mapped_column(Integer, primary_key=True)
+    snapshot_id: Mapped[str] = mapped_column(String(256), nullable=False)
+    candle_timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    source_payload_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    snapshot_result_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    member_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    immutable: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
 class _PaperRecord(Base):
     """Base shape for isolated paper records; never references production rows."""
 

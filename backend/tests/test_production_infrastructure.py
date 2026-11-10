@@ -264,7 +264,7 @@ class OperationalEndpointTests(TestCase):
 
 class MigrationGraphTests(TestCase):
     def test_migration_graph_has_one_current_head(self) -> None:
-        self.assertEqual(expected_schema_heads(), frozenset({"20261027_0043"}))
+        self.assertEqual(expected_schema_heads(), frozenset({"20261110_0044"}))
 
 
 class ProductionCompositionTests(TestCase):

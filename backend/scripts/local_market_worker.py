@@ -24,6 +24,10 @@ from app.live_market_data import (
     FilesystemRuntimeCheckpointStore,
     LiveMarketIngestionService,
 )
+from app.live_market_data.warmup import (
+    AcceptedWarmupCheckpointStore,
+    reconcile_warmup_checkpoint,
+)
 from app.market_data.models import CandleTimeframe
 from app.persistence.database import session_factory
 from app.opportunity_intelligence.persistence import MarketSnapshotPostgreSQLRepository
@@ -151,6 +155,10 @@ async def main() -> None:
         code_version="alphalens.local.product.1.0.0",
         rest_base_url="https://data-api.binance.vision",
         rest_fallback_urls=(),
+        warmup_lineage_id=args.source_identity,
+        warmup_checkpoint_store=AcceptedWarmupCheckpointStore(
+            args.checkpoint.with_name(f"{args.checkpoint.stem}.warmup.json")
+        ),
         client=BinanceWebSocketClient(
             stream_timeframes=(CandleTimeframe.MINUTE_5,),
             heartbeat_timeout_seconds=90.0,
@@ -250,6 +258,13 @@ async def main() -> None:
     try:
         if args.warmup_limit < 200:
             raise ValueError("Local warmup must retain at least 200 closed candles.")
+        warmup_store = ingestion.warmup_checkpoint_store
+        if warmup_store is None:
+            raise RuntimeError("Warmup checkpoint store is not configured.")
+        reconcile_warmup_checkpoint(
+            warmup_store,
+            await repository.get_accepted_binance_warmup_checkpoint(args.source_identity),
+        )
         await ingestion.warmup_history_with_retry(limit=args.warmup_limit)
         write_status("WARMED")
         await recover_startup_gap()

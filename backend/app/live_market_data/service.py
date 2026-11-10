@@ -26,6 +26,11 @@ from app.live_market_data.processing import (
     TenMinuteCandleAggregator,
 )
 from app.live_market_data.snapshots import build_market_snapshot
+from app.live_market_data.warmup import (
+    AcceptedWarmupCheckpointStore,
+    WarmupBatchIntegrityError,
+    build_warmup_batch,
+)
 from app.market_data.models import CandleTimeframe
 from app.opportunity_intelligence.domain import MarketScope, MarketSnapshot
 from app.opportunity_intelligence.repositories import (
@@ -93,6 +98,8 @@ class LiveMarketIngestionService:
             "https://api.exchange.coinbase.com",
             "https://www.okx.com",
         ),
+        warmup_lineage_id: str | None = None,
+        warmup_checkpoint_store: AcceptedWarmupCheckpointStore | None = None,
     ) -> None:
         if not code_version.strip():
             raise ValueError("Live ingestion code version must be non-empty.")
@@ -116,6 +123,8 @@ class LiveMarketIngestionService:
                 for url in rest_fallback_urls
             ],
         )
+        self._warmup_lineage_id = warmup_lineage_id
+        self._warmup_checkpoint_store = warmup_checkpoint_store
         self._initialized = False
         self._warmup_history_fetched = False
 
@@ -272,6 +281,10 @@ class LiveMarketIngestionService:
     def client(self) -> BinanceWebSocketClient:
         return self._client
 
+    @property
+    def warmup_checkpoint_store(self) -> AcceptedWarmupCheckpointStore | None:
+        return self._warmup_checkpoint_store
+
     async def warmup_history(
         self,
         *,
@@ -292,9 +305,55 @@ class LiveMarketIngestionService:
         now = datetime.now(timezone.utc)
         floor_minutes = (now.minute // 5) * 5
         end = now.replace(minute=floor_minutes, second=0, microsecond=0)
-        end_ms = int(end.timestamp() * 1000)
+        # Binance's endTime is inclusive; subtract one millisecond so the
+        # request cannot include the still-forming candle at the boundary.
+        end_ms = int(end.timestamp() * 1000) - 1
         persisted = 0
         klines = await self._fetch_klines(symbol, timeframe, limit, end_ms)
+        if (
+            self._warmup_lineage_id is not None
+            and self._warmup_checkpoint_store is not None
+            and hasattr(self._repository, "save_binance_warmup_batch")
+        ):
+            if symbol != SUPPORTED_SYMBOL or timeframe is not CandleTimeframe.MINUTE_5:
+                raise WarmupBatchIntegrityError(
+                    "Atomic Binance warmup is restricted to BTCUSDT 5m."
+                )
+            requested_end = end
+            requested_start = requested_end - timedelta(minutes=5 * limit)
+            retrieved_at = datetime.now(timezone.utc)
+            batch = build_warmup_batch(
+                lineage_id=self._warmup_lineage_id,
+                rows=[list(row) for row in klines],
+                requested_start=requested_start,
+                requested_end_exclusive=requested_end,
+                retrieved_at=retrieved_at,
+                code_version=self._code_version,
+                request_parameters={
+                    "symbol": symbol,
+                    "interval": timeframe.value,
+                    "limit": min(limit, 1000),
+                    "endTime": end_ms,
+                },
+                now=now,
+            )
+            snapshots = tuple(
+                build_market_snapshot(candle, code_version=self._code_version)
+                for candle in batch.candles
+            )
+            save_batch = self._repository.save_binance_warmup_batch
+            accepted = await save_batch(batch, snapshots)
+            self._warmup_checkpoint_store.save_after_database_acceptance(accepted)
+            logger.info(
+                "warmup_history_batch_accepted symbol=%s timeframe=%s fetched=%s persisted=%s batch_id=%s",
+                symbol,
+                timeframe.value,
+                len(klines),
+                accepted.candle_count,
+                accepted.batch_id,
+            )
+            return accepted.candle_count
+
         for kline in klines:
             candle = _completed_candle_from_rest_kline(kline)
             if candle.close_time >= now:

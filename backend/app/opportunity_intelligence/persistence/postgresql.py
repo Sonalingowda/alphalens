@@ -56,6 +56,17 @@ from app.opportunity_intelligence.repositories import (
     VersionConflictError,
 )
 from app.persistence.models import ImmutableAggregateRecord
+from app.persistence.models import (
+    BinanceWarmupBatchMemberRecord,
+    BinanceWarmupBatchRecord,
+)
+from app.live_market_data.warmup import (
+    AcceptedWarmupCheckpoint,
+    BinanceWarmupBatch,
+    WarmupBatchIntegrityError,
+    accepted_batch,
+    validate_warmup_batch,
+)
 
 logger = logging.getLogger("alphalens.persistence.postgresql")
 
@@ -373,6 +384,109 @@ class PostgreSQLImmutableRepository(Generic[T]):
 class MarketSnapshotPostgreSQLRepository(PostgreSQLImmutableRepository[MarketSnapshot]):
     def __init__(self, sessions: async_sessionmaker[AsyncSession]) -> None:
         super().__init__(sessions, MarketSnapshot, lambda item: item.snapshot_id, scope=lambda item: item.scope)
+
+    async def save_binance_warmup_batch(
+        self,
+        batch: BinanceWarmupBatch,
+        snapshots: tuple[MarketSnapshot, ...],
+    ) -> BinanceWarmupBatch:
+        """Atomically accept one validated Binance warmup and its snapshots.
+
+        The accepted database manifest is authoritative. The filesystem marker
+        is deliberately written by the caller only after this transaction
+        commits.
+        """
+        if batch.state != "PENDING":
+            raise WarmupBatchIntegrityError("Only pending warmup batches may be persisted.")
+        validate_warmup_batch(batch)
+        if len(snapshots) != batch.candle_count:
+            raise WarmupBatchIntegrityError("Warmup snapshot membership count mismatch.")
+        try:
+            async with self._sessions.begin() as session:
+                existing = await session.scalar(
+                    select(BinanceWarmupBatchRecord).where(
+                        BinanceWarmupBatchRecord.lineage_id == batch.lineage_id
+                    )
+                )
+                if existing is not None:
+                    if existing.batch_hash != batch.batch_hash or existing.state != "ACCEPTED":
+                        raise WarmupBatchIntegrityError(
+                            "Warmup lineage already exists with different or unaccepted content."
+                        )
+                    return accepted_batch(batch, existing.accepted_at)
+
+                for expected, snapshot in zip(batch.members, snapshots, strict=True):
+                    if snapshot.snapshot_id != expected.snapshot_id:
+                        raise WarmupBatchIntegrityError("Warmup snapshot identity mismatch.")
+                    if snapshot.audit.result_hash != expected.snapshot_result_hash:
+                        raise WarmupBatchIntegrityError("Warmup snapshot result hash mismatch.")
+                    source_hash = snapshot.candles[0].source_reference.integrity_digest
+                    if source_hash != expected.source_payload_hash:
+                        raise WarmupBatchIntegrityError("Warmup source payload hash mismatch.")
+
+                record = BinanceWarmupBatchRecord(
+                    batch_id=batch.batch_id,
+                    lineage_id=batch.lineage_id,
+                    endpoint=batch.endpoint,
+                    request_parameters=batch.request_parameters,
+                    symbol="BTCUSDT",
+                    interval="5m",
+                    requested_start=batch.requested_start,
+                    requested_end_exclusive=batch.requested_end_exclusive,
+                    retrieved_at=batch.retrieved_at,
+                    source_response_hash=batch.source_response_hash,
+                    candle_count=batch.candle_count,
+                    contiguous_start=batch.contiguous_start,
+                    contiguous_end=batch.contiguous_end,
+                    code_version=batch.code_version,
+                    configuration_hash=batch.configuration_hash,
+                    membership_hash=batch.membership_hash,
+                    batch_hash=batch.batch_hash,
+                    state="PENDING",
+                    accepted_at=None,
+                )
+                session.add(record)
+                await session.flush()
+                await self._save_batch(session, snapshots)
+                session.add_all(
+                    BinanceWarmupBatchMemberRecord(
+                        batch_id=batch.batch_id,
+                        ordinal=member.ordinal,
+                        snapshot_id=member.snapshot_id,
+                        candle_timestamp=member.candle_timestamp,
+                        source_payload_hash=member.source_payload_hash,
+                        snapshot_result_hash=member.snapshot_result_hash,
+                        member_hash=member.member_hash,
+                    )
+                    for member in batch.members
+                )
+                record.state = "ACCEPTED"
+                record.accepted_at = batch.retrieved_at
+                await session.flush()
+        except (DuplicateEntityError, ContractViolationError, WarmupBatchIntegrityError):
+            raise
+        except SQLAlchemyError as error:
+            raise StorageUnavailableError("Binance warmup batch transaction failed.") from error
+        return accepted_batch(batch, batch.retrieved_at)
+
+    async def get_accepted_binance_warmup_checkpoint(
+        self, lineage_id: str
+    ) -> AcceptedWarmupCheckpoint | None:
+        async with self._sessions() as session:
+            record = await session.scalar(
+                select(BinanceWarmupBatchRecord).where(
+                    BinanceWarmupBatchRecord.lineage_id == lineage_id,
+                    BinanceWarmupBatchRecord.state == "ACCEPTED",
+                )
+            )
+        if record is None or record.accepted_at is None:
+            return None
+        return AcceptedWarmupCheckpoint(
+            batch_id=record.batch_id,
+            lineage_id=record.lineage_id,
+            membership_hash=record.membership_hash,
+            updated_at=record.accepted_at,
+        )
 
     async def get_latest(self, query: ScopedRepositoryQuery) -> MarketSnapshot:
         self._require(query, ScopedRepositoryQuery, "get_latest")
