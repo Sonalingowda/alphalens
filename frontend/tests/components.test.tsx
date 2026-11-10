@@ -116,4 +116,27 @@ describe("MVP market intelligence components", () => {
     expect(screen.getByText("BTCUSDT · 5m")).toBeInTheDocument();
     expect(screen.getByText("UTC normalized")).toBeInTheDocument();
   });
+
+  it("does not call an unavailable market response an available snapshot", () => {
+    render(
+      <MarketStatus
+        snapshot={{
+          contract_version: "1.0.0",
+          snapshot_id: "market.unavailable",
+          scope: { instrument: "BTCUSDT", timeframe: "5m" },
+          complete: false,
+          candles: [],
+          audit: {
+            created_at: "2026-08-01T00:05:00Z",
+            evidence_cutoff: "2026-08-01T00:05:00Z",
+            available_at: "2026-08-01T00:05:00Z",
+            result_hash: "b".repeat(64),
+          },
+        }}
+      />,
+    );
+
+    expect(screen.getByText("Snapshot unavailable")).toBeInTheDocument();
+    expect(screen.getByText("No persisted completed snapshot")).toBeInTheDocument();
+  });
 });

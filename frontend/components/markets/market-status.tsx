@@ -7,15 +7,19 @@ import type { LiveMarketSnapshot } from "@/lib/types";
 
 export function MarketStatus({ snapshot }: { snapshot: LiveMarketSnapshot }) {
   const candle = snapshot.candles.at(-1);
+  const snapshotAvailable =
+    snapshot.snapshot_id !== "market.unavailable" &&
+    snapshot.complete &&
+    snapshot.candles.length > 0;
   return (
     <Card className="border-emerald-400/15 bg-card/95">
       <CardContent className="grid gap-5 p-5 sm:grid-cols-2 xl:grid-cols-4">
         <Status
           icon={Radio}
           label="Feed"
-          value="Snapshot available"
-          detail={`${snapshot.scope.instrument} · ${snapshot.scope.timeframe}`}
-          positive
+          value={snapshotAvailable ? "Snapshot available" : "Snapshot unavailable"}
+          detail={snapshotAvailable ? `${snapshot.scope.instrument} · ${snapshot.scope.timeframe}` : "No persisted completed snapshot"}
+          positive={snapshotAvailable}
         />
         <Status
           icon={Activity}
