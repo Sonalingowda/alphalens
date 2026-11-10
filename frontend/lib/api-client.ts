@@ -34,6 +34,12 @@ type PaperTrackingSelection = {
   actor_id: string;
 };
 
+export type ProtectedSessionCheckResult = {
+  status: number;
+  errorCode: string | null;
+  authorization: "authorized" | "unauthenticated" | "forbidden" | "unexpected";
+};
+
 async function authenticatedRequest<T>(
   path: string,
   token: string,
@@ -52,6 +58,44 @@ async function authenticatedRequest<T>(
     throw new Error("The paper-tracking request was rejected.");
   }
   return (await response.json()) as T;
+}
+
+export async function checkProtectedSession(
+  token: string,
+): Promise<ProtectedSessionCheckResult> {
+  const response = await fetch(
+    `${apiBaseUrl()}/api/v1/paper-tracking/confirmation?opportunity_id=auth-check&opportunity_version_id=auth-check`,
+    {
+      cache: "no-store",
+      headers: {
+        Accept: "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+    },
+  );
+
+  let errorCode: string | null = null;
+  try {
+    const payload = (await response.json()) as {
+      error?: { code?: unknown };
+    };
+    if (typeof payload.error?.code === "string") errorCode = payload.error.code;
+  } catch {
+    // The status remains visible, but authorization is never inferred from it alone.
+  }
+
+  return {
+    status: response.status,
+    errorCode,
+    authorization:
+      response.status === 404 && errorCode === "entity.not_found"
+        ? "authorized"
+        : response.status === 401
+          ? "unauthenticated"
+          : response.status === 403
+            ? "forbidden"
+            : "unexpected",
+  };
 }
 
 export function confirmPaperTracking(

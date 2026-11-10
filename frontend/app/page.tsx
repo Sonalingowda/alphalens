@@ -7,7 +7,7 @@ import { ApiUnavailable } from "@/components/dashboard/data-states";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { MetricCard } from "@/components/dashboard/metric-card";
 import { Badge } from "@/components/ui/badge";
-import { getLiveMarket, getLocalRuntimeStatus, getMvpHealth, getOpportunities, getOpportunityDetail } from "@/lib/api";
+import { getLiveMarket, getLocalRuntimeStatus, getMvpHealth, getOpportunities, getOpportunityDetail, getReadiness } from "@/lib/api";
 import type {
   OpportunityDashboardItem,
   OpportunityFilters as Filters,
@@ -45,8 +45,9 @@ export default async function DashboardPage({
         : undefined,
     search: requested.search?.trim() || undefined,
   };
-  const [health, market, opportunities, runtime, history] = await Promise.all([
+  const [health, readiness, market, opportunities, runtime, history] = await Promise.all([
     getMvpHealth(),
+    getReadiness(),
     getLiveMarket(filters.instrument, filters.timeframe),
     getOpportunities(filters),
     getLocalRuntimeStatus(),
@@ -58,6 +59,7 @@ export default async function DashboardPage({
   const currentPrice = market.ok && market.data.candles.length
     ? market.data.candles.at(-1)?.close ?? null
     : null;
+  const dashboardStatus = getDashboardStatus(health, readiness);
 
   return (
     <>
@@ -68,10 +70,10 @@ export default async function DashboardPage({
         actions={
           <Badge
             variant="outline"
-            className={health.ok && health.data.status === "ready" ? "border-emerald-400/30 text-emerald-400" : "border-amber-400/30 text-amber-300"}
+            className={dashboardStatus.tone === "healthy" ? "border-emerald-400/30 text-emerald-400" : "border-amber-400/30 text-amber-300"}
           >
-            <span className={`mr-2 size-1.5 rounded-full ${health.ok && health.data.status === "ready" ? "bg-emerald-400" : "bg-amber-400"}`} />
-            {health.ok ? `API ${health.data.status}` : "API unavailable"}
+            <span className={`mr-2 size-1.5 rounded-full ${dashboardStatus.tone === "healthy" ? "bg-emerald-400" : "bg-amber-400"}`} />
+            {dashboardStatus.label}
           </Badge>
         }
       />
@@ -147,6 +149,21 @@ export default async function DashboardPage({
       </div>
     </>
   );
+}
+
+function getDashboardStatus(
+  health: Awaited<ReturnType<typeof getMvpHealth>>,
+  readiness: Awaited<ReturnType<typeof getReadiness>>,
+): { label: string; tone: "healthy" | "degraded" } {
+  if (!readiness.ok) return { label: "API unavailable", tone: "degraded" };
+  if (readiness.data.status !== "ready") {
+    return { label: "API degraded", tone: "degraded" };
+  }
+  if (!health.ok && health.errorCode === "ARTIFACT_UNAVAILABLE") {
+    return { label: "API ready · model unavailable", tone: "degraded" };
+  }
+  if (!health.ok) return { label: "API ready · health unavailable", tone: "degraded" };
+  return { label: "API healthy", tone: "healthy" };
 }
 
 function formatCoverageStatus(value: string | null | undefined): string {

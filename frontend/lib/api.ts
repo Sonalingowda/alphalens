@@ -18,9 +18,20 @@ import type {
   OpportunityPage,
   OpportunityView,
   LocalRuntimeStatus,
+  ReadinessResponse,
 } from "@/lib/types";
 
 const DEFAULT_API_BASE_URL = "http://127.0.0.1:8000";
+
+class ApiHttpError extends Error {
+  constructor(
+    public readonly status: number,
+    public readonly errorCode: string | null,
+  ) {
+    super(`API request failed with status ${status}.`);
+    this.name = "ApiHttpError";
+  }
+}
 
 export function apiBaseUrl(): string {
   return (
@@ -37,7 +48,16 @@ async function request<T>(path: string): Promise<T> {
     signal: AbortSignal.timeout(5_000),
   });
   if (!response.ok) {
-    throw new Error(`API request failed with status ${response.status}.`);
+    let errorCode: string | null = null;
+    try {
+      const payload = (await response.json()) as { error?: { code?: unknown } };
+      if (typeof payload.error?.code === "string") {
+        errorCode = payload.error.code;
+      }
+    } catch {
+      // The status remains sufficient for transport failures without JSON.
+    }
+    throw new ApiHttpError(response.status, errorCode);
   }
   return (await response.json()) as T;
 }
@@ -73,6 +93,8 @@ async function requestEnvelope<T>(path: string): Promise<ApiResult<T>> {
       ok: false,
       error:
         error instanceof Error ? error.message : "AlphaLens API is unavailable.",
+      status: error instanceof ApiHttpError ? error.status : undefined,
+      errorCode: error instanceof ApiHttpError ? error.errorCode : null,
     };
   }
 }
@@ -87,6 +109,10 @@ function queryString(values: Record<string, string | undefined>): string {
 
 export function getMvpHealth(): Promise<ApiResult<MvpHealth>> {
   return requestEnvelope<MvpHealth>("/health");
+}
+
+export function getReadiness(): Promise<ApiResult<ReadinessResponse>> {
+  return requestEnvelope<ReadinessResponse>("/health/readiness");
 }
 
 export function getLocalRuntimeStatus(): Promise<ApiResult<LocalRuntimeStatus>> {

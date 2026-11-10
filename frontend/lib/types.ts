@@ -254,7 +254,12 @@ export type ApiEnvelope<T> = {
 
 export type ApiResult<T> =
   | { ok: true; data: T; responseHash: string }
-  | { ok: false; error: string };
+  | { ok: false; error: string; status?: number; errorCode?: string | null };
+
+export type ReadinessResponse = {
+  status: "ready" | "unavailable";
+  checks?: Record<string, string>;
+};
 
 export type MarketScope = {
   instrument: string;

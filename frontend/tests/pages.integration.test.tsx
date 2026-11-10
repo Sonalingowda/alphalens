@@ -35,6 +35,7 @@ describe("Page integration: Dashboard", () => {
   it("renders successful dashboard snapshot", async () => {
     const envelopeByPath: Record<string, unknown> = {
       "/health": { contract_version: "1.0.0", data: { status: "ready", data: {} }, response_hash: "a".repeat(64) },
+      "/health/readiness": { status: "ready", checks: { postgresql: "ready", redis: "ready", schema: "ready" } },
       "/markets/live": { contract_version: "1.0.0", data: { snapshot_id: "market.1", scope: { instrument: "BTCUSDT", timeframe: "5m" }, candles: [], complete: true, audit: { created_at: "2026-08-01T00:00:00Z", evidence_cutoff: "2026-08-01T00:00:00Z", available_at: "2026-08-01T00:00:00Z", result_hash: "b".repeat(64) } }, response_hash: "b".repeat(64) },
       "/api/v1/opportunities": {
         contract_version: "1.0.0",
@@ -242,6 +243,31 @@ describe("Page integration: Dashboard", () => {
     expect(screen.getAllByText("Live Prediction API unavailable").length).toBeGreaterThan(0);
   });
 
+  it("distinguishes a reachable ready API from an unavailable model artifact", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const path = new URL(String(input)).pathname;
+      if (path === "/health") {
+        return new Response(JSON.stringify({ error: { code: "ARTIFACT_UNAVAILABLE" } }), { status: 503 });
+      }
+      if (path === "/health/readiness") {
+        return new Response(JSON.stringify({ status: "ready", checks: { postgresql: "ready", redis: "ready", schema: "ready" } }), { status: 200 });
+      }
+      if (path === "/markets/live") {
+        return new Response(JSON.stringify({ contract_version: "1.0.0", data: { snapshot_id: "market.empty", scope: { instrument: "BTCUSDT", timeframe: "5m" }, candles: [], complete: false, audit: {} }, response_hash: "a".repeat(64) }), { status: 200 });
+      }
+      if (path === "/api/v1/local-runtime/status") {
+        return new Response(JSON.stringify({ status: "unavailable" }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ contract_version: "1.0.0", data: { items: [], applied_filters: [], sort: "canonical.rank", feed_status: "unavailable" }, response_hash: "b".repeat(64) }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const element = await DashboardPage({ searchParams: Promise.resolve({}) });
+    render(element as unknown as ReactElement);
+
+    expect(screen.getByText("API ready · model unavailable")).toBeInTheDocument();
+  });
+
   it("preserves opportunity cards and reports failed detail enrichment separately", async () => {
     const item = {
       opportunity_id: "opportunity.partial",
@@ -262,6 +288,9 @@ describe("Page integration: Dashboard", () => {
       const path = new URL(String(input)).pathname;
       if (path === "/health") {
         return new Response(JSON.stringify({ contract_version: "1.0.0", data: { status: "ready", data: {} }, response_hash: "a".repeat(64) }), { status: 200 });
+      }
+      if (path === "/health/readiness") {
+        return new Response(JSON.stringify({ status: "ready", checks: { postgresql: "ready", redis: "ready", schema: "ready" } }), { status: 200 });
       }
       if (path === "/markets/live") {
         return new Response(JSON.stringify({ contract_version: "1.0.0", data: { snapshot_id: "market.partial", scope: { instrument: "BTCUSDT", timeframe: "5m" }, candles: [], complete: true, audit: { created_at: "2026-08-01T00:00:00Z", evidence_cutoff: "2026-08-01T00:00:00Z", available_at: "2026-08-01T00:00:00Z", result_hash: "b".repeat(64) } }, response_hash: "b".repeat(64) }), { status: 200 });

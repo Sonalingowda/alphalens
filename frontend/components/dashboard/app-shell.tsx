@@ -9,6 +9,7 @@ import {
   Menu,
   RadioTower,
   SearchCheck,
+  ShieldCheck,
 } from "lucide-react";
 
 import { ThemeToggle } from "@/components/dashboard/theme-toggle";
@@ -28,6 +29,7 @@ const navigation = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
   { href: "/#opportunities", label: "Opportunities", icon: SearchCheck },
   { href: "/markets/live", label: "Live Market", icon: RadioTower },
+  { href: "/auth-check", label: "Auth Check", icon: ShieldCheck },
 ] as const;
 
 function Brand() {
