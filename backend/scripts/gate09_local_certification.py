@@ -20,12 +20,6 @@ EXPECTED_BRANCH = "gate9d2/owner-infrastructure-20261105"
 EXPECTED_SOURCE_SHA256 = (
     "f17dfdab0dfcaa1e24508d9484942eee6677c2e56ddb96869ce774e85ca80fbc"
 )
-DEFAULT_SOURCE = Path(
-    "/Users/sonalingowda/Downloads/alphalens/"
-    "backend/evidence/expected_move_binance_btcusdt_5m.json"
-)
-
-
 def _check(name: str, status: str, detail: str) -> dict[str, str]:
     return {"name": name, "status": status, "detail": detail}
 
@@ -52,7 +46,7 @@ def _http_status(url: str, *, method: str = "GET") -> tuple[str, str]:
         return "UNKNOWN", type(error).__name__
 
 
-def run(*, source: Path, backend: str | None) -> dict[str, object]:
+def run(*, source: Path | None, backend: str | None) -> dict[str, object]:
     checks: list[dict[str, str]] = []
     branch = _git("branch", "--show-current")
     sha = _git("rev-parse", "HEAD")
@@ -60,7 +54,7 @@ def run(*, source: Path, backend: str | None) -> dict[str, object]:
     checks.append(_check("repository_branch", "PASS" if branch == EXPECTED_BRANCH else "FAIL", branch))
     checks.append(_check("repository_clean", "PASS" if not dirty else "FAIL", "clean" if not dirty else "dirty"))
 
-    if source.exists():
+    if source is not None and source.exists():
         digest = hashlib.sha256(source.read_bytes()).hexdigest()
         source_status = "PASS" if digest == EXPECTED_SOURCE_SHA256 else "FAIL"
         checks.append(_check("development_source_hash", source_status, digest))
@@ -103,7 +97,12 @@ def run(*, source: Path, backend: str | None) -> dict[str, object]:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--source", type=Path, default=DEFAULT_SOURCE)
+    parser.add_argument(
+        "--source",
+        type=Path,
+        default=None,
+        help="Explicit permitted source artifact; omitted means UNKNOWN, never an implicit protected path",
+    )
     parser.add_argument("--backend", default=None, help="Optional local backend origin, e.g. http://127.0.0.1:18000")
     args = parser.parse_args()
     print(json.dumps(run(source=args.source, backend=args.backend), sort_keys=True, indent=2))
