@@ -4,6 +4,8 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
+import tempfile
 from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -67,6 +69,12 @@ CANDIDATES = (
         },
     ),
 )
+HORIZON = 5
+PURGE = 250
+MIN_TRAIN = 500
+TEST_SIZE = 100
+STEP = 100
+REGIME_SECONDS = 30 * 24 * 60 * 60
 
 
 def select(x, y):
@@ -85,11 +93,73 @@ def select(x, y):
 
 
 def metrics(y, p):
+    if not (np.isfinite(y).all() and np.isfinite(p).all()):
+        raise ValueError("nonfinite metric input")
     mae = float(np.mean(abs(y - p)))
     ss = float(np.sum((y - y.mean()) ** 2))
     r2 = float(1 - np.sum((y - p) ** 2) / ss) if ss else 0.0
     corr = float(np.corrcoef(y, p)[0, 1]) if np.std(y) and np.std(p) else 0.0
     return {"mae": mae, "r2": r2, "correlation": corr}
+
+
+def atomic_json(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, sort_keys=True, indent=2)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def regime_evidence(rows: list[dict]) -> tuple[dict[str, dict], bool]:
+    if not rows:
+        return {}, False
+    first = datetime.fromisoformat(rows[0]["timestamp"])
+    grouped: dict[int, list[dict]] = {}
+    for row in rows:
+        index = int(
+            (datetime.fromisoformat(row["timestamp"]) - first).total_seconds()
+            // REGIME_SECONDS
+        )
+        grouped.setdefault(index, []).append(row)
+    expected = set(range(min(grouped), max(grouped) + 1))
+    complete = expected == set(grouped) and all(grouped[index] for index in expected)
+    evidence = {}
+    for index in sorted(grouped):
+        group = grouped[index]
+        y = np.array([row["actual"] for row in group])
+        p = np.array([row["prediction"] for row in group])
+        b = np.array([row["baseline"] for row in group])
+        model = metrics(y, p)
+        baseline = metrics(y, b)
+        evidence[str(index)] = {
+            "observation_count": len(group),
+            "mae_improvement": baseline["mae"] - model["mae"],
+            "r2_improvement": model["r2"] - baseline["r2"],
+            "passes": baseline["mae"] > model["mae"] and model["r2"] > baseline["r2"],
+        }
+    return evidence, complete and all(item["passes"] for item in evidence.values())
+
+
+def acceptance_criteria(
+    model: dict, baseline: dict, calibration: list[float], regime_pass: bool
+) -> dict[str, bool]:
+    if not calibration or not np.isfinite(calibration).all():
+        monotonic = False
+    else:
+        monotonic = all(left <= right for left, right in zip(calibration, calibration[1:]))
+    return {
+        "r2_improvement_gt_0.01": model["r2"] - baseline["r2"] > 0.01,
+        "correlation_improvement_gt_0.05": model["correlation"] - baseline["correlation"] > 0.05,
+        "mae_reduction_gt_5pct": (baseline["mae"] - model["mae"]) / baseline["mae"] > 0.05,
+        "monotonic_calibration": monotonic,
+        "positive_mae_and_r2_in_every_30_day_regime": regime_pass,
+    }
 
 
 def main():
@@ -142,23 +212,31 @@ def main():
     y = []
     valid_ts = []
     valid_close = []
-    for i in range(len(ks) - 5):
+    for i in range(len(ks) - HORIZON):
         if ts[i] not in by or any(
             f not in by[ts[i]] or np.isnan(by[ts[i]][f]) for f in FEATURES
         ):
             continue
         x.append([by[ts[i]][f] for f in FEATURES])
-        y.append(abs(np.log(closes[i + 5] / closes[i])))
+        y.append(abs(np.log(closes[i + HORIZON] / closes[i])))
         valid_ts.append(ts[i])
         valid_close.append(closes[i])
-    x = np.asarray(x)
-    y = np.asarray(y)
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
     valid_close = np.asarray(valid_close)
+    if len(ks) < 200 + HORIZON or len(x) == 0:
+        raise SystemExit(
+            "insufficient data for the frozen 200-candle pre-roll and five-candle label extension"
+        )
+    if not (
+        np.isfinite(x).all() and np.isfinite(y).all() and np.isfinite(valid_close).all()
+    ):
+        raise SystemExit("nonfinite source-derived feature or target value")
     n = len(y)
     folds = []
-    for train_end in range(500, n - 250 - 100 + 1, 100):
-        test_start = train_end + 250
-        test_end = test_start + 100
+    for train_end in range(MIN_TRAIN, n - PURGE - TEST_SIZE + 1, STEP):
+        test_start = train_end + PURGE
+        test_end = test_start + TEST_SIZE
         sel = select(x[:train_end], y[:train_end])
         scaler = StandardScaler().fit(x[:train_end, sel])
         xt = scaler.transform(x[:train_end, sel])
@@ -167,13 +245,48 @@ def main():
         folds.append(
             (train_end, test_start, test_end, sel, xt, xv, y[test_start:test_end], atr)
         )
+    if not folds:
+        raise SystemExit(
+            "no chronological folds satisfy the frozen train, purge, and test sizes"
+        )
+    checkpoint_path = a.output.with_suffix(".checkpoint.json")
+    dataset_hash = hashlib.sha256(raw).hexdigest()
+    identity = {
+        "dataset_sha256": dataset_hash,
+        "runner_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+        "protocol_sha256": hashlib.sha256(
+            Path(__file__)
+            .parents[2]
+            .joinpath("docs/GATE06_NEW_LINEAGE_PROTOCOL_20261111.md")
+            .read_bytes()
+        ).hexdigest(),
+        "feature_count": len(FEATURES),
+        "fold_count": len(folds),
+        "purge": PURGE,
+        "test_size": TEST_SIZE,
+    }
+    checkpoint = {
+        "schema": "alphalens.gate06.checkpoint.v1",
+        "identity": identity,
+        "candidates": {},
+    }
+    if checkpoint_path.exists():
+        checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+        if checkpoint.get("identity") != identity:
+            raise SystemExit("checkpoint identity mismatch; refusing to reuse it")
     results = []
     for name, kind, params in CANDIDATES:
-        predictions = []
-        actual = []
-        baseline = []
-        rows = []
+        saved = checkpoint["candidates"].get(name, {})
+        rows = list(saved.get("rows", []))
+        completed = int(saved.get("completed_folds", 0))
+        if completed != len(rows) // TEST_SIZE or completed > len(folds):
+            raise SystemExit(f"checkpoint fold state is invalid for {name}")
+        predictions = [row["prediction"] for row in rows]
+        actual = [row["actual"] for row in rows]
+        baseline = [row["baseline"] for row in rows]
         for seq, (te, ss, se, sel, xt, xv, yt, atr) in enumerate(folds, 1):
+            if seq <= completed:
+                continue
             model = (
                 Ridge(alpha=params["alpha"])
                 if kind == "ridge"
@@ -195,6 +308,13 @@ def main():
                 }
                 for i in range(len(yt))
             )
+            checkpoint["candidates"][name] = {
+                "parameters": params,
+                "completed_folds": seq,
+                "rows": rows,
+            }
+            atomic_json(checkpoint_path, checkpoint)
+            print(f"{name}: completed fold {seq}/{len(folds)}", flush=True)
         m = metrics(np.array(actual), np.array(predictions))
         b = metrics(np.array(actual), np.array(baseline))
         cal = []
@@ -202,43 +322,36 @@ def main():
             np.percentile(predictions, [0, 20, 40, 60, 80]),
             np.percentile(predictions, [20, 40, 60, 80, 100]),
         ):
-            cal.append(
-                float(
-                    np.mean(
-                        np.array(actual)[
-                            (np.array(predictions) >= lo)
-                            & (np.array(predictions) <= hi)
-                        ]
-                    )
-                )
-            )
-        criteria = {
-            "r2_improvement_gt_0.01": m["r2"] - b["r2"] > 0.01,
-            "correlation_improvement_gt_0.05": m["correlation"] - b["correlation"]
-            > 0.05,
-            "mae_reduction_gt_5pct": (b["mae"] - m["mae"]) / b["mae"] > 0.05,
-            "monotonic_calibration": all(x <= y for x, y in zip(cal, cal[1:])),
+            values = np.array(actual)[
+                (np.array(predictions) >= lo) & (np.array(predictions) <= hi)
+            ]
+            if values.size == 0:
+                raise SystemExit(f"empty calibration bin for {name}")
+            cal.append(float(np.mean(values)))
+        regime, regime_pass = regime_evidence(rows)
+        criteria = acceptance_criteria(m, b, cal, regime_pass)
+        candidate_result = {
+            "candidate": name,
+            "kind": kind,
+            "parameters": params,
+            "fold_count": len(folds),
+            "observation_count": len(rows),
+            "metrics": m,
+            "baseline_metrics": b,
+            "improvements": {
+                "r2": m["r2"] - b["r2"],
+                "correlation": m["correlation"] - b["correlation"],
+                "mae_reduction": (b["mae"] - m["mae"]) / b["mae"],
+            },
+            "calibration_bin_actual_means": cal,
+            "regimes": regime,
+            "criteria": criteria,
+            "accepted_development": all(criteria.values()),
+            "predictions": rows,
         }
-        results.append(
-            {
-                "candidate": name,
-                "kind": kind,
-                "parameters": params,
-                "fold_count": len(folds),
-                "observation_count": len(rows),
-                "metrics": m,
-                "baseline_metrics": b,
-                "improvements": {
-                    "r2": m["r2"] - b["r2"],
-                    "correlation": m["correlation"] - b["correlation"],
-                    "mae_reduction": (b["mae"] - m["mae"]) / b["mae"],
-                },
-                "calibration_bin_actual_means": cal,
-                "criteria": criteria,
-                "accepted_development": all(criteria.values()),
-                "predictions": rows,
-            }
-        )
+        checkpoint["candidates"][name]["result"] = candidate_result
+        atomic_json(checkpoint_path, checkpoint)
+        results.append(candidate_result)
     output = {
         "schema": "alphalens.gate06.experiment.v1",
         "lineage_id": "gate06-development-20261111-v2",
