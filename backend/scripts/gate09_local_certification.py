@@ -46,13 +46,65 @@ def _http_status(url: str, *, method: str = "GET") -> tuple[str, str]:
         return "UNKNOWN", type(error).__name__
 
 
-def run(*, source: Path | None, backend: str | None) -> dict[str, object]:
+def _canonical_manifest_payload(payload: dict[str, object]) -> bytes:
+    unsigned = {key: value for key, value in payload.items() if key != "manifest_sha256"}
+    return json.dumps(unsigned, sort_keys=True, separators=(",", ":")).encode()
+
+
+def verify_evidence_manifest(
+    manifest_path: Path | None,
+    *,
+    expected_manifest_sha256: str | None = None,
+) -> tuple[str, str]:
+    """Verify a content-addressed evidence manifest and every listed artifact."""
+    if manifest_path is None:
+        return "UNKNOWN", "evidence manifest not supplied"
+    try:
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return "FAIL", "evidence manifest unreadable or invalid JSON"
+    if not isinstance(payload, dict) or payload.get("schema") != "alphalens.evidence-manifest.v1":
+        return "FAIL", "unsupported evidence manifest schema"
+    declared = payload.get("manifest_sha256")
+    calculated = hashlib.sha256(_canonical_manifest_payload(payload)).hexdigest()
+    if declared != calculated:
+        return "FAIL", "evidence manifest content hash mismatch"
+    if expected_manifest_sha256 is not None:
+        actual_file_hash = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+        if actual_file_hash != expected_manifest_sha256:
+            return "FAIL", "evidence manifest file hash mismatch"
+    entries = payload.get("entries")
+    if not isinstance(entries, list) or not entries:
+        return "FAIL", "evidence manifest has no entries"
+    for entry in entries:
+        if not isinstance(entry, dict) or not isinstance(entry.get("path"), str) or not isinstance(entry.get("sha256"), str):
+            return "FAIL", "evidence manifest entry is malformed"
+        artifact = Path(entry["path"])
+        try:
+            actual = hashlib.sha256(artifact.read_bytes()).hexdigest()
+        except OSError:
+            return "FAIL", f"evidence artifact unavailable: {entry['path']}"
+        if actual != entry["sha256"]:
+            return "FAIL", f"evidence artifact hash mismatch: {entry['path']}"
+    return "PASS", f"verified {len(entries)} content-addressed evidence entries"
+def run(
+    *,
+    source: Path | None,
+    backend: str | None,
+    evidence_manifest: Path | None = None,
+    expected_evidence_manifest_sha256: str | None = None,
+) -> dict[str, object]:
     checks: list[dict[str, str]] = []
     branch = _git("branch", "--show-current")
     sha = _git("rev-parse", "HEAD")
     dirty = bool(_git("status", "--porcelain"))
     checks.append(_check("repository_branch", "PASS" if branch == EXPECTED_BRANCH else "FAIL", branch))
     checks.append(_check("repository_clean", "PASS" if not dirty else "FAIL", "clean" if not dirty else "dirty"))
+    evidence_status, evidence_detail = verify_evidence_manifest(
+        evidence_manifest,
+        expected_manifest_sha256=expected_evidence_manifest_sha256,
+    )
+    checks.append(_check("evidence_manifest", evidence_status, evidence_detail))
 
     if source is not None and source.exists():
         digest = hashlib.sha256(source.read_bytes()).hexdigest()
@@ -103,9 +155,22 @@ def main() -> int:
         default=None,
         help="Explicit permitted source artifact; omitted means UNKNOWN, never an implicit protected path",
     )
+    parser.add_argument("--evidence-manifest", type=Path, default=None)
+    parser.add_argument("--expected-evidence-manifest-sha256", default=None)
     parser.add_argument("--backend", default=None, help="Optional local backend origin, e.g. http://127.0.0.1:18000")
     args = parser.parse_args()
-    print(json.dumps(run(source=args.source, backend=args.backend), sort_keys=True, indent=2))
+    print(
+        json.dumps(
+            run(
+                source=args.source,
+                backend=args.backend,
+                evidence_manifest=args.evidence_manifest,
+                expected_evidence_manifest_sha256=args.expected_evidence_manifest_sha256,
+            ),
+            sort_keys=True,
+            indent=2,
+        )
+    )
     return 0
 
 
