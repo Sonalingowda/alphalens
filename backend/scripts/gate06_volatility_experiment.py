@@ -69,6 +69,8 @@ EXPECTED_FOLDS = 164
 EXPECTED_OBSERVATIONS = 16_400
 REGIME_SECONDS = 30 * 24 * 60 * 60
 DATASET_SHA256 = "2825f80df1434ac52eef868cd3606b95b046d7e624d9e0ad84754be494e156b4"
+DEVELOPMENT_CONTENT_SHA256 = "d24af87a174a6baef4042afe682760954d7851c18fc75865a18c24f55c5308da"
+SOURCE_FILE_SHA256 = "f17dfdab0dfcaa1e24508d9484942eee6677c2e56ddb96869ce774e85ca80fbc"
 SOURCE_MANIFEST_SHA256 = "4ac7f09116a90a703dc48a6efa6bbd990dd24c7f99651bde707c4f441d990038"
 PROTOCOL_PATH = "docs/GATE06_VOLATILITY_FEATURE_PROTOCOL_20261111.md"
 PROTOCOL_SHA256 = "8decbda413ed41c7ca9cb81f648625a52bf9189d2b387beb856b2d931941b45f"
@@ -218,6 +220,8 @@ def execution_manifest(repo_root: Path, dataset: Path, source_manifest: Path) ->
         "git_commit": identity["commit"],
         "git_tree": identity["tree"],
         "dataset_sha256": sha256(dataset),
+        "development_content_sha256": DEVELOPMENT_CONTENT_SHA256,
+        "source_file_sha256": SOURCE_FILE_SHA256,
         "source_manifest_sha256": sha256(source_manifest),
         "feature_implementation_sha256": sha256(features_path),
         "runner_sha256": sha256(Path(__file__)),
@@ -264,7 +268,10 @@ def run(args: argparse.Namespace) -> None:
     execution_manifest_hash = sha256(execution_manifest_path)
     data, candles, timestamps, closes = load_dataset(dataset)
     if data.get("development_dataset_sha256") != DATASET_SHA256:
-        raise SystemExit("dataset metadata hash mismatch")
+        if data.get("development_dataset_sha256") != DEVELOPMENT_CONTENT_SHA256:
+            raise SystemExit("development dataset content hash mismatch")
+    if data.get("source_file_sha256") != SOURCE_FILE_SHA256:
+        raise SystemExit("custodied source file hash mismatch")
     rows, valid_timestamps, valid_closes, target = build_observations(candles, timestamps, closes)
     folds = fold_bounds(len(rows))
     checkpoint_path = args.output.with_suffix(".checkpoint.json")
