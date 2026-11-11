@@ -1,5 +1,8 @@
 import unittest
 import json
+import os
+import subprocess
+import sys
 from tempfile import TemporaryDirectory
 from pathlib import Path
 
@@ -51,6 +54,40 @@ class Gate06AcceptanceTests(unittest.TestCase):
             self.assertEqual(json.loads(path.read_text()), {"fold": 1, "rows": ["complete"]})
             atomic_json(path, {"fold": 2, "rows": ["complete", "complete"]})
             self.assertEqual(json.loads(path.read_text())["fold"], 2)
+
+    def test_cross_process_resume_matches_uninterrupted_and_rejects_invalid_state(self):
+        fixture = Path(__file__).parents[1] / "scripts" / "gate06_checkpoint_fixture.py"
+        environment = {**os.environ, "PYTHONPATH": str(Path(__file__).parents[1])}
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            uninterrupted = root / "uninterrupted.json"
+            interrupted = root / "interrupted.json"
+            command = [sys.executable, str(fixture), "--identity", "fixture-v1", "--folds", "8"]
+            self.assertEqual(subprocess.run([*command, str(uninterrupted)], env=environment).returncode, 0)
+            self.assertEqual(
+                subprocess.run(
+                    [*command, "--fail-after", "3", str(interrupted)], env=environment
+                ).returncode,
+                17,
+            )
+            self.assertEqual(subprocess.run([*command, str(interrupted)], env=environment).returncode, 0)
+            self.assertEqual(uninterrupted.read_bytes(), interrupted.read_bytes())
+
+            interrupted.write_text("{not-json", encoding="utf-8")
+            self.assertNotEqual(subprocess.run([*command, str(interrupted)], env=environment).returncode, 0)
+            interrupted.write_text(uninterrupted.read_text(), encoding="utf-8")
+            data = json.loads(interrupted.read_text())
+            data["rows"].pop(2)
+            data["completed_folds"] = 8
+            interrupted.write_text(json.dumps(data), encoding="utf-8")
+            self.assertNotEqual(subprocess.run([*command, str(interrupted)], env=environment).returncode, 0)
+            self.assertNotEqual(
+                subprocess.run(
+                    [sys.executable, str(fixture), "--identity", "other-lineage", str(interrupted)],
+                    env=environment,
+                ).returncode,
+                0,
+            )
 
 
 if __name__ == "__main__":
