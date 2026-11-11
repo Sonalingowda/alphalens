@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 from typing import Callable
 
+from fastapi import HTTPException
 from sqlalchemy import text
 
 from app.api.application import create_prediction_app
@@ -345,6 +346,7 @@ async def pipeline_run_latest() -> dict:
     Surfaces the actual outcome or error so production failures are observable
     without log access.  May create a real opportunity if detection triggers.
     """
+    _require_development_diagnostic()
     from app.market_configuration import get_default_scope
     from app.opportunity_intelligence.repositories import ScopedRepositoryQuery
 
@@ -396,6 +398,7 @@ async def pipeline_diagnose_latest() -> dict:
     latest BTCUSDT/5m snapshot. Reconstructs persisted inputs exactly as
     detection does; does not alter detection semantics.
     """
+    _require_development_diagnostic()
     try:
         from app.market_configuration import get_default_scope
         from app.opportunity_intelligence.repositories import ScopedRepositoryQuery
@@ -475,6 +478,12 @@ async def pipeline_diagnose_latest() -> dict:
         return payload
     except Exception as exc:  # noqa: BLE001 - diagnostic surface
         return {"diagnose_error": repr(exc), "error_type": type(exc).__name__}
+
+
+def _require_development_diagnostic() -> None:
+    """Keep pipeline diagnostics from becoming production write surfaces."""
+    if settings.environment != "development":
+        raise HTTPException(status_code=404, detail="Not found")
 
 
 redis_infrastructure = RedisInfrastructure.from_url(settings.redis_url)

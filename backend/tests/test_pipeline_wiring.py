@@ -2,7 +2,9 @@
 
 from datetime import datetime, timedelta, timezone
 import asyncio
+from dataclasses import replace
 from decimal import Decimal
+from fastapi import HTTPException
 from unittest import IsolatedAsyncioTestCase
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -19,6 +21,7 @@ from app.opportunity_intelligence.repositories import (
 from app.prediction_api import (
     _PipelineAwareLiveMarketIngestionService,
     _pipeline_tasks,
+    _require_development_diagnostic,
 )
 
 
@@ -95,6 +98,29 @@ def _derived_10m(start: datetime) -> CompletedCandle:
 
 
 class PipelineWiringTest(IsolatedAsyncioTestCase):
+    def test_pipeline_diagnostics_fail_closed_outside_development(self) -> None:
+        import app.prediction_api as prediction_api
+
+        original = prediction_api.settings
+        prediction_api.settings = replace(original, environment="production")
+        try:
+            with self.assertRaises(HTTPException) as error:
+                _require_development_diagnostic()
+        finally:
+            prediction_api.settings = original
+
+        self.assertEqual(error.exception.status_code, 404)
+
+    def test_pipeline_diagnostics_are_available_in_development(self) -> None:
+        import app.prediction_api as prediction_api
+
+        original = prediction_api.settings
+        prediction_api.settings = replace(original, environment="development")
+        try:
+            _require_development_diagnostic()
+        finally:
+            prediction_api.settings = original
+
     def _snapshot(self):
         candle = BinanceKlineParser().parse(_message(START, "5m"))
         assert candle is not None
