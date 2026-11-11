@@ -1,6 +1,6 @@
 # Gate 06 development protocol — 2026-11-11
 
-Status: **frozen for one bounded development cycle**  
+Status: **frozen for one bounded development cycle**
 Lineage: `gate06-development-20261111-v1`
 
 This protocol is development-only. It cannot certify Gate 06, access a
@@ -81,4 +81,3 @@ explicit local source, and write output outside the repository. The active
 research environment uses the repository's Python 3.11 virtual environment;
 the exact package lock and runner tree must be retained with each result. No
 production artifact or persisted research row is created by this protocol.
-
