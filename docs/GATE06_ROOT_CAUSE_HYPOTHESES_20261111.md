@@ -62,4 +62,3 @@ Before any new fit, separately approve a new development lineage containing:
 
 The next run must first resolve the source-lineage discrepancy. Until then,
 Gate 06 remains not validated and no artifact may be nominated.
-

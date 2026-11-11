@@ -46,4 +46,3 @@ protected-test data, credentials, and owner database were not copied.
 The preserved results belong to the new development lineage and remain
 negative evidence for the frozen correlation criterion. Gate 06 is not
 validated. The inventory contains no model artifact or protected-test result.
-
