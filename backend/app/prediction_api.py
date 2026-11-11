@@ -312,6 +312,7 @@ app.add_exception_handler(
 @app.get("/api/v1/pipeline/health", include_in_schema=False)
 async def pipeline_health() -> dict:
     """Read-only diagnostic: runtime pipeline execution state."""
+    _require_development_diagnostic()
     return {
         "contract_version": "1.0.0",
         "last_run_at": _pipeline_health.last_run_at,

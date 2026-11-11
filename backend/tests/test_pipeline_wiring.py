@@ -21,6 +21,7 @@ from app.opportunity_intelligence.repositories import (
 from app.prediction_api import (
     _PipelineAwareLiveMarketIngestionService,
     _pipeline_tasks,
+    pipeline_health,
     _require_development_diagnostic,
 )
 
@@ -120,6 +121,32 @@ class PipelineWiringTest(IsolatedAsyncioTestCase):
             _require_development_diagnostic()
         finally:
             prediction_api.settings = original
+
+    async def test_pipeline_health_is_available_only_in_development(self) -> None:
+        import app.prediction_api as prediction_api
+
+        original = prediction_api.settings
+        prediction_api.settings = replace(original, environment="development")
+        try:
+            payload = await pipeline_health()
+        finally:
+            prediction_api.settings = original
+
+        self.assertEqual(payload["contract_version"], "1.0.0")
+        self.assertIn("pending_tasks", payload)
+
+    async def test_pipeline_health_fails_closed_outside_development(self) -> None:
+        import app.prediction_api as prediction_api
+
+        original = prediction_api.settings
+        prediction_api.settings = replace(original, environment="production")
+        try:
+            with self.assertRaises(HTTPException) as error:
+                await pipeline_health()
+        finally:
+            prediction_api.settings = original
+
+        self.assertEqual(error.exception.status_code, 404)
 
     def _snapshot(self):
         candle = BinanceKlineParser().parse(_message(START, "5m"))
