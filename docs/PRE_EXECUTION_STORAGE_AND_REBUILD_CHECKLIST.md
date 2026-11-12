@@ -3,6 +3,24 @@
 This checklist is preparation only. It does not authorize cleanup, Colima
 shutdown or resize, live database migration, deployment, or model activation.
 
+## Current verified status — 2026-11-12
+
+- **PARTIAL — archival:** `scripts/archive_screen_recordings.sh` is ready and
+  passes Bash 3.2 syntax and negative validation tests. The currently observed
+  USB volume is not sufficient for the recordings; no transfer was attempted.
+- **BLOCKED — Colima capacity:** the active `colima` context reports a 60 GiB
+  configured disk but only about 189 MiB free in the Docker filesystem. No
+  resize or restart was performed.
+- **BLOCKED — backend build:** the locked backend build was not retried while
+  storage is insufficient.
+- **PASS — backend opportunity coverage:** focused backend opportunity and feed
+  tests passed, 25 passed with one pre-existing dependency warning.
+- **BLOCKED — frontend test runtime:** the installed Node version is 18.20.4;
+  the current Vitest/Rolldown toolchain requires a newer Node runtime.
+- **PASS — live safety:** live PostgreSQL remains at `20261003_0040`, model
+  health remains `ARTIFACT_UNAVAILABLE`, and no live database or service was
+  changed by this preparation work.
+
 ## Host archival gate
 
 - [ ] Confirm the owner-selected external volume through `diskutil info`.
