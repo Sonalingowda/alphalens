@@ -108,9 +108,9 @@ services:
       dockerfile: frontend/Dockerfile
       args:
         NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY:-}
-        NEXT_PUBLIC_ALPHALENS_API_BASE_URL: ${NEXT_PUBLIC_ALPHALENS_API_BASE_URL:-http://127.0.0.1:18000}
+        NEXT_PUBLIC_ALPHALENS_API_BASE_URL: ${NEXT_PUBLIC_ALPHALENS_API_BASE_URL:-http://127.0.0.1:8000}
     environment:
-      ALPHALENS_API_BASE_URL: ${ALPHALENS_API_BASE_URL:-http://host.docker.internal:18000}
+      ALPHALENS_API_BASE_URL: ${ALPHALENS_API_BASE_URL:-http://host.docker.internal:8000}
       CLERK_SECRET_KEY: ${ALPHALENS_CLERK_SECRET_KEY:-}
       NODE_ENV: production
     ports:
