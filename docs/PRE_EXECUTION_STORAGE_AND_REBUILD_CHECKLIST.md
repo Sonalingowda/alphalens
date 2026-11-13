@@ -3,7 +3,7 @@
 This checklist is preparation only. It does not authorize cleanup, Colima
 shutdown or resize, live database migration, deployment, or model activation.
 
-## Current verified status — 2026-11-12
+## Current verified status — 2026-11-13
 
 - **PARTIAL — archival:** `scripts/archive_screen_recordings.sh` is ready and
   passes Bash 3.2 syntax and negative validation tests. The currently observed
@@ -15,8 +15,9 @@ shutdown or resize, live database migration, deployment, or model activation.
   storage is insufficient.
 - **PASS — backend opportunity coverage:** focused backend opportunity and feed
   tests passed, 25 passed with one pre-existing dependency warning.
-- **BLOCKED — frontend test runtime:** the installed Node version is 18.20.4;
-  the current Vitest/Rolldown toolchain requires a newer Node runtime.
+- **PASS — frontend verification:** with the installed Node `22.23.3` toolchain,
+  the focused API/opportunity tests passed 15/15, typecheck passed, and lint
+  passed. Node 18/20 remain incompatible with the current Rolldown runtime.
 - **PASS — live safety:** live PostgreSQL remains at `20261003_0040`, model
   health remains `ARTIFACT_UNAVAILABLE`, and no live database or service was
   changed by this preparation work.
